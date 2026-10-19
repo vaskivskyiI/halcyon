@@ -1,0 +1,92 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import Fastify from 'fastify';
+import fastifyStatic from '@fastify/static';
+import fastifyCookie from '@fastify/cookie';
+import fastifyWebsocket from '@fastify/websocket';
+import { config } from './config.js';
+import './db/index.js';
+import authRoutes, { userFromRequest } from './auth.js';
+import mailRoutes from './routes/mail.js';
+import accountRoutes from './routes/accounts.js';
+import calendarRoutes, { startSubscriptionRefresh } from './routes/calendar.js';
+import contactRoutes from './routes/contacts.js';
+import taskRoutes from './routes/tasks.js';
+import aiRoutes from './routes/ai.js';
+import settingsRoutes from './routes/settings.js';
+import { syncManager } from './mail/sync.js';
+import { startQueue } from './ai/queue.js';
+import './ai/tasks.js';
+import { startScheduler } from './scheduler.js';
+import { bus } from './util/events.js';
+import { logger } from './util/log.js';
+
+const log = logger('server');
+
+export async function buildServer({ background = true } = {}) {
+  const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024, trustProxy: true });
+  await app.register(fastifyCookie);
+  await app.register(fastifyWebsocket);
+
+  app.addHook('onSend', async (req, reply, payload) => {
+    reply.header('x-frame-options', 'SAMEORIGIN');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('x-content-type-options', 'nosniff');
+    return payload;
+  });
+
+  app.setErrorHandler((err, req, reply) => {
+    log.error(req.method, req.url, err.message);
+    reply.code(err.statusCode || 500).send({ error: err.message });
+  });
+
+  app.get('/api/health', async () => ({ ok: true, version: '1.0.0', accounts: syncManager.workers.size }));
+
+  // Real-time events: new mail, sync state, AI results, reminders.
+  app.get('/api/ws', { websocket: true }, (socket, req) => {
+    const user = userFromRequest(req);
+    if (!user) { socket.close(4001, 'unauthorized'); return; }
+    const onEvent = (e) => { if (e.userId === user.id && socket.readyState === 1) socket.send(JSON.stringify({ type: e.type, payload: e.payload })); };
+    bus.on('user-event', onEvent);
+    const ping = setInterval(() => socket.readyState === 1 && socket.ping(), 30e3);
+    socket.on('close', () => { bus.off('user-event', onEvent); clearInterval(ping); });
+    socket.send(JSON.stringify({ type: 'hello', payload: { userId: user.id } }));
+  });
+
+  await app.register(authRoutes);
+  await app.register(settingsRoutes);
+  await app.register(accountRoutes);
+  await app.register(mailRoutes);
+  await app.register(calendarRoutes);
+  await app.register(contactRoutes);
+  await app.register(taskRoutes);
+  await app.register(aiRoutes);
+
+  if (fs.existsSync(path.join(config.webDir, 'index.html'))) {
+    await app.register(fastifyStatic, { root: config.webDir, wildcard: false, maxAge: '1h' });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api/')) return reply.code(404).send({ error: 'Not found' });
+      return reply.sendFile('index.html', { maxAge: 0 });
+    });
+  } else {
+    app.get('/', async () => ({ name: 'Halcyon API', note: 'Web UI not built. Run `npm run build` in the project root.' }));
+  }
+
+  if (background) {
+    syncManager.startAll();
+    startQueue();
+    startScheduler();
+    startSubscriptionRefresh();
+  }
+  return app;
+}
+
+if (import.meta.url === `file://${process.argv[1]}` || process.env.HALCYON_START === '1') {
+  const app = await buildServer();
+  await app.listen({ host: config.host, port: config.port });
+  log.info(`Halcyon listening on http://${config.host}:${config.port} (data: ${config.dataDir})`);
+  if (process.send) process.send({ type: 'ready', port: app.server.address().port });
+  const shutdown = async () => { log.info('shutting down'); await syncManager.stopAll(); await app.close(); process.exit(0); };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}

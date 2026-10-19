@@ -1,0 +1,125 @@
+// Composition (MIME build), outbox with undo-send & scheduled send, Sent-folder append, iMIP replies.
+import MailComposer from 'nodemailer/lib/mail-composer/index.js';
+import { get, all, run, json, now } from '../db/index.js';
+import { smtpTransport } from './connection.js';
+import { queueOp } from './sync.js';
+import { findSpecialFolder, setFlags } from './actions.js';
+import { readRaw, messageRow } from './store.js';
+import { collectAddresses } from '../contacts/service.js';
+import { htmlToText } from './sanitize.js';
+import { notify } from '../util/events.js';
+import { logger } from '../util/log.js';
+import { parseRaw } from './store.js';
+
+const log = logger('send');
+const fmtAddr = (a) => (a.name ? `"${a.name.replace(/"/g, '')}" <${a.address}>` : a.address);
+const normAddrs = (list) => (list || []).map((a) => (typeof a === 'string' ? { name: '', address: a.trim() } : a)).filter((a) => a.address);
+
+/**
+ * payload: { accountId, from?, to[], cc[], bcc[], subject, html, text, attachments:[{filename, contentType, contentBase64} | {fromMessageId, index}],
+ *            inReplyToId?, forwardOfId?, icalEvent?, requestReadReceipt?, priority? }
+ */
+export async function buildMime(account, p) {
+  const fromAddr = p.from?.address || account.email;
+  const fromName = p.from?.name ?? account.display_name ?? '';
+  const headers = {};
+  let inReplyTo, references;
+  if (p.inReplyToId) {
+    const orig = messageRow(p.inReplyToId);
+    if (orig) {
+      inReplyTo = `<${orig.message_id}>`;
+      references = [...json(orig.references_json, []), orig.message_id].map((r) => `<${r}>`).join(' ');
+    }
+  }
+  const attachments = [];
+  for (const a of p.attachments || []) {
+    if (a.fromMessageId != null) {
+      const m = messageRow(a.fromMessageId);
+      const raw = m && readRaw(m);
+      if (!raw) continue;
+      const parsed = await parseRaw(raw);
+      const att = parsed.attachments?.[a.index];
+      if (att) attachments.push({ filename: att.filename, content: att.content, contentType: att.contentType, cid: att.cid });
+    } else if (a.contentBase64) {
+      attachments.push({ filename: a.filename, content: Buffer.from(a.contentBase64, 'base64'), contentType: a.contentType });
+    }
+  }
+  if (p.requestReadReceipt) headers['Disposition-Notification-To'] = fromAddr;
+  const mail = new MailComposer({
+    from: fmtAddr({ name: fromName, address: fromAddr }),
+    to: normAddrs(p.to).map(fmtAddr), cc: normAddrs(p.cc).map(fmtAddr), bcc: normAddrs(p.bcc).map(fmtAddr),
+    subject: p.subject || '', html: p.html || undefined, text: p.text || (p.html ? htmlToText(p.html) : ''),
+    inReplyTo, references, attachments, headers, priority: p.priority || 'normal',
+    icalEvent: p.icalEvent ? { method: p.icalEvent.method, content: p.icalEvent.content } : undefined,
+    messageId: `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${fromAddr.split('@')[1] || 'halcyon.local'}>`,
+  });
+  return new Promise((resolve, reject) => mail.compile().build((err, msg) => (err ? reject(err) : resolve(msg))));
+}
+
+export function queueSend(userId, payload, { delayMs = 0, sendAt = null } = {}) {
+  const account = get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', payload.accountId, userId);
+  if (!account) throw new Error('Account not found');
+  if (!normAddrs(payload.to).length && !normAddrs(payload.cc).length && !normAddrs(payload.bcc).length) throw new Error('Add at least one recipient');
+  const when = sendAt || now() + delayMs;
+  const r = run('INSERT INTO outbox (user_id, account_id, payload_json, send_at, created_at) VALUES (?, ?, ?, ?, ?)',
+    userId, account.id, JSON.stringify(payload), when, now());
+  if (payload.draftId) run('DELETE FROM drafts WHERE id = ? AND user_id = ?', payload.draftId, userId);
+  notify(userId, 'outbox:changed', {});
+  return { id: r.lastInsertRowid, sendAt: when };
+}
+
+export function cancelSend(userId, id) {
+  const row = get("SELECT * FROM outbox WHERE id = ? AND user_id = ? AND status = 'queued'", id, userId);
+  if (!row) return null;
+  run('DELETE FROM outbox WHERE id = ?', id);
+  notify(userId, 'outbox:changed', {});
+  return json(row.payload_json);
+}
+
+export async function deliver(row) {
+  const account = get('SELECT * FROM accounts WHERE id = ?', row.account_id);
+  const p = json(row.payload_json);
+  const raw = await buildMime(account, p);
+  const transport = await smtpTransport(account);
+  const envelope = {
+    from: account.email,
+    to: [...normAddrs(p.to), ...normAddrs(p.cc), ...normAddrs(p.bcc)].map((a) => a.address),
+  };
+  try {
+    await transport.sendMail({ envelope, raw });
+  } finally { transport.close(); }
+  // Gmail and Microsoft store sent copies automatically.
+  const autoSaves = /gmail\.com|googlemail\.com|office365\.com|outlook\.com/i.test(account.smtp_host || '');
+  if (!autoSaves) {
+    const sent = findSpecialFolder(account.id, '\\Sent', 'Sent');
+    if (sent) queueOp(account.id, 'append', { folder: sent.path, raw: raw.toString('base64'), flags: ['\\Seen'] });
+  }
+  if (p.inReplyToId) setFlags(row.user_id, [p.inReplyToId], { answered: true });
+  collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true);
+}
+
+let busy = false;
+export async function processOutbox() {
+  if (busy) return;
+  busy = true;
+  try {
+    const due = all("SELECT * FROM outbox WHERE status = 'queued' AND send_at <= ? AND attempts < 5 ORDER BY send_at LIMIT 20", now());
+    for (const row of due) {
+      run("UPDATE outbox SET status = 'sending' WHERE id = ?", row.id);
+      try {
+        await deliver(row);
+        run("UPDATE outbox SET status = 'sent', sent_at = ?, error = NULL WHERE id = ?", now(), row.id);
+        notify(row.user_id, 'mail:sent', { outboxId: row.id });
+      } catch (e) {
+        log.warn(`send failed (${row.id}): ${e.message}`);
+        const attempts = row.attempts + 1;
+        run("UPDATE outbox SET status = ?, attempts = ?, error = ?, send_at = ? WHERE id = ?",
+          attempts >= 5 ? 'failed' : 'queued', attempts, e.message, now() + attempts * 60e3, row.id);
+        notify(row.user_id, 'mail:sendError', { outboxId: row.id, error: e.message });
+      }
+      notify(row.user_id, 'outbox:changed', {});
+    }
+    // Keep sent outbox entries for a day for the UI, then clear.
+    run("DELETE FROM outbox WHERE status = 'sent' AND sent_at < ?", now() - 864e5);
+  } finally { busy = false; }
+}

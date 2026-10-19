@@ -1,0 +1,16 @@
+{
+  "name": "halcyon",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Halcyon — AI-native email, calendar and contacts suite (web + Windows desktop)",
+  "workspaces": ["server", "web", "desktop"],
+  "scripts": {
+    "dev": "npm run dev -w server & npm run dev -w web",
+    "build": "npm run build -w web",
+    "start": "npm start -w server",
+    "test": "npm test -w server",
+    "desktop": "npm run build && npm start -w desktop",
+    "dist:win": "npm run build && npm run dist:win -w desktop"
+  },
+  "engines": { "node": ">=20" }
+}

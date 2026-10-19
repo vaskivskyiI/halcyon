@@ -1,0 +1,30 @@
+{
+  "name": "@halcyon/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.3",
+    "@fastify/multipart": "^10.1.4",
+    "@fastify/static": "^10.1.6",
+    "@fastify/websocket": "^11.3.4",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.7",
+    "ical.js": "^2.2.1",
+    "imapflow": "^2.5.8",
+    "mailparser": "^3.10.0",
+    "nodemailer": "^10.1.7",
+    "rrule": "^2.8.1",
+    "sanitize-html": "^2.18.1",
+    "tsdav": "^2.5.0"
+  },
+  "devDependencies": {
+    "smtp-server": "^3.20.2"
+  }
+}

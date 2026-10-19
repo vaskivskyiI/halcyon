@@ -1,0 +1,8 @@
+node_modules/
+data/
+dist/
+web/dist/
+desktop/out/
+desktop/server-bundle/
+*.log
+.env
