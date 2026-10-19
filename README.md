@@ -123,13 +123,14 @@ unreachable, parks jobs until a provider is configured, and reports usage/latenc
 
 ```bash
 sudo ./server/test/setup-dovecot.sh   # throwaway Dovecot IMAP on 127.0.0.1:1143
-npm test                              # unit tests + end-to-end tests against real IMAP/SMTP with an offline mock AI
+./server/test/setup-radicale.sh       # optional: throwaway Radicale CalDAV/CardDAV on 127.0.0.1:5232
+TEST_DAV_URL=http://127.0.0.1:5232/alice/ npm test   # unit + end-to-end (real IMAP/SMTP/DAV, offline mock AI)
 ```
 
 The end-to-end suite covers initial sync, threading, HTML sanitising, background AI, search, flag/move/archive/trash
 round-trips to the IMAP server, IDLE push and remote changes, sending (incl. Bcc stripping, Sent copy, undo and
 scheduled send), replies, calendar invitations with RSVP, recurrence with exceptions, ICS/vCard/CSV import/export,
-rules, folder management and credential encryption. Provider adapters are tested against fake servers that speak
+rules, folder management, credential encryption and two-way CalDAV/CardDAV sync. Provider adapters are tested against fake servers that speak
 each vendor's wire protocol, including streaming.
 
 ## Project layout

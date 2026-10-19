@@ -9,5 +9,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci -w server -w web
       - run: sudo ./server/test/setup-dovecot.sh
+      - run: ./server/test/setup-radicale.sh
       - run: npm test
+        env: { TEST_DAV_URL: 'http://127.0.0.1:5232/alice/' }
       - run: npm run build
