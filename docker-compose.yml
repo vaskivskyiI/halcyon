@@ -1,0 +1,28 @@
+# docker compose up -d   →   http://localhost:8080
+# Ollama runs alongside; in Halcyon add provider "Ollama (self-hosted server)" with URL http://ollama:11434
+services:
+  halcyon:
+    build: .
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    environment:
+      HALCYON_SECRET: ${HALCYON_SECRET:?set HALCYON_SECRET in .env (openssl rand -base64 32)}
+      HALCYON_PUBLIC_URL: ${HALCYON_PUBLIC_URL:-}
+      HALCYON_TRUST_PROXY: ${HALCYON_TRUST_PROXY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+    volumes: ["halcyon-data:/data"]
+    depends_on: [ollama]
+
+  ollama:
+    image: ollama/ollama:0.40.6
+    restart: unless-stopped
+    volumes: ["ollama-models:/root/.ollama"]
+    # Uncomment for NVIDIA GPUs (requires nvidia-container-toolkit):
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+
+volumes:
+  halcyon-data:
+  ollama-models:

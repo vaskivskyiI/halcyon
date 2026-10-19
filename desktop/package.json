@@ -1,0 +1,98 @@
+{
+  "name": "@halcyon/desktop",
+  "productName": "Halcyon",
+  "version": "1.0.0",
+  "description": "Halcyon — AI-native email, calendar and contacts",
+  "author": "Halcyon",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "bundle": "node scripts/bundle-server.mjs",
+    "dist:win": "node scripts/bundle-server.mjs --platform win32 --arch x64 && electron-builder --win --x64 --publish never",
+    "dist:linux": "node scripts/bundle-server.mjs && electron-builder --linux --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.halcyon.mail",
+    "productName": "Halcyon",
+    "copyright": "Halcyon",
+    "directories": {
+      "output": "out",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "connect.html",
+      "build/icon.png",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server-bundle",
+        "to": ".",
+        "filter": [
+          "**/*",
+          "!**/node_modules/.bin"
+        ]
+      },
+      {
+        "from": "../web/dist",
+        "to": "web"
+      }
+    ],
+    "asar": true,
+    "protocols": [
+      {
+        "name": "Email",
+        "schemes": [
+          "mailto"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Halcyon-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "include": "build/installer.nsh",
+      "runAfterFinish": true
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "icon": "build/icon.png",
+      "mimeTypes": [
+        "x-scheme-handler/mailto"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "publish": []
+  }
+}

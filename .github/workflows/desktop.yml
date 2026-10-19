@@ -1,0 +1,28 @@
+name: Desktop builds
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run dist:win -w desktop
+      - uses: actions/upload-artifact@v4
+        with: { name: Halcyon-Windows, path: desktop/out/*.exe }
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run dist:linux -w desktop
+      - uses: actions/upload-artifact@v4
+        with: { name: Halcyon-Linux, path: desktop/out/*.{AppImage,deb} }

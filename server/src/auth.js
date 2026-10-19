@@ -33,7 +33,8 @@ export function userFromRequest(req) {
     const s = get('SELECT * FROM sessions WHERE token = ?', token);
     if (s && s.expires_at > now()) return get('SELECT * FROM users WHERE id = ?', s.user_id);
   }
-  if (config.singleUser && isLoopback(req.ip)) {
+  const desktopOk = !config.desktopToken || req.cookies?.halcyon_desktop === config.desktopToken || req.headers['x-halcyon-desktop'] === config.desktopToken;
+  if (config.singleUser && isLoopback(req.ip) && desktopOk) {
     let u = get('SELECT * FROM users ORDER BY id LIMIT 1');
     if (!u) u = createUser({ email: 'me@localhost', name: 'Me', isAdmin: true });
     return u;

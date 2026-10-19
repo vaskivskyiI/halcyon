@@ -24,7 +24,7 @@ import { logger } from './util/log.js';
 const log = logger('server');
 
 export async function buildServer({ background = true } = {}) {
-  const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024, trustProxy: true });
+  const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024, trustProxy: config.trustProxy });
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket);
 

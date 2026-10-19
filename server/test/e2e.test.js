@@ -29,7 +29,7 @@ const ndjson = (text) => text.trim().split('\n').map((l) => JSON.parse(l));
 before(async () => {
   await clearMailbox('alice@test.local');
   await clearMailbox('bob@test.local');
-  smtp = await startSmtp(2525);
+  smtp = await startSmtp(0);
   const { buildServer } = await import('../src/index.js');
   app = await buildServer();
   await app.listen({ host: '127.0.0.1', port: 0 });
@@ -71,11 +71,11 @@ test('setup, account creation and initial sync', async () => {
   const prov = await api('POST', '/api/ai/providers', { type: 'mock', name: 'Mock' });
   assert.ok(prov.id);
 
-  const test = await api('POST', '/api/accounts/test', { email: 'alice@test.local', imap: { host: '127.0.0.1', port: 1143, secure: false, user: 'alice@test.local', password: 'secret123' }, smtp: { host: '127.0.0.1', port: 2525, secure: false, user: 'alice@test.local', password: 'x' } });
-  assert.equal(test.imap.ok, true, JSON.stringify(test));
-  assert.equal(test.smtp.ok, true, JSON.stringify(test));
+  const t = await api('POST', '/api/accounts/test', { email: 'alice@test.local', imap: { host: '127.0.0.1', port: 1143, secure: false, user: 'alice@test.local', password: 'secret123' }, smtp: { host: '127.0.0.1', port: smtp.port, secure: false, user: 'alice@test.local', password: 'x' } });
+  assert.equal(t.imap.ok, true, JSON.stringify(t));
+  assert.equal(t.smtp.ok, true, JSON.stringify(t));
 
-  account = await api('POST', '/api/accounts', { email: 'alice@test.local', displayName: 'Alice', imap: { host: '127.0.0.1', port: 1143, secure: false, user: 'alice@test.local', password: 'secret123' }, smtp: { host: '127.0.0.1', port: 2525, secure: false, user: 'alice@test.local', password: 'x' } });
+  account = await api('POST', '/api/accounts', { email: 'alice@test.local', displayName: 'Alice', imap: { host: '127.0.0.1', port: 1143, secure: false, user: 'alice@test.local', password: 'secret123' }, smtp: { host: '127.0.0.1', port: smtp.port, secure: false, user: 'alice@test.local', password: 'x' } });
   await waitFor(async () => {
     const f = await api('GET', '/api/folders');
     const inbox = f.accounts[0]?.folders.find((x) => x.specialUse === '\\Inbox');
@@ -236,6 +236,13 @@ test('calendar CRUD, recurrence, exceptions, ICS export/import, free slots', asy
   list = await api('GET', `/api/events?from=${start.getTime() - 1}&to=${start.getTime() + 20 * 864e5}`);
   assert.equal(list.filter((e) => e.title === 'Standup').length, 8);
   assert.equal(list.filter((e) => e.title === 'Standup (moved)').length, 1);
+  // Deleting the modified occurrence must not resurrect the original slot.
+  const moved = list.find((e) => e.title === 'Standup (moved)');
+  await api('DELETE', `/api/events/${moved.id}`);
+  list = await api('GET', `/api/events?from=${start.getTime() - 1}&to=${start.getTime() + 20 * 864e5}`);
+  assert.equal(list.filter((e) => e.title.startsWith('Standup')).length, 8);
+  await api('PATCH', `/api/events/${ev.id}`, { scope: 'this', occurrence: second, title: 'Standup (moved)', start: second + 3600e3, end: second + 3600e3 + 15 * 60e3 });
+  list = await api('GET', `/api/events?from=${start.getTime() - 1}&to=${start.getTime() + 20 * 864e5}`);
   const cals = await api('GET', '/api/calendars');
   const ics = await api('GET', `/api/calendars/${cals[0].id}/export.ics`);
   assert.match(ics, /RRULE:FREQ=DAILY;COUNT=10/);

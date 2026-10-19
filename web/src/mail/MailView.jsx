@@ -18,7 +18,7 @@ const SMART = [
   ['needsreply', CornerUpLeft, 'Needs reply', 'needsreply'],
   ['flagged', Star, 'Flagged'],
   ['snoozed', Clock, 'Snoozed', 'snoozed'],
-  ['scheduled', SendIcon, 'Outbox & scheduled', 'scheduled'],
+  ['scheduled', SendIcon, 'Outbox & drafts', 'scheduled'],
 ];
 const FOLDER_ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Archive': Archive, '\\Trash': Trash2, '\\Junk': AlertOctagon, '\\Flagged': Star };
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
@@ -373,16 +373,19 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
 
 function OutboxList({ onMenu }) {
   const [items, setItems] = useState([]);
-  const load = () => api.get('/api/outbox').then(setItems).catch(toastError);
+  const [drafts, setDrafts] = useState([]);
+  const load = () => { api.get('/api/outbox').then(setItems).catch(toastError); api.get('/api/drafts').then(setDrafts).catch(() => {}); };
   useEffect(() => { load(); return onEvent((e) => ['outbox:changed', 'mail:sent', 'mail:sendError'].includes(e.type) && load()); }, []);
+  const who = (list) => (list || []).map((a) => (typeof a === 'string' ? a : a.name || a.address)).join(', ');
   return (
     <section className="list-pane" style={{ flex: 1, width: 'auto' }}>
-      <div className="list-head" style={{ paddingBottom: 10 }}><div className="row"><button className="icon-btn mobile-only" onClick={onMenu}><MenuIcon size={18} /></button><h3 style={{ margin: 0, fontSize: 17 }}>Outbox & scheduled</h3></div></div>
+      <div className="list-head" style={{ paddingBottom: 10 }}><div className="row"><button className="icon-btn mobile-only" onClick={onMenu}><MenuIcon size={18} /></button><h3 style={{ margin: 0, fontSize: 17 }}>Outbox & drafts</h3></div></div>
       <div className="list">
+        <div className="nav-section" style={{ cursor: 'default' }}>Waiting to be sent · {items.length}</div>
         {items.map((o) => (
           <div key={o.id} className="msg-row">
             <div className="body">
-              <div className="from"><span className="truncate">To: {(o.to || []).map((a) => (typeof a === 'string' ? a : a.name || a.address)).join(', ')}</span>
+              <div className="from"><span className="truncate">To: {who(o.to)}</span>
                 <span className="date">{o.status === 'failed' ? <span className="error-text">Failed</span> : `Sends ${new Date(o.sendAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`}</span></div>
               <div className="subject">{o.subject || '(no subject)'}</div>
               {o.error && <div className="small error-text">{o.error}</div>}
@@ -394,7 +397,18 @@ function OutboxList({ onMenu }) {
             </div>
           </div>
         ))}
-        {!items.length && <div className="empty"><SendIcon size={36} />Nothing waiting to be sent.</div>}
+        {!items.length && <div className="empty" style={{ padding: 20 }}>Nothing waiting to be sent.</div>}
+        <div className="nav-section" style={{ cursor: 'default' }}>Drafts · {drafts.length}</div>
+        {drafts.map((d) => (
+          <div key={d.id} className="msg-row" onClick={() => openComposer({ ...d, draftId: d.id })}>
+            <div className="body">
+              <div className="from"><span className="truncate">{d.to?.length ? `To: ${who(d.to)}` : '(no recipients)'}</span><span className="date">{fmtListDate(d.updatedAt)}</span></div>
+              <div className="subject truncate">{d.subject || '(no subject)'}</div>
+            </div>
+            <button className="icon-btn" title="Delete draft" onClick={async (e) => { e.stopPropagation(); await api.del(`/api/drafts/${d.id}`); load(); }}><Trash2 size={15} /></button>
+          </div>
+        ))}
+        {!drafts.length && <div className="empty" style={{ padding: 20 }}>Drafts are saved automatically while you write.</div>}
       </div>
     </section>
   );

@@ -15,7 +15,11 @@ export const config = {
   publicUrl: (env.HALCYON_PUBLIC_URL || '').replace(/\/$/, ''),
   // Single-user mode is used by the desktop app: requests from loopback are auto-authenticated.
   singleUser: env.HALCYON_SINGLE_USER === '1',
+  // When set (desktop app), single-user requests must also present this secret cookie/header.
+  desktopToken: env.HALCYON_DESKTOP_TOKEN || '',
   secureCookies: env.HALCYON_SECURE_COOKIES === '1',
+  // Only honour X-Forwarded-* from these proxy addresses (nginx on the same host by default).
+  trustProxy: env.HALCYON_TRUST_PROXY ? (env.HALCYON_TRUST_PROXY === 'true' ? true : env.HALCYON_TRUST_PROXY.split(',')) : ['127.0.0.1', '::1'],
   allowSignup: env.HALCYON_ALLOW_SIGNUP === '1',
   // Initial sync window: how far back to download mail on first sync of a folder.
   initialSyncDays: Number(env.HALCYON_INITIAL_SYNC_DAYS || 90),

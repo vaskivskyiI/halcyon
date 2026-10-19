@@ -5,13 +5,14 @@ import { store } from './store.js';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings } from './data.js';
 import { Toasts } from './components/common.jsx';
-import { toast, notifyDesktop, navigate } from './util.js';
+import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
 import MailView from './mail/MailView.jsx';
 import ComposerDock from './mail/Composer.jsx';
 import CalendarView from './calendar/CalendarView.jsx';
 import ContactsView from './contacts/ContactsView.jsx';
 import TasksView from './tasks/TasksView.jsx';
+import { openComposer } from './mail/Composer.jsx';
 import AssistantView from './assistant/AssistantView.jsx';
 import SettingsView from './settings/SettingsView.jsx';
 
@@ -79,6 +80,20 @@ function Shell() {
     });
   }, []);
 
+  // Unread count in the title and (desktop) taskbar badge.
+  useEffect(() => {
+    document.title = unread ? `(${unread}) Halcyon` : 'Halcyon';
+    if (window.halcyonDesktop?.setBadge) window.halcyonDesktop.setBadge(unread, unread ? badgeImage(unread) : null);
+  }, [unread]);
+
+  // #/compose?to=…&subject=…&body=…  or  #/compose?url=mailto:…  (mailto: handler for browser and desktop)
+  useEffect(() => {
+    if (!section.startsWith('compose')) return;
+    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+    openComposer(q.get('url') ? parseMailto(q.get('url')) : { to: q.get('to') ? q.get('to').split(',') : [], subject: q.get('subject') || '', html: q.get('body') ? textToHtml(q.get('body')) : undefined });
+    navigate('#/mail/unified');
+  }, [section]);
+
   useEffect(() => {
     if (accountsLoaded && !accounts.length && section === 'mail') navigate('#/settings/accounts');
   }, [accountsLoaded, accounts.length]);
@@ -114,4 +129,23 @@ function Shell() {
       <Toasts />
     </div>
   );
+}
+
+export function parseMailto(url) {
+  const u = String(url).replace(/^mailto:/i, '');
+  const [addr, query = ''] = u.split('?');
+  const q = new URLSearchParams(query);
+  const list = (s) => (s ? decodeURIComponent(s).split(',').map((x) => x.trim()).filter(Boolean) : []);
+  const body = q.get('body');
+  return { to: [...list(addr), ...list(q.get('to'))], cc: list(q.get('cc')), bcc: list(q.get('bcc')), subject: q.get('subject') || '', html: body ? textToHtml(body) : undefined };
+}
+
+function badgeImage(n) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d');
+  g.fillStyle = '#dc2626'; g.beginPath(); g.arc(16, 16, 16, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff'; g.font = `bold ${n > 99 ? 13 : n > 9 ? 17 : 20}px Segoe UI, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(n > 99 ? '99+' : String(n), 16, 17);
+  return c.toDataURL();
 }

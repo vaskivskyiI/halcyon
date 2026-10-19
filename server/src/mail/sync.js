@@ -132,7 +132,19 @@ class AccountSync {
       }
     }
     this.dirtyFolders.clear();
+    this.reconcileOrphans();
     this.setState('idle');
+  }
+
+  // Rows moved locally get uid NULL until the target folder sync re-discovers them. If no operation is
+  // pending any more (succeeded or permanently failed), leftovers are stale: the server copy is
+  // re-ingested from wherever it really is.
+  reconcileOrphans() {
+    if (get('SELECT 1 AS x FROM pending_ops WHERE account_id = ? AND attempts < 5', this.accountId)) return;
+    const orphans = all(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id
+      WHERE m.account_id = ? AND m.uid IS NULL AND f.sync_enabled = 1 AND m.created_at < ?`, this.accountId, now() - 10 * 60e3).map((r) => r.id);
+    if (orphans.length) { deleteMessages(orphans); log.info(`account ${this.accountId}: removed ${orphans.length} stale local copies`); }
+    run('DELETE FROM pending_ops WHERE account_id = ? AND attempts >= 5 AND created_at < ?', this.accountId, now() - 7 * 864e5);
   }
 
   async syncFolderList() {

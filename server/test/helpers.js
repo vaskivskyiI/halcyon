@@ -37,7 +37,7 @@ export async function clearMailbox(user) {
   } finally { await c.logout(); }
 }
 
-export function startSmtp(port = 2525) {
+export function startSmtp(port = 0) {
   const delivered = [];
   const server = new SMTPServer({
     authOptional: true, disabledCommands: ['STARTTLS'], onAuth: (a, s, cb) => cb(null, { user: a.username }),
@@ -54,7 +54,10 @@ export function startSmtp(port = 2525) {
       });
     },
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, delivered, port })));
+  return new Promise((resolve, reject) => {
+    server.server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve({ server, delivered, port: server.server.address().port }));
+  });
 }
 
 export function rfc822({ from, to, subject, body, date = new Date(), messageId, inReplyTo, references, headers = {}, html, ics }) {

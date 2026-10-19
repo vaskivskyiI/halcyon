@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Halcyon — Connection</title>
+<style>
+  body { font-family: system-ui, "Segoe UI", sans-serif; margin: 0; padding: 24px; color: #1d2433; background: #f6f7f9; }
+  h2 { margin: 0 0 6px; } p { color: #5b6474; margin: 0 0 16px; font-size: 14px; }
+  label.opt { display: flex; gap: 10px; padding: 12px; border: 1px solid #d0d5dd; border-radius: 10px; margin-bottom: 10px; background: #fff; cursor: pointer; }
+  label.opt small { display: block; color: #5b6474; }
+  input[type=url] { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; border: 1px solid #d0d5dd; border-radius: 8px; margin-top: 8px; }
+  button { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; float: right; }
+  .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
+</style></head>
+<body>
+  <h2>Connection</h2>
+  <p>Run Halcyon entirely on this PC, or connect to a Halcyon server (e.g. on your Ubuntu server) to share mail and AI processing across devices.</p>
+  <div id="err" class="err" hidden></div>
+  <label class="opt"><input type="radio" name="mode" value="local"><span><b>On this computer</b><small>Mail, calendar and AI jobs run locally. Data is stored in your user profile.</small></span></label>
+  <label class="opt"><input type="radio" name="mode" value="remote"><span><b>Halcyon server</b><small>Use a self-hosted Halcyon server. AI processing happens on the server, even while this PC is off.</small>
+    <input type="url" id="url" placeholder="https://mail.example.com"></span></label>
+  <button id="save">Save & restart</button>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.querySelector(`input[value=${q.get('mode') || 'local'}]`).checked = true;
+  document.getElementById('url').value = q.get('url') || '';
+  if (q.get('error')) { const e = document.getElementById('err'); e.hidden = false; e.textContent = q.get('error'); }
+  document.getElementById('save').onclick = () => {
+    const mode = document.querySelector('input[name=mode]:checked').value;
+    const url = document.getElementById('url').value.trim();
+    if (mode === 'remote' && !/^https?:\/\//.test(url)) { alert('Enter the server URL, e.g. https://mail.example.com'); return; }
+    window.halcyonDesktop.saveConnection(mode, url);
+  };
+</script>
+</body></html>
