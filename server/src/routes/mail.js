@@ -18,12 +18,13 @@ import { notify } from '../util/events.js';
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
-  i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft`;
+  i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
+  (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
 
 function listItem(r) {
   return serializeMessage(r, {
     ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft } : null,
-    threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0,
+    threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
 }
 

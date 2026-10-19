@@ -63,6 +63,11 @@ export function deleteEvent(userId, id) {
   const ev = eventOf(userId, id);
   if (!ev) return;
   tx(() => {
+    if (ev.recurrence_id) {
+      // Removing a modified occurrence: also exclude it from the series so it doesn't reappear.
+      const master = get('SELECT * FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL', ev.calendar_id, ev.uid);
+      if (master) run('UPDATE events SET exdates_json = ?, dirty = ? WHERE id = ?', JSON.stringify([...json(master.exdates_json, []), ev.recurrence_id]), ev.source === 'caldav' ? 1 : 0, master.id);
+    }
     const family = ev.recurrence_id ? [ev] : all('SELECT * FROM events WHERE calendar_id = ? AND uid = ?', ev.calendar_id, ev.uid);
     for (const x of family) {
       if (ev.source === 'caldav' && x.href) run('UPDATE events SET deleted = 1, dirty = 1 WHERE id = ?', x.id);

@@ -63,7 +63,7 @@ export async function buildServer({ background = true } = {}) {
   await app.register(aiRoutes);
 
   if (fs.existsSync(path.join(config.webDir, 'index.html'))) {
-    await app.register(fastifyStatic, { root: config.webDir, wildcard: false, maxAge: '1h' });
+    await app.register(fastifyStatic, { root: config.webDir, wildcard: true, maxAge: '1h' });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) return reply.code(404).send({ error: 'Not found' });
       return reply.sendFile('index.html', { maxAge: 0 });
