@@ -35,6 +35,7 @@ export function serializeInsight(r) {
     actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []),
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
+    needsAction: !!r.needs_action, actionSummary: r.action_summary || null,
     topic: r.topic || null, dismissed: !!r.dismissed_at,
   };
 }
@@ -55,14 +56,16 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   const events = (Array.isArray(d.events) ? d.events : []).map((e) => normalizeEvent(e, tz)).filter(Boolean).slice(0, 5);
   const expires = expiryOf(d, m, tz);
   let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply && !quiet ? 1 : 0;
-  if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; } // analysed after it expired
+  let needsAction = d.needs_action && !quiet ? 1 : 0;
+  if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; needsAction = 0; } // analysed after it expired
   // What the user decided by hand survives re-analysis.
   const prev = get('SELECT needs_reply_user, dismissed_at FROM ai_insights WHERE message_id = ?', messageId);
   if (prev?.needs_reply_user != null) needsReply = prev.needs_reply_user;
   const dismissed = prev?.dismissed_at ?? (quiet ? now() : null);
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
-    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_reply_user)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,?,?)`,
+    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_reply_user,
+    needs_action, action_summary)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,?,?,?,?)`,
     messageId, String(d.summary || '').slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
     priority, String(d.priority_reason || '').slice(0, 200), needsReply,
     JSON.stringify((Array.isArray(d.action_items) ? d.action_items : []).slice(0, 10).map((a) => (typeof a === 'string' ? { text: a, due: null } : { text: String(a.text || ''), due: a.due || null })).filter((a) => a.text)),
@@ -70,7 +73,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     JSON.stringify(events),
     ['positive', 'neutral', 'negative', 'urgent'].includes(d.sentiment) ? d.sentiment : 'neutral',
     String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null,
-    d.topic || null, dismissed, prev?.needs_reply_user ?? null);
+    d.topic || null, dismissed, prev?.needs_reply_user ?? null, needsAction, needsAction ? String(d.action_summary || '').slice(0, 160) || null : null);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
 }
 
@@ -94,11 +97,16 @@ export function briefLive(userId, space = '') {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const events = sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), start.getTime() + 864e5, sc?.calendarIds)
     .map((e) => ({ id: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location, onlineMeeting: e.onlineMeeting, color: e.color }));
+  const actions = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic, i.action_summary
+    FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
+    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND i.needs_action = 1 AND m.date >= ? AND ${live}
+    ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 21 * 864e5).map((m) => ({ ...row(m), action: m.action_summary }))
+    .filter((m) => !attention.some((a) => a.id === m.id));
   const tasks = all(`SELECT id, title, due, priority, source_message_id FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
     AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn}))
     ORDER BY due IS NULL, due, priority DESC LIMIT 30`, userId, start.getTime() + 2 * 864e5, userId)
     .map((t) => ({ id: t.id, title: t.title, due: t.due, priority: t.priority, sourceMessageId: t.source_message_id, overdue: !!(t.due && t.due < now()) }));
-  return { attention, awaiting, events, tasks };
+  return { attention, awaiting, actions, events, tasks };
 }
 
 /**
@@ -149,8 +157,8 @@ export function normalizeTopic(topic, existing = []) {
 
 /** Expired insights (login codes, past deadlines…) drop out of priority views and "needs reply". */
 export function expireInsights() {
-  return run(`UPDATE ai_insights SET priority = MIN(priority, 10), needs_reply = CASE WHEN needs_reply_user = 1 THEN 1 ELSE 0 END
-    WHERE expires_at IS NOT NULL AND expires_at < ? AND (priority > 10 OR (needs_reply = 1 AND needs_reply_user IS NOT 1))`, now()).changes;
+  return run(`UPDATE ai_insights SET priority = MIN(priority, 10), needs_reply = CASE WHEN needs_reply_user = 1 THEN 1 ELSE 0 END, needs_action = 0
+    WHERE expires_at IS NOT NULL AND expires_at < ? AND (priority > 10 OR needs_action = 1 OR (needs_reply = 1 AND needs_reply_user IS NOT 1))`, now()).changes;
 }
 
 /**
@@ -188,9 +196,9 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   let model;
   if (dup) {
     run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at)
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary)
       SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
@@ -216,7 +224,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     }
     applyPreference(res.data, pref);
     res.data.topic = normalizeTopic(res.data.topic, topics);
-    if (fromMe) { res.data.needs_reply = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
+    if (fromMe) { res.data.needs_reply = false; res.data.needs_action = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
     if (!quiet && Array.isArray(res.data.requested_items) && res.data.requested_items.length) {
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
@@ -276,7 +284,8 @@ function memoryItem(userId, kind, ref) {
     const e = get('SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ? AND e.deleted = 0', Number(ref), userId);
     if (!e) return null;
     const who = json(e.attendees_json, []).map((a) => a.name || a.email).slice(0, 10).join(', ');
-    const when = e.all_day ? day(e.start) : `${new Date(e.start).toString().slice(0, 21)} – ${new Date(e.end).toTimeString().slice(0, 5)}`;
+    const tz = getSettings(userId).calendar.timezone;
+    const when = e.all_day ? day(e.start) : `${P.localStamp(e.start, tz)} – ${P.localStamp(e.end, tz).slice(-5)}`;
     return { kind, ref: e.id, owner: `c:${e.calendar_id}`, date: e.start, texts: [`Calendar event: ${e.title} · ${when}${e.rrule ? ` (repeats: ${e.rrule})` : ''}${e.location ? ` · ${e.location}` : ''}${who ? `\nAttendees: ${who}` : ''}${e.description ? `\n${String(e.description).slice(0, 1500)}` : ''}`] };
   }
   if (kind === 'contact') {
@@ -509,7 +518,8 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
   const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, i.summary FROM messages m JOIN ai_insights i ON i.message_id = m.id
     WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, userId, now() - 7 * 864e5);
   const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
-  const events = (sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), end.getTime(), sc?.calendarIds)).map((e) => ({ title: e.title, start: new Date(e.start).toString(), end: new Date(e.end).toString(), allDay: e.allDay, location: e.location }));
+  const tz = getSettings(userId).calendar.timezone;
+  const events = (sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), end.getTime(), sc?.calendarIds)).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
   const tasks = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
     AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn})) ORDER BY due LIMIT 15`, userId, end.getTime(), userId)
     .map((t) => ({ title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));

@@ -211,4 +211,18 @@ export const migrations = [
   ALTER TABLE ai_jobs ADD COLUMN options_json TEXT;
   UPDATE drafts SET in_reply_to = json_extract(payload_json, '$.inReplyToId');
   `,
+  // 7: mail that needs an action other than a reply (pay, sign, register, review…), with a one-line description.
+  `
+  ALTER TABLE ai_insights ADD COLUMN needs_action INTEGER DEFAULT 0;
+  ALTER TABLE ai_insights ADD COLUMN action_summary TEXT;
+  `,
+  // 8: mail history. The first sync takes recent mail quickly; older mail is downloaded afterwards in batches,
+  //    back to the account's sync_history ('90' | '365' | 'all' days). folders.server_total = messages on the server.
+  `
+  ALTER TABLE accounts ADD COLUMN sync_history TEXT DEFAULT '90';
+  ALTER TABLE folders ADD COLUMN server_total INTEGER;
+  ALTER TABLE folders ADD COLUMN oldest_uid INTEGER;
+  ALTER TABLE folders ADD COLUMN history_done INTEGER DEFAULT 0;
+  UPDATE folders SET oldest_uid = (SELECT MIN(uid) FROM messages WHERE folder_id = folders.id AND uid IS NOT NULL);
+  `,
 ];

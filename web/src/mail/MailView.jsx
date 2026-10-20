@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, Send, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon,
+  ClipboardCheck, SlidersHorizontal,
 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -16,6 +17,7 @@ const SMART = [
   ['unified', Inbox, 'All inboxes', 'unified'],
   ['important', Flame, 'Important'],
   ['needsreply', CornerUpLeft, 'Needs reply', 'needsreply'],
+  ['needsaction', ClipboardCheck, 'Action needed', 'needsaction'],
   ['flagged', Star, 'Flagged'],
   ['snoozed', Clock, 'Snoozed', 'snoozed'],
   ['scheduled', SendIcon, 'Outbox & drafts', 'scheduled'],
@@ -163,6 +165,7 @@ function MessageList({ view, openId, onMenu }) {
   const [tab, setTab] = useState(() => (view === 'unified' && settings.mail.focusedInbox ? 'focused' : 'all'));
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   // AI part of search: { status: 'loading' | 'done' | 'unavailable', items }
   const [aiResults, setAiResults] = useState(null);
   const aiQuery = useRef('');
@@ -388,8 +391,10 @@ function MessageList({ view, openId, onMenu }) {
         <form className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); }}>
           <Search size={15} />
           <input ref={searchRef} className="input" placeholder="Search mail — try from:anna has:attachment or plain words" value={query} onChange={(e) => { setQuery(e.target.value); if (!e.target.value) setActiveQuery(''); }} />
+          <button type="button" className={`icon-btn ${filtersOpen ? 'active' : ''}`} style={{ position: 'absolute', right: query ? 28 : 2, top: 1 }} title="Filters" onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={15} /></button>
           {query && <button type="button" className="icon-btn" style={{ position: 'absolute', right: 2, top: 1 }} onClick={() => { setQuery(''); setActiveQuery(''); }}><X size={15} /></button>}
         </form>
+        {(filtersOpen || activeQuery) && <SearchFilters query={query} onChange={(q) => { setQuery(q); setActiveQuery(q.trim()); }} />}
         {!activeQuery && <div className="tabs">
           {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${tab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused</button><button className={`tab ${tab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other</button></>}
           <button className={`tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All</button>
@@ -460,10 +465,11 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
           {expired && <span className="chip faint" title="Time-sensitive content that is no longer valid"><Hourglass size={11} /> expired</span>}
           {m.isAnswered && <span className="chip faint" title="You replied"><ReplyIcon size={11} /> replied</span>}
-          {ai?.topic && <span className="chip topic" title="Topic (AI)"><Hash size={10} />{ai.topic}</span>}
+          {ai?.topic && <span className="chip topic clickable" title={`Show all mail about “${ai.topic}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${topicView(ai.topic)}`); }}><Hash size={10} />{ai.topic}</span>}
           {ai?.needsReply && !m.isAnswered && !expired && <span className="chip ai"><CornerUpLeft size={11} /> Reply needed</span>}
+          {ai?.needsAction && !expired && <span className="chip action" title={ai.actionSummary || 'Action needed'}><ClipboardCheck size={11} /> {ai.actionSummary ? (ai.actionSummary.length > 42 ? `${ai.actionSummary.slice(0, 40)}…` : ai.actionSummary) : 'Action needed'}</span>}
           {ai?.hasDraft && !m.isAnswered && <span className="chip ai"><Sparkles size={11} /> Draft ready</span>}
-          {ai?.category && !['work', 'personal', 'other'].includes(ai.category) && <span className="chip" style={{ color: CATEGORY_COLORS[ai.category] }}>{ai.category}</span>}
+          {ai?.category && !['work', 'personal', 'other'].includes(ai.category) && <span className="chip clickable" style={{ color: CATEGORY_COLORS[ai.category] }} title={`Show all ${ai.category} mail`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${categoryView(ai.category)}`); }}>{ai.category}</span>}
           {m.hasInvite && <span className="chip"><CalendarPlus size={11} /> Invitation</span>}
           {m.hasAttachments && <Paperclip size={13} className="faint" />}
           {m.hasDraft && <span className="chip draft" title="You have an unsent reply in this conversation">Draft</span>}
@@ -563,4 +569,36 @@ function AiApprovals() {
       ))}
     </Modal>}
   </>;
+}
+
+const FILTER_CATS = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
+
+/** Filter controls for search: they edit the operators in the query (category:, topic:, is:, has:, newer_than:). */
+function SearchFilters({ query, onChange }) {
+  const folders = store.use((s) => s.folders);
+  const tokens = query.match(/-?\w+:("[^"]*"|\S+)|"[^"]*"|\S+/g) || [];
+  const get = (key) => { const t = tokens.find((x) => x.toLowerCase().startsWith(`${key}:`)); return t ? t.slice(key.length + 1).replace(/^"|"$/g, '') : ''; };
+  const has = (tok) => tokens.some((x) => x.toLowerCase() === tok);
+  const set = (key, value) => {
+    const rest = tokens.filter((x) => !x.toLowerCase().startsWith(`${key}:`));
+    onChange([...rest, ...(value ? [`${key}:${/\s/.test(value) ? `"${value}"` : value}`] : [])].join(' '));
+  };
+  const toggle = (tok) => onChange((has(tok) ? tokens.filter((x) => x.toLowerCase() !== tok) : [...tokens, tok]).join(' '));
+  const counts = Object.fromEntries((folders.categories || []).map((c) => [c.name, c.count]));
+  return (
+    <div className="search-filters">
+      <select className="input" value={get('category')} onChange={(e) => set('category', e.target.value)} title="AI category">
+        <option value="">Any category</option>{FILTER_CATS.map((c) => <option key={c} value={c}>{c}{counts[c] ? ` (${counts[c]})` : ''}</option>)}
+      </select>
+      <select className="input" value={get('topic')} onChange={(e) => set('topic', e.target.value)} title="AI topic">
+        <option value="">Any topic</option>{(folders.topics || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+        {get('topic') && !(folders.topics || []).some((t) => t.name.toLowerCase() === get('topic').toLowerCase()) && <option value={get('topic')}>{get('topic')}</option>}
+      </select>
+      <select className="input" value={get('newer_than')} onChange={(e) => set('newer_than', e.target.value)} title="Date">
+        <option value="">Any time</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="1y">Last year</option>
+      </select>
+      {[['is:needsreply', 'Needs reply'], ['is:action', 'Action needed'], ['is:unread', 'Unread'], ['has:attachment', 'Attachment']].map(([tok, label]) => (
+        <button key={tok} type="button" className={`chip clickable ${has(tok) ? 'on' : ''}`} onClick={() => toggle(tok)}>{label}</button>))}
+    </div>
+  );
 }

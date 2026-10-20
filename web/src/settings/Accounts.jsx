@@ -29,6 +29,14 @@ export default function Accounts() {
             <div className="small muted truncate">{a.imap.host} · {a.authType.startsWith('oauth') ? 'OAuth' : 'password'} · {a.syncState}{a.lastSyncAt ? ` · last sync ${fmtListDate(a.lastSyncAt)}` : ''}</div>
             {a.syncError && <div className="small error-text"><AlertTriangle size={12} /> {a.syncError}</div>}
             <AccountStatus st={status[a.id]} test={tests[a.id]} />
+            <label className="row small" style={{ marginTop: 6 }}>Download mail from
+              <select className="input" style={{ width: 'auto', height: 28 }} value={a.syncHistory || '90'} onChange={async (e) => {
+                const v = e.target.value;
+                if (v === 'all' && !confirm('Download all mail from the server? For large mailboxes this can take a while and uses disk space; it runs in the background and never delays new mail.')) return;
+                try { await api.patch(`/api/accounts/${a.id}`, { syncHistory: v }); loadAccounts(); setTimeout(loadStatus, 1500); } catch (err) { toastError(err); }
+              }}>
+                <option value="90">the last 90 days</option><option value="365">the last year</option><option value="all">all time</option>
+              </select></label>
             {(a.caldavUrl || a.carddavUrl) && <div className="small faint">{a.caldavUrl && 'CalDAV'}{a.caldavUrl && a.carddavUrl && ' + '}{a.carddavUrl && 'CardDAV'} sync enabled</div>}
           </div>
           <button className="btn sm" title="Log in to the IMAP and SMTP servers with the stored settings (nothing is changed or sent)" onClick={() => test(a)} disabled={tests[a.id]?.busy}>{tests[a.id]?.busy ? <Spinner size={13} /> : <CheckCircle2 size={13} />} Test connection</button>
@@ -58,6 +66,9 @@ function AccountStatus({ st, test }) {
       {!st.syncEnabled ? <Line warn>IMAP: sync is turned off for this account</Line>
         : imap?.connected ? <Line ok>IMAP: connected{imap.push ? ' · new mail is pushed instantly (IDLE)' : ' · checking periodically'} · last full sync {ago(imap.lastFullAt)}{imap.lastFullMs != null ? ` (took ${(imap.lastFullMs / 1000).toFixed(1)} s)` : ''}{imap.lastNewMailAt ? ` · new mail ${ago(imap.lastNewMailAt)}` : ''}</Line>
           : <Line warn={st.state !== 'error'}>IMAP: {st.state === 'connecting' ? 'connecting…' : 'not connected'}{imap?.lastError ? ` · last error ${ago(imap.lastErrorAt)}: ${imap.lastError}` : ''}</Line>}
+      {st.mailbox && <Line ok={!st.mailbox.foldersPending} warn>
+        Mail: {st.mailbox.downloaded.toLocaleString()} of {st.mailbox.onServer.toLocaleString()} messages on the server downloaded
+        {st.mailbox.foldersPending ? ' · downloading older mail…' : st.history === 'all' ? ' · complete' : ` · older than ${st.history === '365' ? 'a year' : '90 days'} not downloaded`}</Line>}
       {imap && Object.entries(imap.folderErrors || {}).map(([f, e]) => <Line key={f}>Folder “{f}”: {e}</Line>)}
       {st.pendingOps > 0 && <Line warn>{st.pendingOps} change{st.pendingOps > 1 ? 's' : ''} (move, flag, delete…) waiting to be applied on the server</Line>}
       {st.failedOps.map((o, i) => <Line key={i}>Server change “{o.op}” failed {o.attempts}×: {o.error}</Line>)}

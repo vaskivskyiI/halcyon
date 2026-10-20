@@ -22,14 +22,15 @@ const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
-  i.topic AS ai_topic, i.expires_at AS ai_expires_at,
+  i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
 
 function listItem(r) {
   return serializeMessage(r, {
     ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
-      topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()) } : null,
+      topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()),
+      needsAction: !!r.ai_needs_action && !r.ai_dismissed, actionSummary: r.ai_action_summary || null } : null,
     hasDraft: !!r.has_user_draft,
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
@@ -43,6 +44,7 @@ function scopeFor(userId, q, sc) {
   else if (view === 'flagged') where.push("m.is_flagged = 1 AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))");
   else if (view === 'snoozed') where.push('m.snoozed_until IS NOT NULL');
   else if (view === 'needsreply') where.push("m.is_answered = 0 AND m.id IN (SELECT message_id FROM ai_insights WHERE needs_reply = 1 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
+  else if (view === 'needsaction') where.push("m.id IN (SELECT message_id FROM ai_insights WHERE needs_action = 1 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
   else if (view === 'important') where.push("m.id IN (SELECT message_id FROM ai_insights WHERE priority >= 70 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
   else if (view === 'topic' && q.topic) { where.push('lower(i.topic) = lower(?)'); params.push(String(q.topic)); }
   else if (view === 'category' && q.category) { where.push("i.category = ? AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))"); params.push(String(q.category)); }
@@ -82,6 +84,7 @@ export default async function mailRoutes(app) {
       flagged: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.is_flagged = 1`, req.user.id).n,
       snoozed: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.snoozed_until IS NOT NULL`, req.user.id).n,
       needsreply: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND f.special_use = '\\Inbox'`, req.user.id).n,
+      needsaction: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_action = 1 AND i.dismissed_at IS NULL AND f.special_use = '\\Inbox'`, req.user.id).n,
       scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, req.user.id).n,
     };
     // Dynamic AI views: active topics and the categories present (excluding the generic ones), with unread counts.

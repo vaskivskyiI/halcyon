@@ -71,7 +71,7 @@ function Brief() {
     });
   }, []);
   const dismiss = async (id) => {
-    setBrief((b) => ({ ...b, live: { ...b.live, attention: b.live.attention.filter((m) => m.id !== id), awaiting: b.live.awaiting.filter((m) => m.id !== id) } }));
+    setBrief((b) => ({ ...b, live: { ...b.live, attention: b.live.attention.filter((m) => m.id !== id), awaiting: b.live.awaiting.filter((m) => m.id !== id), actions: (b.live.actions || []).filter((m) => m.id !== id) } }));
     try {
       await api.post(`/api/messages/${id}/dismiss`, {});
       toast('Removed from the brief', { action: { label: 'Undo', onClick: () => api.post(`/api/messages/${id}/dismiss`, { dismissed: false }).then(() => load(false)) } });
@@ -117,6 +117,10 @@ function Brief() {
       {live && <>
         <h3 className="brief-h">Needs your attention <span className="faint small">· {live.attention.length}</span></h3>
         <div className="card">{live.attention.length ? live.attention.map((m) => <MailRow key={m.id} m={m} />) : <div className="brief-empty">Nothing urgent.</div>}</div>
+        {live.actions?.length > 0 && <>
+          <h3 className="brief-h">Action needed <span className="faint small">· {live.actions.length}</span></h3>
+          <div className="card">{live.actions.map((m) => <MailRow key={m.id} m={{ ...m, summary: m.action ? `→ ${m.action}` : m.summary }} />)}</div>
+        </>}
         {live.awaiting.length > 0 && <>
           <h3 className="brief-h">Waiting for your reply <span className="faint small">· {live.awaiting.length}</span></h3>
           <div className="card">{live.awaiting.map((m) => <MailRow key={m.id} m={m} />)}</div>

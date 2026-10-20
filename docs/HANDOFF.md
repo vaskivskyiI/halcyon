@@ -145,6 +145,17 @@ Derived requirements / design decisions:
 - Tasks in plain language: `util/dates.js` (en/sl, tz/DST aware) with AI fallback (`aiParseTask`); preview while typing.
 - Unread/Focused/Other keep the open message in the list until the user moves to another one.
 
+### 2026-10-22: threads, action needed, time awareness, mail history
+- Sent mail is stored in the local Sent folder right after delivery (matched by Message-ID when the server copy syncs),
+  so replies show in their conversation at once; Sent folder found by name if the server has no SPECIAL-USE.
+- `ai_insights.needs_action` / `action_summary` (migration 7): "Action needed" view, chip, brief section, `is:action`.
+- Search: `topic:` operator, filter row in the UI; category/topic chips open their views.
+- Assistant: "Now" in the user's time zone, every item dated with relative age, past events labelled/omitted,
+  "what should I do" answered from `briefLive()`, mail older than 3 weeks ignored for such questions.
+- Mail history (migration 8): the first sync still takes the last 90 days / 2000 newest per folder quickly; older mail
+  is then downloaded in batches (`backfillHistory`, HALCYON_HISTORY_BATCH) back to `accounts.sync_history`
+  ('90' | '365' | 'all'), set in Settings → Accounts, which also shows downloaded vs. on-server counts.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

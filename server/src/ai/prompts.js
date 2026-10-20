@@ -35,7 +35,8 @@ ${body}`;
 export function userContext(user, settings, accounts) {
   const lines = [`The user is ${user.name || 'the mailbox owner'} (${accounts.map((a) => a.email).join(', ')}).`];
   if (settings.ai.aboutMe) lines.push(`About the user: ${settings.ai.aboutMe}`);
-  lines.push(`Current date/time: ${new Date().toString()} (timezone ${settings.calendar.timezone}).`);
+  // The model has no clock: state "now" explicitly, in the user's time zone (the server may run in UTC).
+  lines.push(`Now: ${localStamp(Date.now(), settings.calendar.timezone)} (${settings.calendar.timezone}). Anything dated before now is in the past.`);
   return lines.join('\n');
 }
 
@@ -48,6 +49,8 @@ ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "act
 - "priority": integer 0-100 for how important it is that the USER sees this soon (personal requests from real people, deadlines, money, security = high; newsletters, promotions, automated notifications = low). Weigh how the user is addressed (see "Recipients"): the only direct recipient = most important; one of many in To = less; only in CC = usually informational unless the user is named or asked to act; not addressed at all (mailing list / BCC) = low unless clearly relevant to the user.
 - "priority_reason": short reason (max 12 words, ${language}).
 - "needs_reply": true if a real person expects a reply from the user.
+- "needs_action": true if the user must DO something other than (or besides) replying: pay, sign, approve, register, submit, review a document, book, attend, fill in a form. false for information only.
+- "action_summary": if needs_action, the action as a short imperative with its deadline if any (max 10 words, ${language}), e.g. "Pay invoice 2026-0412 by 30 Oct"; else "".
 - "action_items": array of {"text": string, "due": "YYYY-MM-DD" or null} the user must do (empty if none).
 - "events": array of {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "all_day": boolean, "location": string or null} for meetings/appointments/deadlines explicitly mentioned. Copy times exactly as written in the email (24-hour clock, the user's time zone ${timezone}; convert only if the email names a different time zone). Resolve relative dates ("tomorrow", "next Tuesday") from the email's date. Empty if none.
 - "suggested_replies": if needs_reply, 3 very short distinct reply options (max 8 words each, in the email's language); else [].
@@ -138,6 +141,8 @@ export function askPrompt({ ctx, language, context, history }) {
   return {
     system: `You are Halcyon, an AI assistant with access to the user's email, calendar, contacts and tasks. ${ctx}
 Answer using the provided context. Cite emails inline as [#ID] using the message ID numbers given. If the context lacks the answer, say so and suggest a search.
+Time: "Now" is stated above and every item carries its date and how long ago / how far ahead it is. Never present past events or deadlines as upcoming.
+For questions about what to do or what needs attention, answer from OPEN ITEMS RIGHT NOW (the current state); older emails in the context are background only, and mail the user already replied to is handled.
 Be concise. Respond in ${language} unless the user writes in another language.
 
 CONTEXT:

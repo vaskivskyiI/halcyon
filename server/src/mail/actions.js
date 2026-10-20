@@ -41,7 +41,7 @@ export function findSpecialFolder(accountId, special, fallbackName) {
   return f;
 }
 
-function ensureFolder(accountId, special, name) {
+export function ensureFolder(accountId, special, name) {
   let f = findSpecialFolder(accountId, special, name);
   if (f) return f;
   const r = run('INSERT INTO folders (account_id, path, name, special_use, sync_enabled) VALUES (?, ?, ?, ?, 1)', accountId, name, name, special);

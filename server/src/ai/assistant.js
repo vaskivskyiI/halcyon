@@ -4,13 +4,13 @@
 import { get, all, run, json, now } from '../db/index.js';
 import { getSettings } from '../settings.js';
 import { chat } from './router.js';
-import { askPrompt, stripQuoted, userContext } from './prompts.js';
+import { askPrompt, stripQuoted, userContext, localStamp } from './prompts.js';
 import { keywordSearch, embedQuery } from '../search.js';
 import { searchMemory, memoryText } from './memory.js';
 import { listRange, findFreeSlots } from '../calendar/repo.js';
 import { userAccounts } from '../accounts.js';
 import { scope, inIds, cleanSpace } from '../spaces.js';
-import { rememberFact } from './tasks.js';
+import { rememberFact, briefLive } from './tasks.js';
 
 const STOP = new Set('a an the and or but of to in on at for with from by about what which who whom when where why how is are was were be been do does did have has had i me my we our you your it this that these those any some all can could would should will shall may might please tell show find give list email emails mail mails message messages me us last recent recently latest'.split(' '));
 const REMEMBER = /^\s*(?:please\s+)?(?:remember|note)(?:\s+that)?\s*[:,]?\s+([\s\S]{4,})$/i;
@@ -22,14 +22,27 @@ function keywords(q) {
 // Memory chunks start with a header line(s) we print ourselves; keep only the content part.
 const chunkBody = (t) => String(t || '').split('\n\n').slice(1).join('\n\n') || String(t || '');
 
+// How far a moment is from now, so the model never has to do date arithmetic ("3 days ago", "in 2 days").
+const relDays = (t) => {
+  const d = Math.round((t - Date.now()) / 864e5);
+  return d === 0 ? (t < Date.now() ? 'earlier today' : 'later today') : d < 0 ? `${-d} day${d === -1 ? '' : 's'} ago` : `in ${d} day${d === 1 ? '' : 's'}`;
+};
+// "What should I do / what needs attention" is about the current state, not about old mail.
+const OPEN_ITEMS_Q = /attention|important|urgent|to-?do|act on|action|reply|respond|pending|open|outstanding|today|tomorrow|this week|need to|should i|upcoming|next|nujn|odgovor|nalog|pomembn|danes|jutri/i;
+const PAST_Q = /last (year|month|week)|ago|history|earlier|previous|in 20\d\d|lani|prejšnj|zgodovin/i;
+
 export async function buildContext(userId, question, sc) {
+  const tz = getSettings(userId).calendar.timezone;
+  const when = (t) => `${localStamp(t, tz)} (${relDays(t)})`;
+  const openQ = OPEN_ITEMS_Q.test(question) && !PAST_Q.test(question);
   const accIn = inIds('m.account_id', sc?.accountIds);
   const query = await embedQuery(userId, question);
   // Ranking matters more than absolute scores (embedding models differ in their similarity baseline).
   const hits = query ? searchMemory(userId, query.vector, query.model, { k: 80, owners: sc?.owners || null, minScore: 0.1 }) : [];
   const byKind = (k) => hits.filter((h) => h.kind === k);
 
-  // Emails: reciprocal-rank fusion of keyword matches and the best semantic chunk per message.
+  // Emails: reciprocal-rank fusion of keyword matches and the best semantic chunk per message, weighted by age
+  // (for questions about what to do now, mail older than three weeks is left out).
   const kw = keywords(question);
   const kwIds = kw.length ? [...new Set([...keywordSearch(userId, kw.join(' '), { limit: 10, sc }), ...kw.slice(0, 4).flatMap((w) => keywordSearch(userId, w, { limit: 6, sc }))])] : [];
   const bestChunk = new Map();
@@ -37,8 +50,16 @@ export async function buildContext(userId, question, sc) {
   const score = new Map();
   kwIds.forEach((id, i) => score.set(id, (score.get(id) || 0) + 1 / (60 + i)));
   [...bestChunk.keys()].forEach((id, i) => score.set(id, (score.get(id) || 0) + 1 / (60 + i)));
-  let ids = [...score].sort((a, b) => b[1] - a[1]).map(([id]) => id);
-  if (ids.length < 4) ids = [...new Set([...ids, ...all(`SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn} ORDER BY m.date DESC LIMIT 8`, userId).map((r) => r.id)])];
+  const dateOf = new Map(score.size ? all(`SELECT id, date FROM messages WHERE id IN (${[...score.keys()].map(Number).join(',')})`).map((r) => [r.id, r.date]) : []);
+  for (const [id, v] of score) {
+    const age = (Date.now() - (dateOf.get(id) || 0)) / 864e5;
+    score.set(id, openQ ? (age > 21 ? 0 : v) : age > 365 ? v * 0.6 : v);
+  }
+  let ids = [...score].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  if (ids.length < 4) {
+    const recent = all(`SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn} AND m.date >= ? ORDER BY m.date DESC LIMIT 8`, userId, openQ ? Date.now() - 21 * 864e5 : 0);
+    ids = [...new Set([...ids, ...recent.map((r) => r.id)])];
+  }
   const texts = memoryText([...bestChunk.values(), ...hits.filter((h) => h.kind !== 'message').map((h) => h.id)]);
   // The scope check is repeated here: memory hits are only candidates, the database decides what is visible.
   // Small local models have short context windows (often 8k tokens): keep the prompt compact.
@@ -46,43 +67,65 @@ export async function buildContext(userId, question, sc) {
   const emailPart = msgs.map((m) => {
     // The matching passage is kept whole (it is what answers the question); otherwise the start of the email.
     const excerpt = bestChunk.has(m.id) && texts.get(bestChunk.get(m.id)) ? chunkBody(texts.get(bestChunk.get(m.id))).slice(0, 1500) : stripQuoted(m.body_text).slice(0, 1000);
-    return `[#${m.id}] ${new Date(m.date).toISOString().slice(0, 16)} From: ${m.from_name || ''} <${m.from_addr}> To: ${json(m.to_json, []).map((a) => a.address).join(', ')}
+    return `[#${m.id}] ${when(m.date)} From: ${m.from_name || ''} <${m.from_addr}> To: ${json(m.to_json, []).map((a) => a.address).join(', ')}${m.is_answered ? ' · the user has replied' : ''}
 Subject: ${m.subject}
 ${m.ai_summary ? `Summary: ${m.ai_summary}\n` : ''}${excerpt}`;
   });
 
-  // Facts: everything the user explicitly asked to remember (in scope) plus the most relevant learned ones.
+  // Facts: everything the user explicitly asked to remember (in scope) plus the most relevant learned ones, dated.
   const owners = sc ? [...sc.owners] : null;
   const ownerIn = owners ? `owner IN (${owners.map(() => '?').join(',')})` : '1';
-  const userFacts = all(`SELECT id, text FROM facts WHERE user_id = ? AND origin = 'user' AND ${ownerIn} ORDER BY created_at DESC LIMIT 15`, userId, ...(owners || []));
+  const userFacts = all(`SELECT id, text, created_at FROM facts WHERE user_id = ? AND origin = 'user' AND ${ownerIn} ORDER BY created_at DESC LIMIT 15`, userId, ...(owners || []));
   const factIds = new Set(userFacts.map((f) => f.id));
-  const learned = byKind('fact').slice(0, 10).map((h) => get(`SELECT id, text FROM facts WHERE id = ? AND user_id = ? AND ${ownerIn}`, Number(h.ref), userId, ...(owners || []))).filter((f) => f && !factIds.has(f.id));
+  const learned = byKind('fact').slice(0, 10).map((h) => get(`SELECT id, text, created_at FROM facts WHERE id = ? AND user_id = ? AND ${ownerIn}`, Number(h.ref), userId, ...(owners || []))).filter((f) => f && !factIds.has(f.id));
   const facts = [...userFacts, ...learned];
 
   const threads = byKind('thread').slice(0, 4).map((h) => texts.get(h.id)).filter(Boolean);
-  const events = byKind('event').slice(0, 6).filter((h) => get('SELECT 1 AS x FROM events WHERE id = ? AND deleted = 0', Number(h.ref))).map((h) => texts.get(h.id)).filter(Boolean);
+  // Events found by meaning, labelled past / upcoming from their real date (past ones are dropped for "what's next").
+  const events = byKind('event').slice(0, 8).map((h) => {
+    const e = get('SELECT start, rrule FROM events WHERE id = ? AND deleted = 0', Number(h.ref));
+    if (!e || !texts.get(h.id)) return null;
+    const label = e.rrule ? 'REPEATING' : e.start < Date.now() ? `PAST, ${relDays(e.start)}` : `UPCOMING, ${relDays(e.start)}`;
+    if (openQ && label.startsWith('PAST')) return null;
+    return `[${label}] ${texts.get(h.id)}`;
+  }).filter(Boolean).slice(0, 6);
   const contacts = byKind('contact').slice(0, 4).filter((h) => get('SELECT 1 AS x FROM contacts WHERE id = ? AND user_id = ? AND deleted = 0', Number(h.ref), userId)).map((h) => texts.get(h.id)).filter(Boolean);
 
   let cal = '';
-  if (/calendar|schedule|meeting|event|today|tomorrow|week|free|busy|available|appointment|when|koledar|sestan|termin/i.test(question)) {
-    const from = new Date(); from.setHours(0, 0, 0, 0);
-    const list = sc && !sc.calendarIds.length ? [] : listRange(userId, from.getTime() - 864e5, from.getTime() + 21 * 864e5, sc?.calendarIds);
-    cal = `\nCALENDAR (next 3 weeks):\n${list.map((e) => `- ${new Date(e.start).toString().slice(0, 21)} → ${new Date(e.end).toTimeString().slice(0, 5)} ${e.title}${e.location ? ` @ ${e.location}` : ''}`).join('\n') || '(no events)'}`;
-    if (/free|available|slot|when can/i.test(question)) {
+  if (/calendar|schedule|meeting|event|today|tomorrow|week|free|busy|available|appointment|when|koledar|sestan|termin|danes|jutri/i.test(question)) {
+    const from = Date.now() - 12 * 3600e3;
+    const list = sc && !sc.calendarIds.length ? [] : listRange(userId, from, Date.now() + 21 * 864e5, sc?.calendarIds);
+    cal = `\nCALENDAR (from now until 3 weeks ahead):\n${list.map((e) => `- ${e.allDay ? `${localStamp(e.start, tz).slice(0, 14)} all day` : `${when(e.start)} → ${localStamp(e.end, tz).slice(-5)}`}${e.end < Date.now() ? ' [already over]' : ''} ${e.title}${e.location ? ` @ ${e.location}` : ''}`).join('\n') || '(no events)'}`;
+    if (/free|available|slot|when can|prost/i.test(question)) {
       // Busy time counts across all calendars (one person, one schedule); only the free slots are shown.
       const slots = findFreeSlots(userId, Date.now(), Date.now() + 10 * 864e5, 30);
-      cal += `\nFREE 30-MIN SLOTS (working hours): ${slots.slice(0, 10).map((s) => new Date(s.start).toString().slice(0, 21)).join('; ')}`;
+      cal += `\nFREE 30-MIN SLOTS (working hours): ${slots.slice(0, 10).map((s) => localStamp(s.start, tz)).join('; ')}`;
     }
   }
   let tasks = '';
-  if (/task|todo|to-do|to do|due|deadline|naloge/i.test(question)) {
+  if (/task|todo|to-do|to do|due|deadline|naloge|rok/i.test(question) && !openQ) {
     const rows = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn}))
       ORDER BY due IS NULL, due LIMIT 30`, userId, userId);
-    tasks = `\nOPEN TASKS:\n${rows.map((t) => `- ${t.title}${t.due ? ` (due ${new Date(t.due).toDateString()})` : ''}`).join('\n')}`;
+    tasks = `\nOPEN TASKS:\n${rows.map((t) => `- ${t.title}${t.due ? ` (due ${when(t.due)}${t.due < Date.now() ? ', OVERDUE' : ''})` : ''}`).join('\n')}`;
+  }
+
+  // "What needs my attention?": the current, authoritative state (same as the brief) — not the AI's guess from old mail.
+  let open = '';
+  if (openQ) {
+    const live = briefLive(userId, sc?.space || '');
+    const line = (m) => `- [#${m.id}] ${m.from}: ${m.subject} (${relDays(m.date)})${m.summary ? ` — ${m.summary}` : ''}`;
+    open = `OPEN ITEMS RIGHT NOW (already filtered: not handled, not expired, recent):
+Needs attention:\n${live.attention.map(line).join('\n') || '- none'}
+Waiting for the user's reply:\n${live.awaiting.map(line).join('\n') || '- none'}
+Action needed (other than replying):\n${live.actions.map((m) => `${line(m)}${m.action ? ` → ${m.action}` : ''}`).join('\n') || '- none'}
+Open tasks:\n${live.tasks.map((t) => `- ${t.title}${t.due ? ` (due ${when(t.due)}${t.overdue ? ', OVERDUE' : ''})` : ''}`).join('\n') || '- none'}
+Today's events:\n${live.events.map((e) => `- ${e.allDay ? 'all day' : `${localStamp(e.start, tz).slice(-5)}–${localStamp(e.end, tz).slice(-5)}`}${e.end < Date.now() ? ' [over]' : ''} ${e.title}`).join('\n') || '- none'}`;
+    for (const m of [...live.attention, ...live.awaiting, ...live.actions]) if (!msgs.some((x) => x.id === m.id)) msgs.push({ id: m.id, subject: m.subject, from_name: m.from, from_addr: '', date: m.date });
   }
 
   const sections = [
-    facts.length && `THINGS YOU REMEMBER ABOUT THE USER'S WORLD:\n${facts.map((f) => `- ${f.text}`).join('\n')}`,
+    open,
+    facts.length && `THINGS YOU REMEMBER ABOUT THE USER'S WORLD (with the date they were noted):\n${facts.map((f) => `- ${f.text} (noted ${localStamp(f.created_at, tz).slice(4, 14)})`).join('\n')}`,
     `EMAILS:\n${emailPart.join('\n\n') || '(none found)'}`,
     threads.length && `CONVERSATION SUMMARIES:\n${threads.join('\n\n')}`,
     events.length && `RELATED CALENDAR EVENTS:\n${events.join('\n')}`,

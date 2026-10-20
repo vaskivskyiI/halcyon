@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -13,6 +13,7 @@ import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 import { EventEditor } from '../calendar/CalendarView.jsx';
 import { loadFolders } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
+import { topicView, categoryView } from './MailView.jsx';
 
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
@@ -53,6 +54,8 @@ export default function Reader({ id, view }) {
     }
     if (e.type === 'ai:thread' && e.payload.threadId === thread.current.threadId) setThread((t) => ({ ...t, summary: e.payload.summary }));
     if (e.type === 'ai:draft' && thread.messages.some((m) => m.id === e.payload.messageId)) load();
+    // A reply was just delivered: show it in the conversation.
+    if (e.type === 'mail:sent') load();
   }), [thread]);
 
   // Keyboard reply shortcuts dispatched from the list.
@@ -198,7 +201,8 @@ export default function Reader({ id, view }) {
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
         {settings.ai.enabled && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
-          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
+          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply}
+          onDone={async () => { await api.post(`/api/messages/${latest.id}/dismiss`, {}).catch(toastError); toast('Marked as done'); load(); }} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
             setAiWorking(true);
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
@@ -233,7 +237,7 @@ const AI_STATUS_TEXT = {
 
 const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply }) {
+function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone }) {
   const [openMenu, menuNode] = useMenu();
   if (!ins && !summary) {
     return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
@@ -244,8 +248,9 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       <div className="title" style={{ flexWrap: 'wrap' }}><Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}
         <span className="row" style={{ marginLeft: 'auto', gap: 4, flexWrap: 'wrap' }}>
           {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
-          {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Change category (the AI learns from it)"
-            onClick={(e) => openMenu(e, [{ section: 'Category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => onFeedback('category', c) }))])}>{ins.category} ▾</button>}
+          {ins?.topic && <a className="chip topic" href={`#/mail/${topicView(ins.topic)}`} title={`Show all mail about “${ins.topic}”`}>#{ins.topic}</a>}
+          {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Show this category, or change it (the AI learns from it)"
+            onClick={(e) => openMenu(e, [{ label: `Show all ${ins.category} mail`, onClick: () => navigate(`#/mail/${categoryView(ins.category)}`) }, 'sep', { section: 'Change category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => onFeedback('category', c) }))])}>{ins.category} ▾</button>}
           {ins?.priority != null && <span className="chip" style={{ background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
           {ins && <button className={`chip ${ins.needsReply ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={ins.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply'} onClick={() => onNeedsReply(!ins.needsReply)}>
             <CornerUpLeft size={11} /> {ins.needsReply ? 'Needs reply ✕' : 'Needs reply?'}</button>}
@@ -255,6 +260,10 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       </div>
       {menuNode}
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
+      {ins?.needsAction && !ins.expired && <div className={`notice action-needed ${ins.dismissed ? 'done' : ''}`} style={{ margin: '8px 0 0' }}>
+        <ClipboardCheck size={15} /><span className="grow"><b>Action needed{ins.needsReply ? '' : ' (no reply needed)'}:</b> {ins.actionSummary || 'see the email'}</span>
+        {!ins.dismissed && <button className="btn sm" title="Done — removes it from Action needed and the brief" onClick={() => onDone()}>✓ Done</button>}
+      </div>}
       {ins?.requests?.map((rq, i) => (
         <div key={i} className="notice" style={{ display: 'block', margin: '8px 0 0' }}>
           <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Forward size={13} /> {requester?.name || requester?.address} asks for an earlier email{rq.description && rq.description !== 'requested email' ? `: ${rq.description}` : ''}</div>

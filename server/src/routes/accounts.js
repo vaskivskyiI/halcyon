@@ -38,6 +38,11 @@ export default async function accountRoutes(app) {
     smtp: smtpStatus.get(a.id) || null,
     outboxFailed: get("SELECT COUNT(*) AS n FROM outbox WHERE account_id = ? AND status = 'failed'", a.id).n,
     outboxRetrying: get("SELECT COUNT(*) AS n FROM outbox WHERE account_id = ? AND status = 'queued' AND attempts > 0", a.id).n,
+    // Messages on the server vs. downloaded (synced folders), and whether older mail is still being downloaded.
+    mailbox: get(`SELECT COALESCE(SUM(server_total), 0) AS onServer, SUM(CASE WHEN history_done = 0 AND last_synced_at IS NOT NULL THEN 1 ELSE 0 END) AS foldersPending,
+      (SELECT COUNT(*) FROM messages m JOIN folders f2 ON f2.id = m.folder_id WHERE f2.account_id = ? AND f2.sync_enabled = 1) AS downloaded
+      FROM folders WHERE account_id = ? AND sync_enabled = 1`, a.id, a.id),
+    history: a.sync_history || '90',
   })));
 
   // Test the stored IMAP + SMTP settings of an existing account (read-only: logs in, lists folders, verifies SMTP).
@@ -64,6 +69,11 @@ export default async function accountRoutes(app) {
     if (!a) return httpError(reply, 404, 'Not found');
     update('accounts', a.id, accountFields(req.body || {}), ACCOUNT_COLS);
     const fresh = userAccount(req.user.id, a.id);
+    // A wider history window: continue downloading older mail (a narrower one keeps what is already here).
+    if (req.body?.syncHistory !== undefined && fresh.sync_history !== a.sync_history) {
+      run('UPDATE folders SET history_done = 0 WHERE account_id = ?', a.id);
+      syncManager.trigger(a.id);
+    }
     const connChanged = ['imap', 'smtp', 'syncEnabled'].some((k) => req.body?.[k] !== undefined);
     if (connChanged) { if (fresh.sync_enabled) await syncManager.restart(a.id); else await syncManager.stop(a.id); }
     if (req.body?.caldavUrl !== undefined || req.body?.carddavUrl !== undefined) syncDav(fresh);

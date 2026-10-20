@@ -3,8 +3,9 @@ import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { get, all, run, json, now } from '../db/index.js';
 import { smtpTransport } from './connection.js';
 import { queueOp } from './sync.js';
-import { findSpecialFolder, setFlags } from './actions.js';
-import { readRaw, messageRow, recountFolder, deleteMessages } from './store.js';
+import { findSpecialFolder, setFlags, ensureFolder } from './actions.js';
+import { afterIngest } from './pipeline.js';
+import { readRaw, messageRow, recountFolder, deleteMessages, ingestMessage } from './store.js';
 import { collectAddresses } from '../contacts/service.js';
 import { htmlToText } from './sanitize.js';
 import { notify } from '../util/events.js';
@@ -137,12 +138,24 @@ export async function deliver(row) {
   } finally { transport.close(); }
   // Gmail and Microsoft store sent copies automatically.
   const autoSaves = /gmail\.com|googlemail\.com|office365\.com|outlook\.com/i.test(account.smtp_host || '');
-  if (!autoSaves) {
-    const sent = findSpecialFolder(account.id, '\\Sent', 'Sent');
-    if (sent) queueOp(account.id, 'append', { folder: sent.path, raw: raw.toString('base64'), flags: ['\\Seen'] });
+  const sent = sentFolder(account.id) || (autoSaves ? null : ensureFolder(account.id, '\\Sent', 'Sent'));
+  if (sent && !autoSaves) queueOp(account.id, 'append', { folder: sent.path, raw: raw.toString('base64'), flags: ['\\Seen'] });
+  // Show the sent message right away (in Sent and in its conversation); when the server copy is synced later it is
+  // matched by Message-ID and only gets its UID attached.
+  if (sent) {
+    try {
+      const r = await ingestMessage({ account, folder: sent, uid: null, flags: ['\\Seen'], raw });
+      if (r.isNew) { recountFolder(sent.id); await afterIngest(account, sent, [r.id]); notify(row.user_id, 'mail:changed', { ids: [r.id] }); }
+    } catch (e) { log.warn(`local sent copy: ${e.message}`); }
   }
   if (p.inReplyToId) setFlags(row.user_id, [p.inReplyToId], { answered: true });
   collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true, row.account_id);
+}
+
+// Sent folder: special-use flag, else the usual names (servers without SPECIAL-USE, localised names).
+const SENT_NAMES = ['Sent', 'Sent Items', 'Sent Messages', 'Sent Mail', 'Poslano', 'Poslana pošta', 'Gesendet', 'Gesendete Elemente', 'INBOX.Sent', 'INBOX/Sent'];
+function sentFolder(accountId) {
+  return findSpecialFolder(accountId, '\\Sent') || SENT_NAMES.map((n) => findSpecialFolder(accountId, null, n)).find(Boolean) || null;
 }
 
 /** Last SMTP result per account (shown in Settings → Accounts). */

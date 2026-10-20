@@ -10,6 +10,7 @@ import { notify } from '../util/events.js';
 
 const log = logger('sync');
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
+const HISTORY_BATCH = Number(process.env.HALCYON_HISTORY_BATCH || 300); // older messages per folder per round
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class AccountSync {
@@ -108,7 +109,9 @@ export class AccountSync {
       // Keep INBOX selected so the server pushes EXISTS via IDLE.
       const inbox = get("SELECT path FROM folders WHERE account_id = ? AND special_use = '\\Inbox'", this.accountId);
       if (inbox && this.client.mailbox?.path !== inbox.path) await this.client.mailboxOpen(inbox.path);
-      if (!this.hasPendingWork) await this.waitFor(config.pollIntervalSec * 1000);
+      // While older mail is still being downloaded, continue after a short pause instead of the full poll interval.
+      const history = this.historyPending;
+      if (!this.hasPendingWork) await this.waitFor(history ? 3000 : config.pollIntervalSec * 1000);
       if (!this.client || this.stopped) break;
       await this.processOps();
       if (this.fullRequested || now() - lastFull >= config.pollIntervalSec * 1000) {
@@ -124,6 +127,8 @@ export class AccountSync {
           if (f) await this.syncFolder(f);
         }
         this.setState('idle');
+      } else if (history) {
+        await this.backfillHistory();
       }
     }
   }
@@ -200,6 +205,7 @@ export class AccountSync {
         deleteMessages(all('SELECT id FROM messages WHERE folder_id = ?', folder.id).map((r) => r.id));
         folder.last_uid = 0;
         folder.highest_modseq = null;
+        run('UPDATE folders SET oldest_uid = NULL, history_done = 0 WHERE id = ?', folder.id);
       }
 
       // 1) New messages.
@@ -251,8 +257,10 @@ export class AccountSync {
         if (gone.length) deleteMessages(gone);
       }
 
-      run('UPDATE folders SET uidvalidity = ?, last_uid = ?, highest_modseq = ?, last_synced_at = ? WHERE id = ?',
-        uidValidity, maxUid, box.highestModseq ? String(box.highestModseq) : null, now(), folder.id);
+      const fetchedMin = uids.length ? Math.min(...uids) : null;
+      run(`UPDATE folders SET uidvalidity = ?, last_uid = ?, highest_modseq = ?, last_synced_at = ?, server_total = ?,
+        oldest_uid = CASE WHEN ? IS NULL THEN oldest_uid WHEN oldest_uid IS NULL OR ? < oldest_uid THEN ? ELSE oldest_uid END WHERE id = ?`,
+        uidValidity, maxUid, box.highestModseq ? String(box.highestModseq) : null, now(), box.exists ?? null, fetchedMin, fetchedMin, fetchedMin, folder.id);
     } finally {
       lock.release();
     }
@@ -263,6 +271,54 @@ export class AccountSync {
     }
     if (newIds.length) this.status.lastNewMailAt = now();
     notify(account.user_id, 'folder:synced', { accountId: account.id, folderId: folder.id, newCount: newIds.length });
+  }
+
+  // ---- history: older mail, downloaded after the quick first sync, back to the account's sync_history window.
+
+  get historyPending() {
+    return !!get("SELECT 1 AS x FROM folders WHERE account_id = ? AND sync_enabled = 1 AND history_done = 0 AND last_synced_at IS NOT NULL AND COALESCE(special_use, '') NOT IN ('\\Trash', '\\Junk')", this.accountId);
+  }
+
+  /** One batch of older messages per folder (Inbox first). New mail is never held up: work waiting for a sync wins. */
+  async backfillHistory() {
+    const account = this.account;
+    const days = account.sync_history === 'all' ? 0 : Number(account.sync_history) || config.initialSyncDays;
+    const folders = all("SELECT * FROM folders WHERE account_id = ? AND sync_enabled = 1 AND history_done = 0 AND last_synced_at IS NOT NULL AND COALESCE(special_use, '') NOT IN ('\\Trash', '\\Junk')", this.accountId)
+      .sort((a, b) => rank(a) - rank(b));
+    for (const folder of folders) {
+      if (this.stopped || !this.client || this.hasPendingWork) return;
+      const client = this.client;
+      const lock = await client.getMailboxLock(folder.path);
+      const newIds = [];
+      let oldest = folder.oldest_uid, newest = 0, done = 0;
+      try {
+        const below = oldest || (client.mailbox.uidNext ? Number(client.mailbox.uidNext) : 0);
+        if (!client.mailbox.exists || below <= 1) done = 1;
+        else {
+          const crit = { uid: `1:${below - 1}` };
+          if (days) crit.since = new Date(now() - days * 864e5);
+          const older = ((await client.search(crit, { uid: true })) || []).filter((u) => u < below).sort((a, b) => b - a);
+          const batch = older.slice(0, HISTORY_BATCH);
+          for (let i = 0; i < batch.length; i += 25) {
+            for await (const msg of client.fetch(batch.slice(i, i + 25), { uid: true, flags: true, source: true, internalDate: true }, { uid: true })) {
+              if (!msg.source) continue;
+              try {
+                const r = await ingestMessage({ account, folder, uid: msg.uid, flags: [...(msg.flags || [])], raw: msg.source, internalDate: msg.internalDate });
+                if (r.isNew) newIds.push(r.id);
+              } catch (e) { log.warn(`history ${folder.path}/${msg.uid}: ${e.message}`); }
+            }
+          }
+          if (batch.length) { oldest = Math.min(...batch); newest = Math.max(...batch); }
+          if (older.length <= HISTORY_BATCH) done = 1;
+        }
+        // last_uid only grows (a folder with no recent mail gets its first last_uid here, so new-mail checks start above it).
+        run('UPDATE folders SET oldest_uid = ?, history_done = ?, last_uid = MAX(COALESCE(last_uid, 0), ?) WHERE id = ?', oldest ?? null, done, newest, folder.id);
+      } finally { lock.release(); }
+      recountFolder(folder.id);
+      // Old mail: indexed for search/memory; analysed only within the analysis window (as on first sync).
+      if (newIds.length) await afterIngest(account, get('SELECT * FROM folders WHERE id = ?', folder.id), newIds, { initial: true });
+      notify(account.user_id, 'folder:synced', { accountId: account.id, folderId: folder.id, newCount: 0, history: newIds.length });
+    }
   }
 
   // Replays locally-applied operations against the server.

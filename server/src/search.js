@@ -11,7 +11,7 @@ export function parseQuery(q) {
   while ((m = re.exec(q || ''))) {
     if (m[2]) {
       const key = m[2].toLowerCase(), val = m[3].replace(/^"|"$/g, '');
-      if (['from', 'to', 'subject', 'has', 'is', 'in', 'before', 'after', 'label', 'category', 'account', 'older_than', 'newer_than', 'priority'].includes(key)) {
+      if (['from', 'to', 'subject', 'has', 'is', 'in', 'before', 'after', 'label', 'category', 'topic', 'account', 'older_than', 'newer_than', 'priority'].includes(key)) {
         (filters[key] ||= []).push({ val, neg: m[1] === '-' });
         continue;
       }
@@ -33,7 +33,8 @@ export function buildWhere(userId, f, sc = null) {
   for (const { val, neg } of f.subject || []) add(`${neg ? 'NOT ' : ''}m.subject LIKE ?`, `%${val}%`);
   for (const { val, neg } of f.has || []) if (/attach/.test(val)) add(`m.has_attachments = ${neg ? 0 : 1}`);
   for (const { val, neg } of f.is || []) {
-    const map = { unread: 'm.is_read = 0', read: 'm.is_read = 1', flagged: 'm.is_flagged = 1', starred: 'm.is_flagged = 1', answered: 'm.is_answered = 1', snoozed: 'm.snoozed_until IS NOT NULL', important: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.priority >= 70)', needsreply: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_reply = 1)' };
+    const map = { unread: 'm.is_read = 0', read: 'm.is_read = 1', flagged: 'm.is_flagged = 1', starred: 'm.is_flagged = 1', answered: 'm.is_answered = 1', snoozed: 'm.snoozed_until IS NOT NULL', important: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.priority >= 70)', needsreply: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_reply = 1)',
+      action: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_action = 1 AND i.dismissed_at IS NULL)', needsaction: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_action = 1 AND i.dismissed_at IS NULL)' };
     if (map[val]) where.push(neg ? `NOT (${map[val]})` : map[val]);
   }
   for (const { val } of f.in || []) {
@@ -46,7 +47,8 @@ export function buildWhere(userId, f, sc = null) {
   for (const { val } of f.older_than || []) { const t = rel(val); if (t) add('m.date < ?', t); }
   for (const { val } of f.newer_than || []) { const t = rel(val); if (t) add('m.date >= ?', t); }
   for (const { val } of f.label || []) add("EXISTS (SELECT 1 FROM labels l, json_each(m.labels_json) j WHERE l.id = j.value AND lower(l.name) = lower(?))", val);
-  for (const { val } of f.category || []) add('EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.category = ?)', val.toLowerCase());
+  for (const { val, neg } of f.category || []) add(`${neg ? 'NOT ' : ''}EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.category = ?)`, val.toLowerCase());
+  for (const { val, neg } of f.topic || []) add(`${neg ? 'NOT ' : ''}EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND lower(i.topic) = lower(?))`, val);
   for (const { val } of f.priority || []) add('EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.priority >= ?)', val === 'high' ? 70 : val === 'medium' ? 40 : 0);
   for (const { val } of f.account || []) add('m.account_id IN (SELECT id FROM accounts WHERE email LIKE ?)', `%${val}%`);
   return { where, params };

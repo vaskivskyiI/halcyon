@@ -173,6 +173,10 @@ function Memory({ enabled }) {
 /** Analyse older mail (builds summaries, facts and topics for the memory) or re-analyse it; stop bulk work. */
 function OlderMail({ pending, onChange }) {
   const [days, setDays] = useState('90');
+  const [boxes, setBoxes] = useState([]);
+  useEffect(() => { api.get('/api/accounts/status').then(setBoxes).catch(() => {}); }, []);
+  const downloaded = boxes.reduce((n, a) => n + (a.mailbox?.downloaded || 0), 0);
+  const onServer = boxes.reduce((n, a) => n + (a.mailbox?.onServer || 0), 0);
   const [redo, setRedo] = useState(false);
   const [actions, setActions] = useState(false);
   const start = async () => {
@@ -184,7 +188,8 @@ function OlderMail({ pending, onChange }) {
   return (
     <div className="card" style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ fontWeight: 600 }}>Analyse older mail</div>
-      <div className="small muted">Builds summaries, topics and remembered facts for older mail, so search and the assistant know it too. The search index (memory) already covers all mail.</div>
+      <div className="small muted">Builds summaries, topics and remembered facts for older mail, so search and the assistant know it too. The search index (memory) already covers all downloaded mail.</div>
+      {onServer > 0 && <div className="small">Downloaded: <b>{downloaded.toLocaleString()}</b> of {onServer.toLocaleString()} messages on your mail server{downloaded < onServer ? <> — only downloaded mail can be analysed; to include older mail choose “Download mail from … all time” in <a href="#/settings/accounts">Settings → Accounts</a>.</> : '.'}</div>}
       <div className="row" style={{ flexWrap: 'wrap' }}>
         <select className="input" style={{ width: 'auto' }} value={days} onChange={(e) => setDays(e.target.value)}>
           <option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All mail</option>
