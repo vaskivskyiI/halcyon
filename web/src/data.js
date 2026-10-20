@@ -35,11 +35,22 @@ export async function loadAccounts() { store.set({ accounts: await api.get('/api
 export async function loadLabels() { store.set({ labels: await api.get('/api/labels') }); }
 export async function loadProviders() { store.set({ aiProviders: await api.get('/api/ai/providers') }); }
 
+// Applied at once (a switch flips immediately), then saved; put back if the server refuses.
+const merge = (base, over) => (over && typeof over === 'object' && !Array.isArray(over) && base && typeof base === 'object'
+  ? Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(over)])].map((k) => [k, k in over ? merge(base[k], over[k]) : base[k]]))
+  : over);
 export async function saveSettings(patch) {
-  const settings = await api.patch('/api/settings', patch);
-  store.set({ settings });
-  applyTheme(settings);
-  return settings;
+  const before = store.get().settings;
+  if (before) { store.set({ settings: merge(before, patch) }); applyTheme(store.get().settings); }
+  try {
+    const settings = await api.patch('/api/settings', patch);
+    store.set({ settings });
+    applyTheme(settings);
+    return settings;
+  } catch (e) {
+    if (before) { store.set({ settings: before }); applyTheme(before); }
+    throw e;
+  }
 }
 
 export function applyTheme(settings) {

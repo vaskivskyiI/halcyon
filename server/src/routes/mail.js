@@ -270,7 +270,14 @@ export default async function mailRoutes(app) {
   // "Needs reply" set or cleared by the user, for one or many messages; it survives re-analysis.
   app.post('/api/messages/needs-reply', async (req) => {
     const value = req.body?.value ? 1 : 0;
-    const own = ids(req.body?.ids).filter((id) => get('SELECT 1 AS x FROM messages WHERE id = ? AND user_id = ?', id, req.user.id));
+    let own = ids(req.body?.ids).filter((id) => get('SELECT 1 AS x FROM messages WHERE id = ? AND user_id = ?', id, req.user.id));
+    // In conversation view a row stands for its conversation: "no reply needed" clears every message in it
+    // (marking stays on the message itself).
+    if (!value && req.body?.threads && own.length) {
+      own = all(`SELECT DISTINCT i.message_id AS id FROM ai_insights i JOIN messages m ON m.id = i.message_id WHERE m.user_id = ? AND i.needs_reply = 1
+        AND m.thread_id IN (SELECT thread_id FROM messages WHERE id IN (${own.join(',')}))`, req.user.id).map((r) => r.id).concat(own);
+      own = [...new Set(own)];
+    }
     for (const id of own) {
       if (get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', id)) run('UPDATE ai_insights SET needs_reply = ?, needs_reply_user = ?, dismissed_at = CASE WHEN ? = 1 THEN NULL ELSE dismissed_at END WHERE message_id = ?', value, value, value, id);
       else run("INSERT INTO ai_insights (message_id, priority, needs_reply, needs_reply_user, category, model, created_at) VALUES (?, 50, ?, ?, 'other', 'user', ?)", id, value, value, Date.now());

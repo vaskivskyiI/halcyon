@@ -253,4 +253,11 @@ export const migrations = [
   ALTER TABLE drafts ADD COLUMN server_saved_at INTEGER;
   UPDATE messages SET local_copy = 1 WHERE uid IS NULL AND folder_id IN (SELECT id FROM folders WHERE special_use = '\\Sent');
   `,
+  // 12: indexes for status queries that are polled (problems indicator, Settings → AI): without them each poll read
+  //     the whole mailbox / memory (row columns after the bodies and vectors are expensive to reach).
+  `
+  CREATE INDEX idx_messages_local_copy ON messages(account_id, created_at) WHERE local_copy = 1 AND uid IS NULL;
+  CREATE INDEX idx_memory_stats ON memory(user_id, kind, model, ref_id);
+  CREATE INDEX idx_ai_jobs_user ON ai_jobs(user_id, type, status, ref_id);
+  `,
 ];

@@ -347,8 +347,23 @@ function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
   );
 }
 
+/** One header line (To / Cc / Bcc): names, full address on hover; long lists folded to "and N more". */
+function AddrLine({ label, list, empty }) {
+  const [all, setAll] = useState(false);
+  if (!list?.length && !empty) return null;
+  const shown = all ? list : (list || []).slice(0, 6);
+  return (
+    <div className="small muted addr-line">
+      <span className="addr-label">{label}</span>
+      {!list?.length ? <span>{empty}</span> : <span>
+        {shown.map((a, i) => <span key={i} title={addrFull(a)}>{addrLabel(a)}{i < shown.length - 1 ? ', ' : ''}</span>)}
+        {list.length > shown.length && <> <button className="link-btn" onClick={() => setAll(true)}>and {list.length - shown.length} more</button></>}
+      </span>}
+    </div>
+  );
+}
+
 function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged }) {
-  const recipients = [...m.to, ...m.cc];
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`}>
@@ -356,7 +371,11 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
         <Avatar name={m.from.name} email={m.from.address} />
         <div className="grow" style={{ minWidth: 0 }}>
           <div className="row"><span className="who truncate">{m.from.name || m.from.address}</span>{expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
-          {expanded ? <div className="small muted truncate" title={recipients.map(addrFull).join(', ')}>to {recipients.map(addrLabel).join(', ') || 'undisclosed recipients'}{m.bcc?.length ? `, bcc ${m.bcc.map(addrLabel).join(', ')}` : ''}</div>
+          {expanded ? <div className="addr-lines" onClick={(e) => e.stopPropagation()}>
+            <AddrLine label="To" list={m.to} empty="undisclosed recipients" />
+            <AddrLine label="Cc" list={m.cc} />
+            <AddrLine label="Bcc" list={m.bcc} />
+          </div>
             : <div className="small muted truncate">{realAtts.length > 0 && <><Paperclip size={11} /> {realAtts.length} · </>}{m.snippet}</div>}
           {/* Attachments right under the header, so they are not missed below a long message. */}
           {expanded && realAtts.length > 0 && <div className="att-chips" onClick={(e) => e.stopPropagation()}>
@@ -590,7 +609,7 @@ function QuickReply({ latest, onSent, hasDraft }) {
 function printThread(msgs) {
   const w = window.open('', '_blank');
   if (!w) return;
-  w.document.write(`<html><head><title>${escapeHtml(msgs[0].subject)}</title><style>body{font-family:system-ui;padding:20px;max-width:800px;margin:auto}hr{margin:24px 0}.h{color:#555;font-size:13px}</style></head><body><h2>${escapeHtml(msgs[0].subject)}</h2>${msgs.map((m) => `<div class="h"><b>${escapeHtml(addrFull(m.from))}</b><br>To: ${escapeHtml(m.to.map(addrFull).join(', '))}<br>${fmtFull(m.date)}</div>${m.html || `<pre style="white-space:pre-wrap">${escapeHtml(m.text)}</pre>`}`).join('<hr>')}</body></html>`);
+  w.document.write(`<html><head><title>${escapeHtml(msgs[0].subject)}</title><style>body{font-family:system-ui;padding:20px;max-width:800px;margin:auto}hr{margin:24px 0}.h{color:#555;font-size:13px}</style></head><body><h2>${escapeHtml(msgs[0].subject)}</h2>${msgs.map((m) => `<div class="h"><b>${escapeHtml(addrFull(m.from))}</b><br>To: ${escapeHtml(m.to.map(addrFull).join(', '))}${m.cc?.length ? `<br>Cc: ${escapeHtml(m.cc.map(addrFull).join(', '))}` : ''}<br>${fmtFull(m.date)}</div>${m.html || `<pre style="white-space:pre-wrap">${escapeHtml(m.text)}</pre>`}`).join('<hr>')}</body></html>`);
   w.document.close();
   setTimeout(() => w.print(), 400);
 }

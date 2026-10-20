@@ -375,3 +375,6 @@ pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); p
 .banner { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); }
 .banner.warn { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); color: var(--text); }
 .banner.warn svg { color: var(--danger); flex: none; }
+.addr-lines { display: grid; gap: 1px; margin-top: 1px; cursor: text; }
+.addr-line { display: flex; gap: 6px; line-height: 1.45; }
+.addr-label { flex: none; width: 26px; color: var(--text-3); }

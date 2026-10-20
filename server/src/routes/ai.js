@@ -102,7 +102,9 @@ export default async function aiRoutes(app) {
   app.get('/api/ai/status', async (req) => {
     const usage = all(`SELECT model, task, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(output_tokens) AS output, AVG(ms) AS avgMs, SUM(1 - ok) AS errors
       FROM ai_usage WHERE user_id = ? AND created_at > ? GROUP BY model, task ORDER BY calls DESC`, req.user.id, now() - 30 * 864e5);
-    const analyzed = get("SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND ai_status = 'done'", req.user.id).n;
+    // From the analyses, not messages.ai_status: that column sits after the bodies in each row, so counting it reads
+    // the whole mailbox (this endpoint is polled every few seconds by Settings → AI).
+    const analyzed = get('SELECT COUNT(*) AS n FROM ai_insights i JOIN messages m ON m.id = i.message_id WHERE m.user_id = ?', req.user.id).n;
     const mem = memoryStats(req.user.id);
     const msgRows = mem.rows.filter((r) => r.kind === 'message').sort((a, b) => b.items - a.items);
     return { queue: queueStats(req.user.id), index: { count: msgRows[0]?.items || 0, model: msgRows[0]?.model || null }, memory: mem, usage, analyzed, approvals: pendingApprovalCount(req.user.id) };

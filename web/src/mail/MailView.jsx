@@ -350,7 +350,11 @@ function MessageList({ view, openId, onMenu }) {
     if (e.shiftKey && anchor.current != null) {
       const a = items.findIndex((x) => x.id === anchor.current), b = items.findIndex((x) => x.id === m.id);
       setSelected(new Set(items.slice(Math.min(a, b), Math.max(a, b) + 1).map((x) => x.id)));
-    } else if (e.metaKey || e.ctrlKey) { toggleSel(m.id); anchor.current = m.id; }
+    } else if (e.metaKey || e.ctrlKey) {
+      // As in Outlook: Ctrl+click extends the current selection, which includes the open message.
+      setSelected((s) => { const n = new Set(s.size || !openId || openId === m.id ? s : [openId]); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; });
+      anchor.current = m.id;
+    }
     else { setSelected(new Set()); anchor.current = m.id; open(m); }
   };
 
@@ -367,8 +371,9 @@ function MessageList({ view, openId, onMenu }) {
 
   const needsReplyMany = async (ids, value) => {
     try {
-      await api.post('/api/messages/needs-reply', { ids, value });
-      setItems((cur) => cur.map((x) => (ids.includes(x.id) ? { ...x, ai: { ...(x.ai || {}), needsReply: value } } : x)));
+      await api.post('/api/messages/needs-reply', { ids, value, threads: threaded });
+      setItems((cur) => (view === 'needsreply' && !value ? cur.filter((x) => !ids.includes(x.id))
+        : cur.map((x) => (ids.includes(x.id) ? { ...x, ai: { ...(x.ai || {}), needsReply: value } } : x))));
       setSelected(new Set());
       toast(`${value ? 'Marked' : 'Unmarked'} ${ids.length} message${ids.length > 1 ? 's' : ''} as “needs reply”`);
       loadFolders();
@@ -377,6 +382,8 @@ function MessageList({ view, openId, onMenu }) {
 
   const rowMenu = (e, m) => {
     const ids = selected.has(m.id) ? [...selected] : [m.id];
+    // Right-click selects what it acts on, so it is visible which messages a menu choice applies to.
+    if (!selected.has(m.id) && selected.size) setSelected(new Set());
     openMenu(e, [
       { label: 'Reply', icon: Reply, onClick: () => { open(m); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:reply', { detail: { mode: 'reply' } })), 300); } },
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
