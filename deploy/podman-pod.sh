@@ -91,8 +91,25 @@ up() {
     for m in $MODELS; do podman exec "$POD-ollama" ollama pull "$m"; done
   fi
   echo
+  # Report what actually happened instead of assuming success.
+  local ok=0
+  for i in {1..30}; do
+    podman exec "$POD-app" node -e "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null && { ok=1; break; }
+    podman container inspect -f '{{.State.Running}}' "$POD-app" 2>/dev/null | grep -q true || break
+    sleep 1
+  done
+  if [[ $ok -ne 1 ]]; then
+    echo "Halcyon did not start. Last log lines:"
+    podman logs --tail 30 "$POD-app"
+    exit 1
+  fi
   echo "Halcyon is running: http://$BIND:$PORT"
+  if [[ "$BIND" == 127.* ]]; then
+    echo "Note: bound to $BIND — reachable only from this server (e.g. nginx on the host → proxy_pass http://127.0.0.1:$PORT)."
+    echo "      For a proxy in a container or access from other machines, recreate with --bind 0.0.0.0 (or this host's LAN IP)."
+  fi
   [[ $WITH_OLLAMA -eq 1 ]] && echo "In Settings → AI add provider 'Ollama (this machine)' with URL http://127.0.0.1:11434"
+  return 0
 }
 
 down() {
@@ -111,7 +128,10 @@ case "$cmd" in
     build; down; up ;;
   down) down ;;
   logs) podman logs -f "$POD-app" ;;
-  status) podman pod ps --filter name="$POD"; podman ps --pod --filter pod="$POD" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ;;
+  status)
+    podman pod ps --filter name="$POD"; podman ps --pod --filter pod="$POD" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+    echo "Published: $(podman pod inspect "$POD" --format '{{range $k, $v := .InfraConfig.PortBindings}}{{range $v}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' 2>/dev/null)"
+    podman exec "$POD-app" node -e "fetch('http://127.0.0.1:8080/api/health').then(r=>r.text()).then(t=>console.log('Health:', t)).catch(e=>console.log('Health: FAILED', e.message))" 2>/dev/null || echo "Health: app container not running" ;;
   systemd)
     mkdir -p ~/.config/systemd/user
     (cd ~/.config/systemd/user && podman generate systemd --new --files --name "$POD" >/dev/null)
