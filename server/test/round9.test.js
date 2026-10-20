@@ -136,3 +136,17 @@ test('a message that could not be sent can be sent again or kept as a draft; an 
   const row = db.prepare('SELECT status, error FROM outbox WHERE id = ?').get(s);
   assert.equal(row.status, 'failed'); assert.match(row.error, /interrupted/);
 });
+
+test('copies stored on the server have CRLF line endings only (servers refuse bare newlines)', async () => {
+  const { buildMime } = await import('../src/mail/send.js');
+  const bare = (b) => /(^|[^\r])\n|\r(?!\n)/.test(b.toString('latin1'));
+  const built = await buildMime(account, { to: ['a@x.example'], subject: 'Lines', text: 'one\ntwo\n\nthree', html: '<p>one</p>\n<p>two</p>' });
+  assert.equal(bare(built), false, 'built message');
+  // Copies queued before the fix still carry bare newlines: fixed when they are stored.
+  const w = new AccountSync(account.id);
+  let got;
+  w.client = { async append(folder, raw) { got = raw; } };
+  await w.applyOp('append', { folder: 'Sent', raw: Buffer.from('Subject: x\nFrom: a@x\n\nbody line 1\nline 2\r\nšumnik č\n').toString('base64') });
+  assert.equal(bare(got), false);
+  assert.equal(got.toString('utf8'), 'Subject: x\r\nFrom: a@x\r\n\r\nbody line 1\r\nline 2\r\nšumnik č\r\n', 'bytes kept, only line ends changed');
+});

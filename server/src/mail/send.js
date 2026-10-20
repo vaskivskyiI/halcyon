@@ -10,6 +10,7 @@ import { collectAddresses } from '../contacts/service.js';
 import { htmlToText } from './sanitize.js';
 import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
+import { crlf } from '../util/crlf.js';
 import { parseRaw } from './store.js';
 
 const log = logger('send');
@@ -54,7 +55,7 @@ export async function buildMime(account, p) {
     icalEvent: p.icalEvent ? { method: p.icalEvent.method, content: p.icalEvent.content } : undefined,
     messageId: `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${fromAddr.split('@')[1] || 'halcyon.local'}>`,
   });
-  return new Promise((resolve, reject) => mail.compile().build((err, msg) => (err ? reject(err) : resolve(msg))));
+  return new Promise((resolve, reject) => mail.compile().build((err, msg) => (err ? reject(err) : resolve(crlf(msg)))));
 }
 
 export function queueSend(userId, payload, { delayMs = 0, sendAt = null } = {}) {

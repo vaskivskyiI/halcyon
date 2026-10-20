@@ -6,6 +6,7 @@ import { ingestMessage, deleteMessages, recountFolder, flagsToCols } from './sto
 import { afterIngest } from './pipeline.js';
 import { config } from '../config.js';
 import { logger } from '../util/log.js';
+import { crlf } from '../util/crlf.js';
 import { notify } from '../util/events.js';
 
 const log = logger('sync');
@@ -414,7 +415,7 @@ export class AccountSync {
         break;
       }
       case 'append': {
-        const raw = Buffer.from(p.raw, 'base64');
+        const raw = crlf(Buffer.from(p.raw, 'base64'));
         let target = p.folder;
         try { await c.append(target, raw, p.flags || ['\\Seen']); } catch (e) {
           // The folder is not on the server (a "Sent" made up locally, a renamed folder, a namespace prefix the
