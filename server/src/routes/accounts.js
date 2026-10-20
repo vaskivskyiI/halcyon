@@ -78,6 +78,12 @@ export default async function accountRoutes(app) {
         a.id, t - 120e3, a.id).n;
       if (unsaved) out.push({ key: `unsaved:${a.id}`, level: 'error', accountId: a.id, title: `${who}: ${unsaved} sent message${unsaved > 1 ? 's are' : ' is'} not saved on the server`, text: 'They were sent, but other mail apps will not show them in Sent.', actions: ['save-unsaved'] });
     }
+    for (const c of all("SELECT id, name, sync_error FROM calendars WHERE user_id = ? AND source = 'subscription' AND sync_error IS NOT NULL", req.user.id)) {
+      out.push({ key: `cal:${c.id}`, level: 'warn', calendarId: c.id, title: `Calendar “${c.name}” could not be refreshed`, text: c.sync_error, actions: ['refresh-calendar'] });
+    }
+    for (const s of all('SELECT id, name, error FROM calendar_sources WHERE user_id = ? AND error IS NOT NULL', req.user.id)) {
+      out.push({ key: `calsrc:${s.id}`, level: 'warn', sourceId: s.id, title: `Calendars from “${s.name}” could not be refreshed`, text: s.error, actions: ['refresh-source'] });
+    }
     return { problems: out.sort((x, y) => (x.level === y.level ? 0 : x.level === 'error' ? -1 : 1)) };
   });
 

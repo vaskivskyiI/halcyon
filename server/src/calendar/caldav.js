@@ -19,7 +19,8 @@ function upsertFromIcs(calId, href, etag, ics) {
   }
 }
 
-export async function syncCalDav(account) {
+/** account: a mail account with caldav_url, or a read-only source ({ id: null, user_id, caldav_url, dav_user, dav_pass_enc }). */
+export async function syncCalDav(account, { sourceId = null, readonly = false } = {}) {
   if (!account.caldav_url) return;
   const client = await davClient(account, account.caldav_url, 'caldav');
   const remoteCals = (await client.fetchCalendars()).filter((c) => !c.components || c.components.includes('VEVENT'));
@@ -28,11 +29,12 @@ export async function syncCalDav(account) {
     if (!cal) {
       const name = typeof remote.displayName === 'string' ? remote.displayName : 'Calendar';
       const color = typeof remote.calendarColor === 'string' ? remote.calendarColor.slice(0, 7) : PALETTE[i % PALETTE.length];
-      const r = run("INSERT INTO calendars (user_id, account_id, name, color, source, url, created_at) VALUES (?, ?, ?, ?, 'caldav', ?, ?)", account.user_id, account.id, name, color, remote.url, now());
+      const r = run("INSERT INTO calendars (user_id, account_id, source_id, name, color, source, url, readonly, created_at) VALUES (?, ?, ?, ?, ?, 'caldav', ?, ?, ?)",
+        account.user_id, account.id ?? null, sourceId, name, color, remote.url, readonly ? 1 : 0, now());
       cal = get('SELECT * FROM calendars WHERE id = ?', r.lastInsertRowid);
     }
-    // Push dirty events grouped by UID.
-    const dirtyUids = [...new Set(all('SELECT uid FROM events WHERE calendar_id = ? AND dirty = 1', cal.id).map((r) => r.uid))];
+    // Push dirty events grouped by UID (never for read-only calendars).
+    const dirtyUids = cal.readonly ? [] : [...new Set(all('SELECT uid FROM events WHERE calendar_id = ? AND dirty = 1', cal.id).map((r) => r.uid))];
     for (const uid of dirtyUids) {
       const family = all('SELECT * FROM events WHERE calendar_id = ? AND uid = ?', cal.id, uid);
       const master = family.find((e) => !e.recurrence_id) || family[0];
@@ -89,4 +91,19 @@ export function importIcsInto(userId, calendarId, ics) {
     }
   });
   return n;
+}
+
+/** Syncs a read-only CalDAV source: every calendar found at its URL, never written to. Errors are kept for the UI. */
+export async function syncCalendarSource(sourceId) {
+  const src = get('SELECT * FROM calendar_sources WHERE id = ?', sourceId);
+  if (!src) return;
+  try {
+    await syncCalDav({ id: null, user_id: src.user_id, email: src.dav_user || '', caldav_url: src.url, dav_user: src.dav_user, dav_pass_enc: src.dav_pass_enc, auth_type: 'password' },
+      { sourceId: src.id, readonly: true });
+    run('UPDATE calendar_sources SET last_sync_at = ?, error = NULL WHERE id = ?', now(), src.id);
+    if (src.space != null) run('UPDATE calendars SET space = COALESCE(space, ?) WHERE source_id = ?', src.space, src.id);
+  } catch (e) {
+    run('UPDATE calendar_sources SET error = ? WHERE id = ?', String(e.message || e).slice(0, 300), src.id);
+    throw e;
+  }
 }

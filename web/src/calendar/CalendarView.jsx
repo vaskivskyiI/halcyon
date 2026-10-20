@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner } from '../components/common.jsx';
@@ -116,10 +116,14 @@ function CalendarItem({ c, reload }) {
       { label: 'Export .ics', icon: Download, onClick: () => window.open(api.url(`/api/calendars/${c.id}/export.ics`)) },
       !c.readonly && { label: 'Import .ics', icon: Upload, onClick: () => fileRef.current.click() },
       c.source !== 'local' && { label: 'Refresh', icon: RefreshCw, onClick: () => api.post(`/api/calendars/${c.id}/refresh`).then(reload) },
-      !c.isDefault && { label: 'Remove calendar', icon: Trash2, danger: true, onClick: () => confirm(`Remove ${c.name}?`) && api.del(`/api/calendars/${c.id}`).then(reload) },
+      c.sourceId ? { label: 'Remove this CalDAV server (all its calendars)', icon: Trash2, danger: true, onClick: () => confirm('Remove all calendars from this server from Halcyon? Nothing on that server is changed.') && api.del(`/api/calendar-sources/${c.sourceId}`).then(reload) }
+        : !c.isDefault && { label: 'Remove calendar', icon: Trash2, danger: true, onClick: () => confirm(c.readonly ? `Unsubscribe from ${c.name}?` : `Remove ${c.name}?`) && api.del(`/api/calendars/${c.id}`).then(reload) },
     ])}>
       <input type="checkbox" checked={c.enabled} style={{ accentColor: c.color }} onChange={(e) => api.patch(`/api/calendars/${c.id}`, { enabled: e.target.checked }).then(reload)} />
-      <span className="truncate grow">{c.name}</span>{c.isDefault && <span className="faint small">default</span>}
+      <span className="truncate grow" title={c.readonly ? `${c.name} — read-only${c.lastSyncAt ? `, refreshed ${new Date(c.lastSyncAt).toLocaleString()}` : ''}` : c.name}>{c.name}</span>
+      {c.syncError && <AlertTriangle size={13} color="var(--warning)" title={`Could not refresh: ${c.syncError}`} />}
+      {c.readonly && <Lock size={12} className="faint" title="Read-only" />}
+      {c.isDefault && <span className="faint small">default</span>}
       <input ref={fileRef} type="file" accept=".ics,text/calendar" hidden onChange={async (e) => {
         const f = e.target.files[0]; if (!f) return;
         try { const r = await api.post(`/api/calendars/${c.id}/import`, { ics: await f.text() }); toast(`Imported ${r.imported} events`); reload(); } catch (err) { toastError(err); }
@@ -130,17 +134,53 @@ function CalendarItem({ c, reload }) {
   );
 }
 
+// Add a calendar: a new one here, a read-only subscription to a link (.ics / webcal — Google, Outlook, holidays), or
+// read-only calendars from a CalDAV server that is not one of the mail accounts (Nextcloud, iCloud, Fastmail, ...).
 function NewCalendarModal({ onClose, onDone }) {
-  const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
-  const [color, setColor] = useState('#10b981');
+  const [kind, setKind] = useState('local');
+  const [f, setF] = useState({ name: '', color: '#10b981', url: '', username: '', password: '' });
   const [busy, setBusy] = useState(false);
-  const save = async () => { setBusy(true); try { await api.post('/api/calendars', { name: name || 'Calendar', color, url: url || undefined }); onDone(); } catch (e) { toastError(e); } finally { setBusy(false); } };
-  return <Modal title="Add calendar" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>Add</button></>}>
-    <label className="field">Name<input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label>
-    <label className="field">Color<input type="color" value={color} onChange={(e) => setColor(e.target.value)} /></label>
-    <label className="field">Subscribe to URL (optional, read-only .ics / webcal)<input className="input" placeholder="https://… or webcal://…" value={url} onChange={(e) => setUrl(e.target.value)} /></label>
-    <div className="small faint">To sync a CalDAV server (Nextcloud, iCloud, Fastmail, Google…), set its CalDAV URL on the mail account in Settings → Accounts.</div>
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const save = async () => {
+    setBusy(true);
+    try {
+      if (kind === 'caldav') {
+        const r = await api.post('/api/calendar-sources', { url: f.url.trim(), username: f.username || undefined, password: f.password || undefined, name: f.name || undefined });
+        toast(`Added ${r.calendars} calendar${r.calendars === 1 ? '' : 's'} from ${r.name} (read-only)`);
+      } else {
+        await api.post('/api/calendars', { name: f.name || (kind === 'link' ? 'Subscribed calendar' : 'Calendar'), color: f.color, url: kind === 'link' ? f.url.trim() : undefined });
+      }
+      onDone();
+    } catch (e) { toastError(e); } finally { setBusy(false); }
+  };
+  const ready = kind === 'local' || /^(https?|webcal):\/\//i.test(f.url.trim());
+  return <Modal title="Add calendar" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !ready} onClick={save}>{busy ? <Spinner size={14} /> : null} {kind === 'local' ? 'Add' : 'Connect'}</button></>}>
+    <div className="tabs" style={{ marginBottom: 12 }}>
+      {[['local', 'New calendar'], ['link', 'Subscribe to a link'], ['caldav', 'CalDAV server']].map(([k, l]) => <button key={k} className={`tab ${kind === k ? 'active' : ''}`} onClick={() => setKind(k)}>{l}</button>)}
+    </div>
+    {kind === 'link' && <>
+      <label className="field">Calendar address (iCal / .ics / webcal)<input className="input" placeholder="https://… or webcal://…" value={f.url} onChange={set('url')} autoFocus /></label>
+      <div className="small muted" style={{ marginBottom: 8 }}>
+        Read-only, refreshed every 30 minutes.<br />
+        <b>Google Calendar:</b> calendar settings → “Integrate calendar” → “Secret address in iCal format”.<br />
+        <b>Outlook / Microsoft 365:</b> Settings → Calendar → Shared calendars → “Publish a calendar” → ICS link.<br />
+        <b>iCloud:</b> share the calendar as “Public Calendar” and copy the link.
+      </div>
+    </>}
+    {kind === 'caldav' && <>
+      <label className="field">CalDAV address<input className="input" placeholder="https://cloud.example.com/remote.php/dav" value={f.url} onChange={set('url')} autoFocus /></label>
+      <div className="form-grid">
+        <label className="field">User name<input className="input" value={f.username} onChange={set('username')} autoComplete="off" /></label>
+        <label className="field">Password / app password<input className="input" type="password" value={f.password} onChange={set('password')} autoComplete="new-password" /></label>
+      </div>
+      <div className="small muted" style={{ marginBottom: 8 }}>
+        All calendars found there are added <b>read-only</b> (nothing on that server is ever changed) and refreshed every 30 minutes.
+        Nextcloud: https://your-server/remote.php/dav · iCloud: https://caldav.icloud.com (with an app-specific password) · Fastmail: https://caldav.fastmail.com.
+        For a calendar you want to edit, add its CalDAV address to the mail account in Settings → Accounts instead.
+      </div>
+    </>}
+    <label className="field">Name{kind === 'caldav' ? ' (optional)' : ''}<input className="input" value={f.name} onChange={set('name')} autoFocus={kind === 'local'} /></label>
+    {kind !== 'caldav' && <label className="field">Color<input type="color" value={f.color} onChange={set('color')} /></label>}
   </Modal>;
 }
 
@@ -235,6 +275,8 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
   // Drag to move / resize with 15-minute snapping.
   const startDrag = (e, ev, mode) => {
     e.stopPropagation(); e.preventDefault();
+    // Events of read-only (subscribed) calendars only open; they cannot be moved.
+    if (ev.readonly) { const up = () => { window.removeEventListener('mouseup', up); onOpen(ev); }; window.addEventListener('mouseup', up); return; }
     const y0 = e.clientY, x0 = e.clientX;
     const colW = scroller.current.querySelector('.day-col')?.getBoundingClientRect().width || 100;
     let moved = false;
@@ -372,6 +414,15 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
     setAttendeeText('');
   };
 
+  // Other events at the same time (all enabled calendars, also read-only ones); all-day and "free" events are ignored.
+  const [overlaps, setOverlaps] = useState([]);
+  useEffect(() => {
+    if (ev.allDay || !ev.start || !ev.end || readonly) { setOverlaps([]); return undefined; }
+    const t = setTimeout(() => api.get(`/api/events?from=${ev.start}&to=${ev.end}`).then((list) => setOverlaps(list.filter((o) => o.busy !== false && !o.allDay && o.end - o.start < 864e5
+      && o.start < ev.end && o.end > ev.start && !(isExisting && o.id === ev.id && (!ev.occurrence || o.start === ev.occurrence))))).catch(() => setOverlaps([])), 250);
+    return () => clearTimeout(t);
+  }, [ev.start, ev.end, ev.allDay]);
+
   const findTimes = async () => {
     const r = await api.get(`/api/calendar/free-slots?from=${Math.max(Date.now(), startOfDay(ev.start).getTime())}&to=${startOfDay(ev.start).getTime() + 7 * 864e5}&duration=${Math.round((ev.end - ev.start) / 60e3)}`);
     setSlots(r.slice(0, 8));
@@ -421,6 +472,14 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
         <label className="row small"><input type="checkbox" checked={ev.allDay} onChange={(e) => { const allDay = e.target.checked; const s = startOfDay(ev.start).getTime(); setEv((x) => ({ ...x, allDay, start: allDay ? s : s + 9 * 3600e3, end: allDay ? s + 864e5 : s + 9.5 * 3600e3 })); }} /> All day</label>
         {!ev.allDay && !readonly && <button className="btn sm ghost" onClick={findTimes}><Sparkles size={13} /> Find a free time</button>}
       </div>
+      {overlaps.length > 0 && (
+        <div className="banner warn overlap">
+          <AlertTriangle size={15} />
+          <span className="grow">Overlaps with {overlaps.slice(0, 3).map((o, i) => <span key={o.instanceId || o.id}>{i ? ', ' : ''}<b>{o.title || '(no title)'}</b> {fmtTime(o.start)}–{fmtTime(o.end)}{o.calendarName ? ` (${o.calendarName})` : ''}</span>)}
+            {overlaps.length > 3 ? ` and ${overlaps.length - 3} more` : ''}</span>
+          {!ev.allDay && <button className="btn sm" onClick={findTimes}>Find a free time</button>}
+        </div>
+      )}
       {slots && <div className="row" style={{ flexWrap: 'wrap' }}>{slots.map((s) => <button key={s.start} className="btn sm" onClick={() => { setEv((x) => ({ ...x, start: s.start, end: s.end })); setSlots(null); }}>{new Date(s.start).toLocaleString([], { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</button>)}{!slots.length && <span className="small faint">No free slots in working hours this week.</span>}</div>}
       <div className="row"><Repeat size={16} className="faint" />
         <select className="input" style={{ width: 220 }} value={REPEAT.some(([v]) => v === baseRule) ? baseRule : 'custom'} onChange={(e) => set('rrule', e.target.value ? e.target.value + (ruleExtra && e.target.value ? `;${ruleExtra[0]}` : '') : '')}>

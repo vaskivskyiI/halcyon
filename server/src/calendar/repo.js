@@ -33,13 +33,16 @@ export const userCalendar = (userId, id) => get('SELECT * FROM calendars WHERE i
 export const defaultCalendar = (userId) => get('SELECT * FROM calendars WHERE user_id = ? AND readonly = 0 ORDER BY is_default DESC, id LIMIT 1', userId);
 
 export function eventOf(userId, id) {
-  return get('SELECT e.*, c.source FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ?', id, userId);
+  return get('SELECT e.*, c.source, c.readonly FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ?', id, userId);
 }
+
+// Subscribed calendars (ICS links, read-only CalDAV) are never changed from here.
+const readOnly = () => Object.assign(new Error('This calendar is read-only (a subscription)'), { statusCode: 400 });
 
 export function createEvent(userId, e, extra = {}) {
   const cal = (e.calendarId && userCalendar(userId, e.calendarId)) || defaultCalendar(userId);
   if (!cal) throw new Error('No calendar');
-  if (cal.readonly) throw new Error('Calendar is read-only');
+  if (cal.readonly) throw readOnly();
   const s = getSettings(userId);
   const start = Number(e.start), end = Number(e.end || start + s.calendar.defaultDurationMin * 60e3);
   const r = run('INSERT INTO events (calendar_id, uid, start, end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', cal.id, e.uid || uuid(), start, end, now(), now());
@@ -55,7 +58,12 @@ export function createEvent(userId, e, extra = {}) {
 export function updateEvent(userId, id, patch, extra = {}) {
   const ev = eventOf(userId, id);
   if (!ev) return null;
-  if (patch.calendarId && !userCalendar(userId, patch.calendarId)) throw new Error('Calendar not found');
+  if (ev.readonly) throw readOnly();
+  if (patch.calendarId) {
+    const to = userCalendar(userId, patch.calendarId);
+    if (!to) throw new Error('Calendar not found');
+    if (to.readonly) throw readOnly();
+  }
   update('events', id, { ...toRow(patch), dirty: ev.source === 'caldav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   notify(userId, 'calendar:changed', {});
   queueMemory(userId, 'event', id);
@@ -65,6 +73,7 @@ export function updateEvent(userId, id, patch, extra = {}) {
 export function deleteEvent(userId, id) {
   const ev = eventOf(userId, id);
   if (!ev) return;
+  if (ev.readonly) throw readOnly();
   tx(() => {
     if (ev.recurrence_id) {
       // Removing a modified occurrence: also exclude it from the series so it doesn't reappear.
@@ -84,6 +93,7 @@ export function deleteEvent(userId, id) {
 export function editOccurrence(userId, id, occurrenceStart, patch, { remove = false } = {}) {
   const master = eventOf(userId, id);
   if (!master) return null;
+  if (master.readonly) throw readOnly();
   if (remove) {
     const ex = json(master.exdates_json, []);
     ex.push(Number(occurrenceStart));
@@ -111,13 +121,13 @@ export function listRange(userId, from, to, calendarIds) {
   const out = [];
   for (const r of rows) {
     if (r.recurrence_id) {
-      if (r.start < to && r.end >= from) out.push({ ...serializeEvent(r), instanceId: `${r.id}`, seriesId: get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL', r.calendar_id, r.uid)?.id, color: calById[r.calendar_id].color });
+      if (r.start < to && r.end >= from) out.push({ ...serializeEvent(r), instanceId: `${r.id}`, seriesId: get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL', r.calendar_id, r.uid)?.id, color: calById[r.calendar_id].color, readonly: !!calById[r.calendar_id].readonly, calendarName: calById[r.calendar_id].name });
       continue;
     }
     const base = serializeEvent(r);
     for (const occ of expand(base, from, to, tz)) {
       if (r.rrule && overrides.has(`${r.calendar_id}:${r.uid}:${occ.start}`)) continue;
-      out.push({ ...base, start: occ.start, end: occ.end, occurrence: r.rrule ? occ.start : null, instanceId: r.rrule ? `${r.id}:${occ.start}` : `${r.id}`, color: calById[r.calendar_id].color });
+      out.push({ ...base, start: occ.start, end: occ.end, occurrence: r.rrule ? occ.start : null, instanceId: r.rrule ? `${r.id}:${occ.start}` : `${r.id}`, color: calById[r.calendar_id].color, readonly: !!calById[r.calendar_id].readonly, calendarName: calById[r.calendar_id].name });
     }
   }
   return out.sort((a, b) => a.start - b.start);

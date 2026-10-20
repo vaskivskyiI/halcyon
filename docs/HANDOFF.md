@@ -276,3 +276,15 @@ Derived requirements / design decisions:
 
 ## 8. Product owner
 Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: github.com/vaskivskyiI/halcyon.
+
+### Extra read-only calendars, overlap note (migration 14)
+- ICS links (Google / Outlook "secret iCal address", webcal, holidays): `POST /api/calendars {url}` loads the link first
+  (wrong links are refused with the reason), refresh every 30 min, `calendars.sync_error` shown in the problems panel;
+  events are kept while a link fails.
+- Read-only CalDAV servers that are not a mail account: `calendar_sources` (url, user, encrypted password) →
+  `syncCalendarSource()` = `syncCalDav(pseudoAccount, { sourceId, readonly: true })`; all calendars found there,
+  `readonly = 1`, never pushed. `/api/calendar-sources` (list / add / refresh / delete). Errors → problems panel.
+- Read-only is enforced for update / delete / occurrence edits / moving into a read-only calendar (repo.js); events
+  from `listRange` carry `readonly` and `calendarName`; the week view does not drag them.
+- Event editor: overlap note (other busy, timed events in the chosen time, all calendars) with "Find a free time".
+- dav.test.js and round12 (read-only source) were run against Radicale (pip --user install in WSL; no venv there).

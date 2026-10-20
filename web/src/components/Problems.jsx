@@ -17,6 +17,8 @@ const ACTIONS = {
   },
   'retry-send': { label: 'Send again', icon: Send, run: (p) => api.post(`/api/outbox/${p.outboxId}/retry`).then(() => 'Sending…') },
   'to-draft': { label: 'Save as draft', icon: FileText, run: (p) => api.post(`/api/outbox/${p.outboxId}/to-draft`).then(() => 'Saved in Outbox & drafts — nothing was sent') },
+  'refresh-calendar': { label: 'Try again', icon: RefreshCw, run: (p) => api.post(`/api/calendars/${p.calendarId}/refresh`).then(() => 'Calendar refreshed') },
+  'refresh-source': { label: 'Try again', icon: RefreshCw, run: (p) => api.post(`/api/calendar-sources/${p.sourceId}/refresh`).then(() => 'Calendars refreshed') },
   'save-unsaved': { label: 'Save on server', icon: CloudUpload, run: () => api.post('/api/messages/save-to-server', { all: true }).then((r) => `Saving ${r.queued} message${r.queued === 1 ? '' : 's'} on the server…`) },
 };
 

@@ -1,16 +1,19 @@
-import { get, all, run, now, json } from '../db/index.js';
+import { get, all, run, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import * as repo from '../calendar/repo.js';
 import { buildIcs } from '../calendar/ics.js';
-import { importIcsInto } from '../calendar/caldav.js';
+import { importIcsInto, syncCalendarSource } from '../calendar/caldav.js';
+import { encrypt } from '../util/crypto.js';
 import { respondToInvitation, sendInvitations } from '../calendar/invites.js';
 import { notify } from '../util/events.js';
 import { syncDav } from '../scheduler.js';
 import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 
-const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
-  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space });
+const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, sourceId: c.source_id || null, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
+  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null });
+const sourceOut = (s) => ({ id: s.id, name: s.name, url: s.url, username: s.dav_user, lastSyncAt: s.last_sync_at, error: s.error,
+  calendars: get('SELECT COUNT(*) AS n FROM calendars WHERE source_id = ?', s.id).n });
 
 export default async function calendarRoutes(app) {
   app.addHook('preHandler', requireUser);
@@ -20,13 +23,55 @@ export default async function calendarRoutes(app) {
     return all(`SELECT * FROM calendars WHERE user_id = ? AND ${inIds('id', sc?.calendarIds)} ORDER BY is_default DESC, name`, req.user.id).map((c) => calOut(c, spaces));
   });
 
-  app.post('/api/calendars', async (req) => {
+  app.post('/api/calendars', async (req, reply) => {
     const { name, color, url, space } = req.body || {};
-    // url → read-only ICS subscription (e.g. holidays, shared calendars). New calendars belong to the active space.
+    // url → read-only ICS subscription (holidays, Google / Outlook "secret iCal address", shared calendars). It is
+    // loaded before it is added, so a wrong link is reported instead of giving an empty calendar. New calendars
+    // belong to the active space.
+    let ics = null;
+    if (url) { try { ics = await fetchIcs(url); } catch (e) { return httpError(reply, 400, `Could not load the calendar: ${e.message}`); } }
     const r = run('INSERT INTO calendars (user_id, name, color, source, url, readonly, space, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       req.user.id, name || 'Calendar', color || '#10b981', url ? 'subscription' : 'local', url || null, url ? 1 : 0, cleanSpace(space ?? reqSpace(req)), now());
-    if (url) await refreshSubscription(req.user.id, r.lastInsertRowid).catch(() => {});
+    if (ics) {
+      importIcsInto(req.user.id, r.lastInsertRowid, ics);
+      run('UPDATE calendars SET last_sync_at = ? WHERE id = ?', now(), r.lastInsertRowid);
+      notify(req.user.id, 'calendar:changed', {});
+    }
     return calOut(get('SELECT * FROM calendars WHERE id = ?', r.lastInsertRowid), spaceMap(req.user.id));
+  });
+
+  // ---- read-only CalDAV sources (calendars on another server: Nextcloud, iCloud, Fastmail, a shared calendar, ...)
+  app.get('/api/calendar-sources', async (req) => all('SELECT * FROM calendar_sources WHERE user_id = ? ORDER BY id', req.user.id).map(sourceOut));
+  app.post('/api/calendar-sources', async (req, reply) => {
+    const { url, username, password, name, space } = req.body || {};
+    if (!/^https?:\/\//i.test(String(url || '').trim())) return httpError(reply, 400, 'Enter the CalDAV address (https://...)');
+    const r = run('INSERT INTO calendar_sources (user_id, name, url, dav_user, dav_pass_enc, space, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      req.user.id, String(name || new URL(String(url).trim()).hostname).slice(0, 80), String(url).trim(), username || null, password ? encrypt(password) : null,
+      cleanSpace(space ?? reqSpace(req)), now());
+    try { await syncCalendarSource(r.lastInsertRowid); } catch (e) {
+      // Login refused or nothing found: a source that never worked is not kept.
+      run('DELETE FROM calendars WHERE source_id = ?', r.lastInsertRowid);
+      run('DELETE FROM calendar_sources WHERE id = ?', r.lastInsertRowid);
+      return httpError(reply, 400, `Could not read calendars there: ${e.message}`);
+    }
+    notify(req.user.id, 'calendar:changed', {});
+    return sourceOut(get('SELECT * FROM calendar_sources WHERE id = ?', r.lastInsertRowid));
+  });
+  app.post('/api/calendar-sources/:id/refresh', async (req, reply) => {
+    const s = get('SELECT id FROM calendar_sources WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!s) return httpError(reply, 404, 'Not found');
+    try { await syncCalendarSource(s.id); } catch (e) { return httpError(reply, 400, e.message); }
+    notify(req.user.id, 'calendar:changed', {});
+    return sourceOut(get('SELECT * FROM calendar_sources WHERE id = ?', s.id));
+  });
+  // Removes the source and the local read-only copies of its calendars; nothing on the other server is touched.
+  app.delete('/api/calendar-sources/:id', async (req, reply) => {
+    const s = get('SELECT id FROM calendar_sources WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!s) return httpError(reply, 404, 'Not found');
+    run('DELETE FROM calendars WHERE source_id = ?', s.id);
+    run('DELETE FROM calendar_sources WHERE id = ?', s.id);
+    notify(req.user.id, 'calendar:changed', {});
+    return { ok: true };
   });
 
   app.patch('/api/calendars/:id', async (req, reply) => {
@@ -51,7 +96,8 @@ export default async function calendarRoutes(app) {
   app.post('/api/calendars/:id/refresh', async (req, reply) => {
     const c = repo.userCalendar(req.user.id, req.params.id);
     if (!c) return httpError(reply, 404, 'Not found');
-    if (c.source === 'subscription') await refreshSubscription(req.user.id, c.id);
+    if (c.source === 'subscription') { try { await refreshSubscription(req.user.id, c.id); } catch (e) { return httpError(reply, 400, e.message); } }
+    else if (c.source_id) { try { await syncCalendarSource(c.source_id); } catch (e) { return httpError(reply, 400, e.message); } }
     else if (c.account_id) await syncDav(get('SELECT * FROM accounts WHERE id = ?', c.account_id));
     return { ok: true };
   });
@@ -131,6 +177,7 @@ export default async function calendarRoutes(app) {
     const { scope, occurrence, notify: notifyAttendees } = req.query;
     const e = repo.eventOf(req.user.id, req.params.id);
     if (!e) return httpError(reply, 404, 'Not found');
+    if (e.readonly) return httpError(reply, 400, 'This calendar is read-only (a subscription)');
     if (scope === 'this' && occurrence) { repo.editOccurrence(req.user.id, e.id, Number(occurrence), null, { remove: true }); return { ok: true }; }
     if (notifyAttendees === '1') sendInvitations(req.user.id, e.id, { method: 'CANCEL' });
     repo.deleteEvent(req.user.id, e.id);
@@ -147,18 +194,31 @@ export default async function calendarRoutes(app) {
   });
 }
 
+async function fetchIcs(url) {
+  const r = await fetch(String(url).trim().replace(/^webcal:/i, 'https:'), { signal: AbortSignal.timeout(30e3), headers: { accept: 'text/calendar, */*' } });
+  if (!r.ok) throw new Error(`the server answered ${r.status}`);
+  const text = await r.text();
+  if (!/BEGIN:VCALENDAR/.test(text)) throw new Error('this link does not return a calendar (iCal/ICS)');
+  return text;
+}
+
 async function refreshSubscription(userId, calId) {
   const c = get('SELECT * FROM calendars WHERE id = ?', calId);
-  const url = c.url.replace(/^webcal:/i, 'https:');
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  run('DELETE FROM events WHERE calendar_id = ?', calId);
-  importIcsInto(userId, calId, await r.text());
+  try {
+    const ics = await fetchIcs(c.url);
+    tx(() => { run('DELETE FROM events WHERE calendar_id = ?', calId); importIcsInto(userId, calId, ics); });
+    run('UPDATE calendars SET last_sync_at = ?, sync_error = NULL WHERE id = ?', now(), calId);
+  } catch (e) {
+    run('UPDATE calendars SET sync_error = ? WHERE id = ?', String(e.message || e).slice(0, 300), calId);
+    throw e;
+  }
   notify(userId, 'calendar:changed', {});
 }
 
+// Subscriptions and read-only CalDAV sources are refreshed every 30 minutes.
 export function startSubscriptionRefresh() {
   setInterval(() => {
     for (const c of all("SELECT id, user_id FROM calendars WHERE source = 'subscription'")) refreshSubscription(c.user_id, c.id).catch(() => {});
-  }, 6 * 3600e3).unref();
+    for (const s of all('SELECT id FROM calendar_sources')) syncCalendarSource(s.id).catch(() => {});
+  }, 30 * 60e3).unref();
 }

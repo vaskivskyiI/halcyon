@@ -265,4 +265,15 @@ export const migrations = [
   `
   ALTER TABLE tasks ADD COLUMN due_tz TEXT;
   `,
+  // 14: extra read-only calendars from CalDAV servers that are not a mail account (Nextcloud, iCloud, a colleague's
+  //     shared calendar, …); each source can hold several calendars. Sync errors are kept for the problems panel.
+  `
+  CREATE TABLE calendar_sources (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT, url TEXT NOT NULL,
+    dav_user TEXT, dav_pass_enc TEXT, space TEXT, last_sync_at INTEGER, error TEXT, created_at INTEGER
+  );
+  ALTER TABLE calendars ADD COLUMN source_id INTEGER REFERENCES calendar_sources(id) ON DELETE CASCADE;
+  ALTER TABLE calendars ADD COLUMN sync_error TEXT;
+  ALTER TABLE calendars ADD COLUMN last_sync_at INTEGER;
+  `,
 ];
