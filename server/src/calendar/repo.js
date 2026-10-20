@@ -3,6 +3,7 @@ import { uuid } from '../util/crypto.js';
 import { expand } from './recurrence.js';
 import { getSettings } from '../settings.js';
 import { notify } from '../util/events.js';
+import { queueMemory } from '../ai/queue.js';
 
 const COLS = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id',
   'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty', 'deleted', 'source_message_id', 'updated_at'];
@@ -47,6 +48,7 @@ export function createEvent(userId, e, extra = {}) {
     dirty: cal.source === 'caldav' ? 1 : 0, ...extra, updated_at: now(),
   }, COLS);
   notify(userId, 'calendar:changed', {});
+  queueMemory(userId, 'event', r.lastInsertRowid);
   return get('SELECT * FROM events WHERE id = ?', r.lastInsertRowid);
 }
 
@@ -56,6 +58,7 @@ export function updateEvent(userId, id, patch, extra = {}) {
   if (patch.calendarId && !userCalendar(userId, patch.calendarId)) throw new Error('Calendar not found');
   update('events', id, { ...toRow(patch), dirty: ev.source === 'caldav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   notify(userId, 'calendar:changed', {});
+  queueMemory(userId, 'event', id);
   return get('SELECT * FROM events WHERE id = ?', id);
 }
 

@@ -13,6 +13,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run dist:win -w desktop
+      - run: npm run dist:win-arm64 -w desktop   # Surface Pro / Copilot+ PCs with Snapdragon
       - uses: actions/upload-artifact@v4
         with: { name: Halcyon-Windows, path: desktop/out/*.exe }
   linux:

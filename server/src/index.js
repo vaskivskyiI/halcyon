@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyCookie from '@fastify/cookie';
@@ -14,6 +15,7 @@ import contactRoutes from './routes/contacts.js';
 import taskRoutes from './routes/tasks.js';
 import aiRoutes from './routes/ai.js';
 import settingsRoutes from './routes/settings.js';
+import spaceRoutes from './routes/spaces.js';
 import { syncManager } from './mail/sync.js';
 import { startQueue } from './ai/queue.js';
 import './ai/tasks.js';
@@ -22,6 +24,10 @@ import { bus } from './util/events.js';
 import { logger } from './util/log.js';
 
 const log = logger('server');
+// Email HTML is rendered in a srcdoc iframe, which inherits this policy: no scripts, no remote fonts/frames, and
+// remote images only when the user chose to load them (the sanitizer strips them otherwise).
+const CSP = ["default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob: https: http:",
+  "font-src 'self' data:", "connect-src 'self'", "frame-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'self'"].join('; ');
 
 export async function buildServer({ background = true } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024, trustProxy: config.trustProxy });
@@ -32,6 +38,7 @@ export async function buildServer({ background = true } = {}) {
     reply.header('x-frame-options', 'SAMEORIGIN');
     reply.header('referrer-policy', 'no-referrer');
     reply.header('x-content-type-options', 'nosniff');
+    if (!reply.hasHeader('content-security-policy')) reply.header('content-security-policy', CSP);
     return payload;
   });
 
@@ -55,6 +62,7 @@ export async function buildServer({ background = true } = {}) {
 
   await app.register(authRoutes);
   await app.register(settingsRoutes);
+  await app.register(spaceRoutes);
   await app.register(accountRoutes);
   await app.register(mailRoutes);
   await app.register(calendarRoutes);
@@ -63,7 +71,11 @@ export async function buildServer({ background = true } = {}) {
   await app.register(aiRoutes);
 
   if (fs.existsSync(path.join(config.webDir, 'index.html'))) {
-    await app.register(fastifyStatic, { root: config.webDir, wildcard: true, maxAge: '1h' });
+    // Hashed assets may be cached; index.html must be revalidated or browsers keep an old UI after an upgrade.
+    await app.register(fastifyStatic, {
+      root: config.webDir, wildcard: true, maxAge: '1h',
+      setHeaders: (reply, filePath) => { if (filePath.endsWith('.html') || filePath.endsWith('.webmanifest')) reply.header('cache-control', 'no-cache'); },
+    });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) return reply.code(404).send({ error: 'Not found' });
       return reply.sendFile('index.html', { maxAge: 0 });
@@ -81,7 +93,7 @@ export async function buildServer({ background = true } = {}) {
   return app;
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.env.HALCYON_START === '1') {
+if ((process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) || process.env.HALCYON_START === '1') {
   const app = await buildServer();
   await app.listen({ host: config.host, port: config.port });
   log.info(`Halcyon listening on http://${config.host}:${config.port} (data: ${config.dataDir})`);

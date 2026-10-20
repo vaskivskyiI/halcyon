@@ -2,7 +2,7 @@
 // or connects to a remote Halcyon server. Provides tray, native notifications, unread badge,
 // mailto: handling, start-at-login and downloads.
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage, session, dialog } = require('electron');
-const { fork } = require('node:child_process');
+const { fork, execFile } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -22,7 +22,25 @@ app.setAppUserModelId(APP_ID); // required for Windows toast notifications
 if (process.defaultApp) app.setAsDefaultProtocolClient('mailto', process.execPath, [path.resolve(process.argv[1])]);
 else app.setAsDefaultProtocolClient('mailto');
 
-function startLocalServer() {
+// Foundry Local (on-device models on the NPU of Copilot+ PCs) listens on a dynamic port; ask its CLI.
+function foundryUrl() {
+  if (process.platform !== 'win32') return Promise.resolve('');
+  return new Promise((resolve) => execFile('foundry', ['service', 'status'], { timeout: 4000, windowsHide: true }, (err, out) => {
+    resolve((!err && String(out).match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/)?.[0]) || '');
+  }));
+}
+
+// Server mode: fail fast with a useful message instead of a blank window.
+async function checkServer(url) {
+  try {
+    const r = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  } catch (e) {
+    throw new Error(`Cannot reach the Halcyon server at ${url} (${e.cause?.code || e.message}). Check the network/VPN, or switch to "This PC" mode.`);
+  }
+}
+
+function startLocalServer(extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const token = crypto.randomBytes(24).toString('base64url');
     const serverEntry = app.isPackaged ? path.join(resources, 'server', 'src', 'index.js') : path.join(resources, 'server', 'src', 'index.js');
@@ -31,7 +49,7 @@ function startLocalServer() {
       execPath: process.execPath,
       env: {
         ...process.env, ELECTRON_RUN_AS_NODE: '1', HALCYON_START: '1', HALCYON_SINGLE_USER: '1', HALCYON_DESKTOP_TOKEN: token,
-        HALCYON_HOST: '127.0.0.1', HALCYON_PORT: '0', HALCYON_DATA_DIR: path.join(app.getPath('userData'), 'data'), HALCYON_WEB_DIR: webDir,
+        ...extraEnv, HALCYON_HOST: '127.0.0.1', HALCYON_PORT: '0', HALCYON_DATA_DIR: path.join(app.getPath('userData'), 'data'), HALCYON_WEB_DIR: webDir,
       },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
@@ -152,11 +170,15 @@ app.whenReady().then(async () => {
   pendingMailto = process.argv.find((a) => a.startsWith('mailto:')) || null;
   appMenu();
   try {
+    // Exactly one place does the AI work: in server mode no local server (no sync, no background AI) is started,
+    // so mail is never analysed twice for the same account.
     if (config.mode === 'remote') {
       if (!config.serverUrl) throw new Error('No server URL configured');
+      await checkServer(config.serverUrl);
       baseUrl = config.serverUrl;
     } else {
-      const { url, token } = await startLocalServer();
+      const foundry = await foundryUrl();
+      const { url, token } = await startLocalServer(foundry ? { HALCYON_FOUNDRY_URL: foundry } : {});
       baseUrl = url;
       await session.defaultSession.cookies.set({ url, name: 'halcyon_desktop', value: token, httpOnly: true, sameSite: 'strict' });
     }

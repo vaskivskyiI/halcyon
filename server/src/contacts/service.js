@@ -1,5 +1,6 @@
 import { get, all, run, json, now, tx } from '../db/index.js';
 import { uuid } from '../util/crypto.js';
+import { addressBookForAccount, inIds } from '../spaces.js';
 
 export function syncContactEmails(contactId, userId, emails) {
   run('DELETE FROM contact_emails WHERE contact_id = ?', contactId);
@@ -11,8 +12,8 @@ export function defaultAddressBook(userId) {
 }
 
 /** Records correspondents. `create` = create contacts for unknown addresses (used for recipients we wrote to). */
-export function collectAddresses(userId, addrs, date, create) {
-  const book = defaultAddressBook(userId);
+export function collectAddresses(userId, addrs, date, create, accountId = null) {
+  const book = create ? addressBookForAccount(userId, accountId) : null;
   tx(() => {
     for (const a of addrs) {
       const email = (a.address || '').toLowerCase();
@@ -40,10 +41,10 @@ export function serializeContact(c) {
   };
 }
 
-export function autocomplete(userId, q, limit = 8) {
+export function autocomplete(userId, q, limit = 8, sc = null) {
   const like = `%${q.toLowerCase()}%`;
   const rows = all(`SELECT c.*, ce.email FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id
-    WHERE ce.user_id = ? AND c.deleted = 0 AND (ce.email LIKE ? OR lower(c.display_name) LIKE ?)
+    WHERE ce.user_id = ? AND c.deleted = 0 AND ${inIds('c.address_book_id', sc?.bookIds)} AND (ce.email LIKE ? OR lower(c.display_name) LIKE ?)
     ORDER BY c.favorite DESC, c.contact_count DESC, c.last_contacted DESC LIMIT ?`, userId, like, like, limit);
   return rows.map((r) => ({ contactId: r.id, name: r.display_name, address: r.email, photo: r.photo }));
 }

@@ -95,7 +95,7 @@ export async function deliver(row) {
     if (sent) queueOp(account.id, 'append', { folder: sent.path, raw: raw.toString('base64'), flags: ['\\Seen'] });
   }
   if (p.inReplyToId) setFlags(row.user_id, [p.inReplyToId], { answered: true });
-  collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true);
+  collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true, row.account_id);
 }
 
 let busy = false;

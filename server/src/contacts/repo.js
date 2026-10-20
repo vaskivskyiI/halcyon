@@ -1,6 +1,8 @@
 import { get, all, run, now, tx, update } from '../db/index.js';
 import { uuid } from '../util/crypto.js';
 import { syncContactEmails, defaultAddressBook } from './service.js';
+import { queueMemory } from '../ai/queue.js';
+import { removeMemory } from '../ai/memory.js';
 
 const COLS = ['display_name', 'first_name', 'last_name', 'nickname', 'emails_json', 'phones_json', 'addresses_json', 'org', 'title', 'birthday', 'notes', 'photo', 'website', 'groups_json', 'favorite', 'auto_collected', 'etag', 'href', 'dirty', 'deleted', 'address_book_id', 'updated_at'];
 
@@ -22,6 +24,7 @@ export function createContact(userId, c, extra = {}) {
   const id = r.lastInsertRowid;
   update('contacts', id, { ...toRow(c), dirty: book?.source === 'carddav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   syncContactEmails(id, userId, c.emails);
+  queueMemory(userId, 'contact', id);
   return get('SELECT * FROM contacts WHERE id = ?', id);
 }
 
@@ -30,6 +33,7 @@ export function updateContact(userId, id, c, extra = {}) {
   if (!existing) return null;
   update('contacts', id, { ...toRow(c), auto_collected: 0, dirty: existing.source === 'carddav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   if (c.emails) syncContactEmails(id, userId, c.emails);
+  queueMemory(userId, 'contact', id);
   return get('SELECT * FROM contacts WHERE id = ?', id);
 }
 
@@ -38,6 +42,7 @@ export function deleteContact(userId, id) {
   if (!c) return;
   if (c.source === 'carddav' && c.href) { run('UPDATE contacts SET deleted = 1, dirty = 1 WHERE id = ?', id); run('DELETE FROM contact_emails WHERE contact_id = ?', id); }
   else run('DELETE FROM contacts WHERE id = ?', id);
+  removeMemory(userId, 'contact', [id]);
 }
 
 export function importContacts(userId, cards, addressBookId) {

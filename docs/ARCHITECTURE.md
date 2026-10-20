@@ -31,7 +31,22 @@
   interface. `ai/router.js` resolves the provider/model per task (background, compose, chat, embeddings) and applies
   privacy mode. `ai/queue.js` is a durable priority queue with dedupe, per-user concurrency, exponential back-off and a
   *waiting* state for jobs without a configured provider. `ai/tasks.js` implements the handlers; results are stored
-  and pushed to clients so the UI updates live. Semantic search keeps a per-user in-memory matrix of unit vectors.
+  and pushed to clients so the UI updates live.
+- **AI memory** (`ai/memory.js`, table `memory`) — what search and the assistant retrieve from: emails split into
+  overlapping ~1.4k-character passages (each repeating the email header), conversation summaries, events, contacts
+  (saved/favourite ones) and short facts (table `facts`: learned during analysis — de-duplicated semantically — or told
+  to the assistant with "remember that …"). Vectors are stored in SQLite as float32; on first use per user they are
+  loaded into one int8-quantised array (~1 KB per passage at 768 dims) that is dropped after 30 min idle, so a
+  multi-user server keeps only active users in RAM. Every row has an owner key (`a:<account>`, `c:<calendar>`,
+  `b:<address book>`, `s:<space>`) used for scoping. Indexing runs through the job queue (`embed` for mail, `memory`
+  for the rest, batched); `backfillMemory()` re-indexes anything missing or indexed with another embedding model, and
+  an hourly purge removes memory of deleted items (deleting mail or an account removes its memory immediately).
+- **Spaces** (`spaces.js`) — labels such as "Work"/"Private" on accounts, calendars and address books ('' = shared;
+  calendars/books without their own label inherit their account's). The client sends the active space in the
+  `x-halcyon-space` header; `scope(userId, space)` turns it into allowed account/calendar/address-book ids and memory
+  owner keys, applied to mail lists, folder counts, search, calendar, contacts, autocomplete, the daily brief (one per
+  space) and the assistant. A chat is bound to the space it was started in. Free/busy uses all calendars (one person,
+  one schedule) but only exposes free slots.
 - **Search** — Gmail-style operator parser compiled to SQL, FTS5 with bm25 + recency ranking, and embedding search,
   combined with reciprocal-rank fusion.
 - **Calendar** — events stored in UTC with optional TZID; recurrence expanded with `rrule` and corrected for DST in

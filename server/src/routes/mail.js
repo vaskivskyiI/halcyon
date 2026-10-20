@@ -14,6 +14,7 @@ import { userAccounts } from '../accounts.js';
 import { runRule } from '../rules.js';
 import { contactByEmail } from '../contacts/service.js';
 import { notify } from '../util/events.js';
+import { scope, reqSpace, inIds } from '../spaces.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
@@ -28,8 +29,8 @@ function listItem(r) {
   });
 }
 
-function scopeFor(userId, q) {
-  const where = ['m.user_id = ?'], params = [userId];
+function scopeFor(userId, q, sc) {
+  const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
   const view = q.view || 'unified';
   if (view === 'folder' && q.folderId) { where.push('m.folder_id = ?'); params.push(Number(q.folderId)); }
   else if (view === 'unified') where.push("m.folder_id IN (SELECT f.id FROM folders f WHERE f.special_use = '\\Inbox')");
@@ -61,17 +62,19 @@ export default async function mailRoutes(app) {
 
   // ---- folders
   app.get('/api/folders', async (req) => {
-    const accounts = userAccounts(req.user.id);
+    const sc = scope(req.user.id, reqSpace(req));
+    const accounts = userAccounts(req.user.id).filter((a) => !sc || sc.accountIds.includes(a.id));
+    const acc = inIds('m.account_id', sc?.accountIds);
     const out = accounts.map((a) => ({
       accountId: a.id, email: a.email, name: a.name || a.email, color: a.color, syncState: a.sync_state, syncError: a.sync_error,
       folders: all('SELECT id, path, name, delimiter, special_use AS specialUse, parent_path AS parentPath, total, unread, sync_enabled AS syncEnabled FROM folders WHERE account_id = ? ORDER BY path', a.id),
     }));
     const counts = {
-      unified: get("SELECT COUNT(*) AS n FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND f.special_use = '\\Inbox' AND m.is_read = 0 AND m.snoozed_until IS NULL", req.user.id).n,
-      flagged: get("SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND is_flagged = 1", req.user.id).n,
-      snoozed: get('SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND snoozed_until IS NOT NULL', req.user.id).n,
-      needsreply: get("SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND i.needs_reply = 1 AND m.is_answered = 0 AND f.special_use = '\\Inbox'", req.user.id).n,
-      scheduled: get("SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND status IN ('queued','failed')", req.user.id).n,
+      unified: get(`SELECT COUNT(*) AS n FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND f.special_use = '\\Inbox' AND m.is_read = 0 AND m.snoozed_until IS NULL`, req.user.id).n,
+      flagged: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.is_flagged = 1`, req.user.id).n,
+      snoozed: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.snoozed_until IS NOT NULL`, req.user.id).n,
+      needsreply: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_reply = 1 AND m.is_answered = 0 AND f.special_use = '\\Inbox'`, req.user.id).n,
+      scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, req.user.id).n,
     };
     return { accounts: out, counts };
   });
@@ -127,15 +130,16 @@ export default async function mailRoutes(app) {
   // ---- message lists
   app.get('/api/messages', async (req) => {
     const q = req.query;
+    const sc = scope(req.user.id, reqSpace(req));
     const limit = Math.min(Number(q.limit) || 50, 200);
     if (q.q) {
-      const found = await hybridSearch(req.user.id, q.q, { limit: 100, semantic: q.semantic !== '0' });
+      const found = await hybridSearch(req.user.id, q.q, { limit: 100, semantic: q.semantic !== '0', sc });
       if (!found.length) return { items: [], hasMore: false };
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
       const byId = new Map(rows.map((r) => [r.id, r]));
       return { items: found.map((id) => byId.get(id)).filter(Boolean).map(listItem), hasMore: false };
     }
-    const { where, params } = scopeFor(req.user.id, q);
+    const { where, params } = scopeFor(req.user.id, q, sc);
     const cursor = Number(q.before) || 8.64e15;
     const threaded = q.threads !== '0' && getSettings(req.user.id).ui.conversationView;
     let rows;
@@ -214,6 +218,7 @@ export default async function mailRoutes(app) {
     if (!att || !/^image\//.test(att.contentType)) return httpError(reply, 404, 'Not found');
     reply.header('content-type', att.contentType);
     reply.header('cache-control', 'private, max-age=86400');
+    reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox"); // e.g. scripted SVG opened directly
     return att.content;
   });
 

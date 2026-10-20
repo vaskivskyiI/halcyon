@@ -9,6 +9,8 @@ const FIELDS = [['from', 'Sender'], ['to', 'Recipients'], ['subject', 'Subject']
 const OPS = { text: [['contains', 'contains'], ['not_contains', "doesn't contain"], ['equals', 'is'], ['starts', 'starts with'], ['ends', 'ends with'], ['regex', 'matches regex']], bool: [['is', 'is']], num: [['gte', '≥'], ['lte', '≤']] };
 const kind = (f) => (['hasAttachment', 'needsReply'].includes(f) ? 'bool' : f === 'priority' ? 'num' : 'text');
 const CATS = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
+const AI_FIELDS = ['category', 'priority', 'needsReply'];
+const GATED = ['trash', 'spam', 'forward'];
 const ACTIONS = [['move', 'Move to folder'], ['archive', 'Archive'], ['markRead', 'Mark as read'], ['flag', 'Flag'], ['label', 'Apply label'], ['trash', 'Delete'], ['spam', 'Mark as spam'], ['forward', 'Forward to']];
 
 export default function Rules() {
@@ -71,6 +73,7 @@ function RuleEditor({ rule, onClose, onSaved }) {
         </div>
       ))}
       <button className="btn sm ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setR({ ...r, actions: [...r.actions, { type: 'markRead' }] })}><Plus size={13} /> Add action</button>
+      {r.conditions.some((c) => AI_FIELDS.includes(c.field)) && r.actions.some((a) => GATED.includes(a.type) || a.type === 'move') && <div className="notice warn" style={{ margin: 0 }}>This rule depends on AI judgement, so deleting, marking as spam, forwarding and moving to Trash/Junk will each ask for your approval instead of happening automatically.</div>}
       <Switch label="Stop processing more rules" checked={r.stop} onChange={(v) => setR({ ...r, stop: v })} />
     </Modal>
   );

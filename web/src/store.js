@@ -33,5 +33,5 @@ function shallowEq(a, b) {
 
 export const store = createStore({
   user: null, settings: null, oauth: {}, accounts: [], folders: { accounts: [], counts: {} }, labels: [],
-  toasts: [], composers: [], connected: false, aiProviders: [],
+  toasts: [], composers: [], connected: false, aiProviders: [], spaces: [], space: '',
 });

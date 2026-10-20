@@ -19,6 +19,11 @@ AI providers are pluggable per task: **Ollama (self-hosted)**, **OpenAI**, **Ant
 **OpenAI-compatible** server (LM Studio, vLLM, llama.cpp, LocalAI, Groq, Mistral, OpenRouter, DeepSeek, …).
 A *privacy mode* restricts all AI processing to providers on your own machine/network.
 
+The AI keeps a **memory** of your mail (passage-level semantic index, conversation summaries, events, contacts and
+facts it learned or you told it), stored per user in your Halcyon database. **Spaces** such as *Work* and *Private*
+let you use everything together or keep it apart — mail accounts, calendars and address books each belong to a
+space, and search, the brief and the assistant only see the space you are in.
+
 ![Mail with AI summary, priority and prepared reply](docs/screenshots/mail.png)
 
 See [docs/FEATURES.md](docs/FEATURES.md) for the full feature list and a comparison with Outlook, Gmail, Spark and Thunderbird,
@@ -62,19 +67,42 @@ echo "HALCYON_SECRET=$(openssl rand -base64 32)" > .env
 docker compose up -d        # Halcyon on :8080 + Ollama (add provider URL http://ollama:11434)
 ```
 
+### Podman pod
+
+```bash
+./deploy/podman-pod.sh up --with-ollama          # builds the image, creates pod "halcyon" on 127.0.0.1:8080
+./deploy/podman-pod.sh systemd                   # optional: start at boot (rootless: loginctl enable-linger $USER)
+./deploy/podman-pod.sh update --with-ollama      # after git pull; volumes halcyon-data / ollama-models are kept
+```
+
+The first run writes `deploy/halcyon.env` (mode 600, git-ignored) with the generated `HALCYON_SECRET` — back it up
+with the `halcyon-data` volume. Ollama runs in the same pod, so add it as provider URL `http://127.0.0.1:11434`
+(counts as local for Privacy mode). Options: `--port`, `--bind 0.0.0.0`, `--gpu` (NVIDIA CDI), `--models "…"`.
+Put a TLS reverse proxy in front for access from other machines.
+
 ## Windows desktop app
 
 Download `Halcyon-Setup-<version>.exe` from the *Desktop builds* workflow artifacts, or build it:
 
 ```bash
 npm install
-npm run dist:win            # → desktop/out/Halcyon-Setup-1.0.0.exe
+npm run dist:win            # → desktop/out/Halcyon-Setup-1.0.0-x64.exe
+npm run dist:win-arm64      # → …-arm64.exe for Snapdragon Surface Pro / Copilot+ PCs
 ```
 
 Building on Windows needs nothing extra; on Linux it needs Wine (`wine64` + `wine32`) for the NSIS step.
 
-On first start the app runs everything locally (data in `%APPDATA%\Halcyon`). Use the tray menu →
-**Connection…** to point it at your Halcyon server instead. The installer registers Halcyon as a mail client:
+The app has two modes (tray menu → **Connection…**); exactly one of them does the sync and AI work, so mail is
+never analysed twice:
+
+- **This PC — local AI** (default): mail and AI run on the PC (data in `%APPDATA%\Halcyon`). For on-device AI on a
+  Surface / Copilot+ PC install Foundry Local (`winget install Microsoft.FoundryLocal`, then
+  `foundry model run phi-4-mini` — it uses the NPU build when available) and use *Settings → AI → Add provider →
+  Detect AI on this machine*. Ollama and LM Studio are detected too.
+- **Halcyon server**: the app is only a window onto your server; no local server, sync or background AI runs.
+  The app checks the server is reachable at start and offers to switch modes if it is not.
+
+Accounts are not shared between modes — add each mail account in one of them only. The installer registers Halcyon as a mail client:
 choose it in *Windows Settings → Apps → Default apps → Email* to open `mailto:` links in Halcyon.
 
 The local server only listens on `127.0.0.1` and additionally requires a per-launch secret held by the app,

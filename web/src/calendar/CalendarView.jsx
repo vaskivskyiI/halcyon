@@ -339,7 +339,9 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   const [slots, setSlots] = useState(null);
   const [untilMode, setUntilMode] = useState(() => (/COUNT=/.test(initial.rrule || '') ? 'count' : /UNTIL=/.test(initial.rrule || '') ? 'until' : 'never'));
   const set = (k, v) => setEv((e) => ({ ...e, [k]: v }));
-  const cal = calendars.find((c) => c.id === ev.calendarId) || calendars.find((c) => c.isDefault) || calendars[0];
+  const space = store.get().space;
+  // New events in a space go to a writable calendar of that space before falling back to the shared default.
+  const cal = calendars.find((c) => c.id === ev.calendarId) || (space && calendars.find((c) => c.space === space && !c.readonly && c.enabled)) || calendars.find((c) => c.isDefault) || calendars[0];
   const readonly = cal?.readonly;
   const baseRule = (ev.rrule || '').replace(/;?(COUNT|UNTIL)=[^;]*/g, '');
   const ruleExtra = (ev.rrule || '').match(/(COUNT|UNTIL)=([^;]*)/);

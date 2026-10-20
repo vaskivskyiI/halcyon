@@ -16,6 +16,7 @@ export function mock() {
           needs_reply: question, action_items: urgent ? [{ text: 'Respond to request', due: null }] : [],
           events: [], suggested_replies: question ? ['Sounds good, thanks!', 'Let me check and get back to you.', 'Can we discuss this tomorrow?'] : [],
           sentiment: urgent ? 'urgent' : 'neutral', language: 'en', is_phishing: false,
+          facts: (last.match(/[^.\n]* is the [^.\n]+/g) || []).slice(0, 3).map((x) => x.trim()),
           subject: `Re: ${subject}`, body: 'Thanks for your message. I will follow up shortly.',
         });
       } else {
@@ -25,10 +26,10 @@ export function mock() {
       return { text, usage: { input: Math.round(last.length / 4), output: Math.round(text.length / 4) } };
     },
     async embed({ input }) {
-      // Hashing bag-of-words embedding: similar texts get similar vectors.
+      // Hashing set-of-words embedding: texts sharing words get similar vectors (repetition does not dominate).
       return input.map((t) => {
         const v = new Array(256).fill(0);
-        for (const w of String(t).toLowerCase().match(/[a-z0-9]{3,}/g) || []) v[crypto.createHash('md5').update(w).digest()[0]] += 1;
+        for (const w of String(t).toLowerCase().match(/[a-z0-9]{3,}/g) || []) v[crypto.createHash('md5').update(w).digest()[0]] = 1;
         return v;
       });
     },

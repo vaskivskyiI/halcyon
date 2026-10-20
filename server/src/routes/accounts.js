@@ -8,7 +8,8 @@ import { syncManager } from '../mail/sync.js';
 import { encrypt, randomToken } from '../util/crypto.js';
 import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri } from '../mail/oauth.js';
 import { syncDav } from '../scheduler.js';
-import { invalidate } from '../ai/vectors.js';
+import { invalidate } from '../ai/memory.js';
+import { purgeMemory } from '../mail/pipeline.js';
 
 const pendingOAuth = new Map(); // state -> { userId, provider, accountId, t }
 
@@ -56,6 +57,10 @@ export default async function accountRoutes(app) {
     run('DELETE FROM accounts WHERE id = ?', a.id);
     run('DELETE FROM calendars WHERE account_id = ?', a.id);
     run('DELETE FROM address_books WHERE account_id = ?', a.id);
+    // Nothing learned from a removed account stays in the AI memory.
+    run('DELETE FROM memory WHERE user_id = ? AND owner = ?', req.user.id, `a:${a.id}`);
+    run('DELETE FROM facts WHERE user_id = ? AND owner = ?', req.user.id, `a:${a.id}`);
+    purgeMemory();
     invalidate(req.user.id);
     return { ok: true };
   });

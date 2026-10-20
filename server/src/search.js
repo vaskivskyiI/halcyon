@@ -1,7 +1,8 @@
 // Search: Gmail-like operators, FTS5 keyword search and semantic (embedding) search, fused with RRF.
 import { all, get } from './db/index.js';
 import { embed } from './ai/router.js';
-import { search as vectorSearch } from './ai/vectors.js';
+import { searchMemory } from './ai/memory.js';
+import { inIds } from './spaces.js';
 
 export function parseQuery(q) {
   const filters = { terms: [] };
@@ -23,8 +24,9 @@ export function parseQuery(q) {
 const rel = (s) => { const m = String(s).match(/^(\d+)([dwmy])$/); return m ? Date.now() - Number(m[1]) * { d: 1, w: 7, m: 30, y: 365 }[m[2]] * 864e5 : null; };
 const ftsEscape = (t) => `"${t.replace(/"/g, '""')}"*`;
 
-export function buildWhere(userId, f) {
-  const where = ['m.user_id = ?'], params = [userId];
+/** sc: scope from spaces.scope() (null = all spaces). */
+export function buildWhere(userId, f, sc = null) {
+  const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
   const add = (sql, ...p) => { where.push(sql); params.push(...p); };
   for (const { val, neg } of f.from || []) add(`${neg ? 'NOT ' : ''}(m.from_addr LIKE ? OR m.from_name LIKE ?)`, `%${val}%`, `%${val}%`);
   for (const { val, neg } of f.to || []) add(`${neg ? 'NOT ' : ''}(m.to_json LIKE ? OR m.cc_json LIKE ?)`, `%${val}%`, `%${val}%`);
@@ -50,9 +52,9 @@ export function buildWhere(userId, f) {
   return { where, params };
 }
 
-export function keywordSearch(userId, q, { limit = 50, offset = 0 } = {}) {
+export function keywordSearch(userId, q, { limit = 50, offset = 0, sc = null } = {}) {
   const f = parseQuery(q);
-  const { where, params } = buildWhere(userId, f);
+  const { where, params } = buildWhere(userId, f, sc);
   let sql;
   if (f.terms.length) {
     const match = f.terms.map(ftsEscape).join(' ');
@@ -63,22 +65,35 @@ export function keywordSearch(userId, q, { limit = 50, offset = 0 } = {}) {
   return all(sql, ...params, limit, offset).map((r) => r.id);
 }
 
-export async function semanticSearch(userId, text, k = 20) {
-  try {
-    const { vectors, model } = await embed(userId, [text]);
-    return vectorSearch(userId, vectors[0], model, k);
-  } catch { return []; }
+/** Embeds a query once; null when no embedding provider is available. */
+export async function embedQuery(userId, text) {
+  try { const { vectors, model } = await embed(userId, [text]); return { vector: vectors[0], model }; } catch { return null; }
+}
+
+/** Messages ranked by their best-matching chunk: [{ id, score, chunkId }]. */
+export function messageHits(userId, query, k = 20, sc = null) {
+  if (!query) return [];
+  const best = new Map();
+  for (const h of searchMemory(userId, query.vector, query.model, { k: k * 4, owners: sc?.owners || null, kinds: new Set(['message']) })) {
+    const id = Number(h.ref);
+    if (!best.has(id)) best.set(id, { id, score: h.score, chunkId: h.id });
+  }
+  return [...best.values()].slice(0, k);
+}
+
+export async function semanticSearch(userId, text, k = 20, sc = null) {
+  return messageHits(userId, await embedQuery(userId, text), k, sc);
 }
 
 /** Reciprocal-rank fusion of keyword and semantic results. */
-export async function hybridSearch(userId, q, { limit = 50, semantic = true } = {}) {
-  const kw = keywordSearch(userId, q, { limit });
+export async function hybridSearch(userId, q, { limit = 50, semantic = true, sc = null } = {}) {
+  const kw = keywordSearch(userId, q, { limit, sc });
   const f = parseQuery(q);
   if (!semantic || !f.terms.length) return kw;
-  const sem = await semanticSearch(userId, f.terms.join(' '), limit);
+  const sem = await semanticSearch(userId, f.terms.join(' '), limit, sc);
   if (!sem.length) return kw;
-  // Apply operator filters to semantic hits too.
-  const { where, params } = buildWhere(userId, { ...f, terms: [] });
+  // Apply operator filters (and the space) to semantic hits too; this also drops hits of deleted mail.
+  const { where, params } = buildWhere(userId, { ...f, terms: [] }, sc);
   const ok = new Set(all(`SELECT m.id FROM messages m WHERE ${where.join(' AND ')} AND m.id IN (${sem.map(() => '?').join(',')})`, ...params, ...sem.map((s) => s.id)).map((r) => r.id));
   const score = new Map();
   kw.forEach((id, i) => score.set(id, (score.get(id) || 0) + 1 / (60 + i)));

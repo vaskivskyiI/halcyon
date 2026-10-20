@@ -170,9 +170,16 @@ export default function Reader({ id, view }) {
   );
 }
 
+const AI_STATUS_TEXT = {
+  pending: 'Analysis queued in the background…',
+  waiting: 'Waiting for an AI provider — add one in Settings → AI.',
+  failed: 'Background analysis failed — see Settings → AI → Status.',
+  none: 'Not analyzed automatically (only recent mail in analysed folders is).',
+};
+
 function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking }) {
   if (!ins && !summary) {
-    return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{latest.aiStatus === 'pending' ? 'Analysis queued in the background…' : 'Not analyzed yet.'}</span>
+    return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
       <button className="btn sm ai" onClick={onAnalyze} disabled={aiWorking}>{aiWorking ? <Spinner size={13} /> : <Sparkles size={13} />} Analyze now</button></div></div>;
   }
   return (

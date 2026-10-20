@@ -4,6 +4,7 @@ import { parseIcs, buildIcs } from './ics.js';
 import { createEvent, updateEvent, serializeEvent, defaultCalendar } from './repo.js';
 import { queueSend } from '../mail/send.js';
 import { userAccounts } from '../accounts.js';
+import { calendarForAccount } from '../spaces.js';
 
 export function invitationFor(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
@@ -36,7 +37,7 @@ export function respondToInvitation(userId, messageId, response, { comment, send
   } else if (eventId) {
     updateEvent(userId, eventId, evData);
   } else {
-    eventId = createEvent(userId, { ...evData, calendarId: defaultCalendar(userId)?.id }).id;
+    eventId = createEvent(userId, { ...evData, calendarId: (calendarForAccount(userId, account.id) || defaultCalendar(userId))?.id }).id;
   }
   if (sendReply && inv.event.organizer?.email) {
     const me = attendees.find((a) => a.email === myEmail);
@@ -56,15 +57,17 @@ export function processIncomingIcs(userId, messageId) {
   const inv = invitationFor(userId, messageId);
   if (!inv || !inv.existingEventId) return;
   const ev = get('SELECT * FROM events WHERE id = ?', inv.existingEventId);
+  const sender = String(get('SELECT from_addr FROM messages WHERE id = ?', messageId)?.from_addr || '').toLowerCase();
   if (inv.method === 'REPLY') {
-    const replies = inv.event.attendees;
-    const attendees = json(ev.attendees_json, []).map((a) => {
-      const r = replies.find((x) => x.email === a.email);
-      return r ? { ...a, status: r.status } : a;
-    });
+    // An attendee may only answer for themself; anything else in the ICS is ignored.
+    const r = inv.event.attendees.find((x) => x.email === sender);
+    if (!r) return;
+    const attendees = json(ev.attendees_json, []).map((a) => (a.email === sender ? { ...a, status: r.status } : a));
     updateEvent(userId, ev.id, { attendees });
   } else if (inv.method === 'CANCEL') {
-    updateEvent(userId, ev.id, { status: 'cancelled' });
+    // Only the organizer can cancel; otherwise anyone who knows the UID could wipe the user's meetings.
+    const organizer = String(json(ev.organizer_json, {})?.email || '').toLowerCase();
+    if (organizer && organizer === sender) updateEvent(userId, ev.id, { status: 'cancelled' });
   }
 }
 

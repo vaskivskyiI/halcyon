@@ -10,6 +10,7 @@
     "start": "electron .",
     "bundle": "node scripts/bundle-server.mjs",
     "dist:win": "node scripts/bundle-server.mjs --platform win32 --arch x64 && electron-builder --win --x64 --publish never",
+    "dist:win-arm64": "node scripts/bundle-server.mjs --platform win32 --arch arm64 && electron-builder --win --arm64 --publish never",
     "dist:linux": "node scripts/bundle-server.mjs && electron-builder --linux --publish never"
   },
   "devDependencies": {
@@ -58,14 +59,11 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
+          "target": "nsis"
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Halcyon-Setup-${version}.${ext}"
+      "artifactName": "Halcyon-Setup-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

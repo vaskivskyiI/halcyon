@@ -13,7 +13,7 @@ export function serializeAccount(a) {
     smtp: { host: a.smtp_host, port: a.smtp_port, secure: !!a.smtp_secure, user: a.smtp_user },
     authType: a.auth_type, signatureHtml: a.signature_html, syncEnabled: !!a.sync_enabled, syncState: a.sync_state,
     syncError: a.sync_error, lastSyncAt: a.last_sync_at, caldavUrl: a.caldav_url, carddavUrl: a.carddav_url, davUser: a.dav_user,
-    aliases: json(a.aliases_json, []), hasPassword: !!a.imap_pass_enc, sortOrder: a.sort_order,
+    aliases: json(a.aliases_json, []), hasPassword: !!a.imap_pass_enc, sortOrder: a.sort_order, space: a.space || '',
   };
 }
 
@@ -25,7 +25,7 @@ export function accountFields(b) {
     smtp_host: b.smtp?.host, smtp_port: b.smtp?.port && Number(b.smtp.port), smtp_secure: b.smtp?.secure === undefined ? undefined : (b.smtp.secure ? 1 : 0), smtp_user: b.smtp?.user,
     signature_html: b.signatureHtml, sync_enabled: b.syncEnabled === undefined ? undefined : (b.syncEnabled ? 1 : 0),
     caldav_url: b.caldavUrl, carddav_url: b.carddavUrl, dav_user: b.davUser, aliases_json: b.aliases && JSON.stringify(b.aliases),
-    sort_order: b.sortOrder,
+    sort_order: b.sortOrder, space: b.space === undefined ? undefined : String(b.space).trim().slice(0, 40),
   };
   if (b.imap?.password) f.imap_pass_enc = encrypt(b.imap.password);
   if (b.smtp?.password) f.smtp_pass_enc = encrypt(b.smtp.password);
@@ -34,7 +34,7 @@ export function accountFields(b) {
 }
 
 export const ACCOUNT_COLS = ['name', 'email', 'display_name', 'color', 'imap_host', 'imap_port', 'imap_secure', 'imap_user', 'imap_pass_enc', 'smtp_host', 'smtp_port',
-  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc'];
+  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space'];
 
 export function createAccount(userId, b, extra = {}) {
   const n = all('SELECT id FROM accounts WHERE user_id = ?', userId).length;

@@ -10,7 +10,8 @@
     "start": "npm start -w server",
     "test": "npm test -w server",
     "desktop": "npm run build && npm start -w desktop",
-    "dist:win": "npm run build && npm run dist:win -w desktop"
+    "dist:win": "npm run build && npm run dist:win -w desktop",
+    "dist:win-arm64": "npm run build && npm run dist:win-arm64 -w desktop"
   },
   "engines": { "node": ">=20" }
 }

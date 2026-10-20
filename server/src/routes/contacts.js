@@ -6,15 +6,21 @@ import { createContact, updateContact, deleteContact, importContacts } from '../
 import { parseVCards, toVCard } from '../contacts/vcard.js';
 import { notify } from '../util/events.js';
 import { serializeMessage } from '../mail/store.js';
+import { scope, reqSpace, spaceMap, inIds } from '../spaces.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
 
-  app.get('/api/address-books', async (req) => all('SELECT id, name, source, account_id AS accountId, readonly FROM address_books WHERE user_id = ?', req.user.id));
+  app.get('/api/address-books', async (req) => {
+    const sc = scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
+    return all(`SELECT id, name, source, account_id AS accountId, readonly, space AS ownSpace FROM address_books WHERE user_id = ? AND ${inIds('id', sc?.bookIds)}`, req.user.id)
+      .map((b) => ({ ...b, space: spaces.books.get(b.id) ?? '' }));
+  });
 
   app.get('/api/contacts', async (req) => {
     const { q, group, filter } = req.query;
-    const where = ['c.user_id = ?', 'c.deleted = 0'], params = [req.user.id];
+    const sc = scope(req.user.id, reqSpace(req));
+    const where = ['c.user_id = ?', 'c.deleted = 0', inIds('c.address_book_id', sc?.bookIds)], params = [req.user.id];
     if (q) { where.push("(c.display_name LIKE ? OR c.emails_json LIKE ? OR c.org LIKE ? OR c.phones_json LIKE ?)"); params.push(...Array(4).fill(`%${q}%`)); }
     if (group) { where.push('EXISTS (SELECT 1 FROM json_each(c.groups_json) j WHERE j.value = ?)'); params.push(group); }
     if (filter === 'favorites') where.push('c.favorite = 1');
@@ -23,7 +29,7 @@ export default async function contactRoutes(app) {
     return all(`SELECT c.* FROM contacts c WHERE ${where.join(' AND ')} ORDER BY c.favorite DESC, lower(c.display_name) LIMIT 5000`, ...params).map(serializeContact);
   });
 
-  app.get('/api/contacts/autocomplete', async (req) => autocomplete(req.user.id, String(req.query.q || '')));
+  app.get('/api/contacts/autocomplete', async (req) => autocomplete(req.user.id, String(req.query.q || ''), 8, scope(req.user.id, reqSpace(req))));
 
   app.get('/api/contacts/groups', async (req) => all("SELECT j.value AS name, COUNT(*) AS count FROM contacts c, json_each(c.groups_json) j WHERE c.user_id = ? AND c.deleted = 0 GROUP BY j.value ORDER BY j.value", req.user.id));
 
@@ -46,16 +52,24 @@ export default async function contactRoutes(app) {
   app.get('/api/contacts/:id', async (req, reply) => {
     const c = get('SELECT * FROM contacts WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!c) return httpError(reply, 404, 'Not found');
+    const sc = scope(req.user.id, reqSpace(req));
     const emails = json(c.emails_json, []).map((e) => e.value.toLowerCase());
-    const recent = emails.length ? all(`SELECT * FROM messages WHERE user_id = ? AND (from_addr IN (${emails.map(() => '?').join(',')}) OR ${emails.map(() => 'to_json LIKE ?').join(' OR ')}) ORDER BY date DESC LIMIT 15`,
+    const recent = emails.length ? all(`SELECT * FROM messages WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (from_addr IN (${emails.map(() => '?').join(',')}) OR ${emails.map(() => 'to_json LIKE ?').join(' OR ')}) ORDER BY date DESC LIMIT 15`,
       req.user.id, ...emails, ...emails.map((e) => `%"${e}"%`)).map((m) => serializeMessage(m)) : [];
-    const events = emails.length ? all(`SELECT e.id, e.title, e.start FROM events e JOIN calendars k ON k.id = e.calendar_id WHERE k.user_id = ? AND e.deleted = 0 AND (${emails.map(() => 'e.attendees_json LIKE ?').join(' OR ')}) ORDER BY e.start DESC LIMIT 10`, req.user.id, ...emails.map((e) => `%${e}%`)) : [];
+    const events = emails.length ? all(`SELECT e.id, e.title, e.start FROM events e JOIN calendars k ON k.id = e.calendar_id WHERE k.user_id = ? AND ${inIds('k.id', sc?.calendarIds)} AND e.deleted = 0 AND (${emails.map(() => 'e.attendees_json LIKE ?').join(' OR ')}) ORDER BY e.start DESC LIMIT 10`, req.user.id, ...emails.map((e) => `%${e}%`)) : [];
     return { ...serializeContact(c), recentMessages: recent, events };
   });
 
   app.post('/api/contacts', async (req, reply) => {
     const b = req.body || {};
     if (!b.displayName && !b.firstName && !b.lastName && !b.emails?.length) return httpError(reply, 400, 'Name or email required');
+    // Without an explicit address book, a contact created while a space is active goes into that space.
+    const sc = !b.addressBookId && scope(req.user.id, reqSpace(req));
+    if (sc) {
+      const spaces = spaceMap(req.user.id);
+      const own = sc.bookIds.filter((id) => spaces.books.get(id) === sc.space);
+      b.addressBookId = get(`SELECT id FROM address_books WHERE ${inIds('id', own.length ? own : sc.bookIds)} AND readonly = 0 ORDER BY source = 'local' DESC, id LIMIT 1`)?.id;
+    }
     const c = createContact(req.user.id, b);
     notify(req.user.id, 'contacts:changed', {});
     return serializeContact(c);

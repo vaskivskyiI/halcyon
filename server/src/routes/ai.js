@@ -4,13 +4,18 @@ import { httpError, streamNdjson } from './util.js';
 import { encrypt, decrypt } from '../util/crypto.js';
 import { PROVIDER_TYPES, makeProvider, isLocalEndpoint } from '../ai/providers/index.js';
 import { enqueue, resumeWaiting, queueStats } from '../ai/queue.js';
-import { indexStats, invalidate } from '../ai/vectors.js';
+import { memoryStats, invalidate, removeMemory } from '../ai/memory.js';
+import { scope, reqSpace, spaceMap, ownerSpace, cleanSpace } from '../spaces.js';
 import * as T from '../ai/tasks.js';
 import { ask } from '../ai/assistant.js';
 import { getSettings } from '../settings.js';
 import { stripQuoted } from '../ai/prompts.js';
+import { backfillAnalysis } from '../mail/pipeline.js';
+import { listApprovals, decideApproval, pendingApprovalCount } from '../rules.js';
 
-const provOut = (p) => ({ id: p.id, name: p.name, type: p.type, baseUrl: p.base_url, hasKey: !!p.api_key_enc, defaultModel: p.default_model, embedModel: p.embed_model, enabled: !!p.enabled, local: isLocalEndpoint(p.type, p.base_url) });
+// Plain HTTP to a host outside this machine/LAN sends email content readable by anyone on the path.
+const insecure = (p) => /^http:/i.test(p.base_url || '') && !isLocalEndpoint(p.type, p.base_url);
+const provOut = (p) => ({ id: p.id, name: p.name, type: p.type, baseUrl: p.base_url, hasKey: !!p.api_key_enc, defaultModel: p.default_model, embedModel: p.embed_model, enabled: !!p.enabled, local: isLocalEndpoint(p.type, p.base_url), insecure: insecure(p) });
 
 export default async function aiRoutes(app) {
   app.addHook('preHandler', requireUser);
@@ -27,6 +32,7 @@ export default async function aiRoutes(app) {
     const r = run('INSERT INTO ai_providers (user_id, name, type, base_url, api_key_enc, default_model, embed_model, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)',
       req.user.id, b.name || t.label, b.type, b.baseUrl || t.defaultBaseUrl, encrypt(b.apiKey), b.defaultModel || t.defaultModel, b.embedModel ?? t.defaultEmbed, now());
     resumeWaiting(req.user.id);
+    backfillAnalysis(req.user.id);
     return provOut(get('SELECT * FROM ai_providers WHERE id = ?', r.lastInsertRowid));
   });
 
@@ -74,19 +80,45 @@ export default async function aiRoutes(app) {
     try { return await makeProvider({ type: 'ollama', baseUrl: p.base_url, apiKey: decrypt(p.api_key_enc) }).pull(req.body.model); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
+  // Local AI runtimes on this machine (desktop "local AI" mode). Foundry Local runs models on the NPU of
+  // Copilot+ PCs (Snapdragon / Intel / AMD); its port is dynamic, so the desktop shell passes it when known.
+  app.get('/api/ai/local-detect', async () => {
+    const probe = async (url) => { try { const r = await fetch(url, { signal: AbortSignal.timeout(1500) }); return r.ok ? await r.json() : null; } catch { return null; } };
+    const found = [];
+    const foundryUrls = [...new Set([process.env.HALCYON_FOUNDRY_URL, 'http://127.0.0.1:5273', 'http://127.0.0.1:5272'].filter(Boolean).map((u) => u.replace(/\/(v1)?\/?$/, '')))];
+    for (const base of foundryUrls) {
+      const d = await probe(`${base}/v1/models`);
+      if (d) { found.push({ key: 'foundry', type: 'openai-compatible', label: 'Foundry Local (NPU / GPU)', baseUrl: `${base}/v1`, models: (d.data || []).map((m) => m.id) }); break; }
+    }
+    const ol = await probe('http://127.0.0.1:11434/api/tags');
+    if (ol) found.push({ key: 'ollama', type: 'ollama', label: 'Ollama', baseUrl: 'http://127.0.0.1:11434', models: (ol.models || []).map((m) => m.name) });
+    const lm = await probe('http://127.0.0.1:1234/v1/models');
+    if (lm) found.push({ key: 'lmstudio', type: 'openai-compatible', label: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', models: (lm.data || []).map((m) => m.id) });
+    return found;
+  });
+
   // ---- status & maintenance
   app.get('/api/ai/status', async (req) => {
     const usage = all(`SELECT model, task, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(output_tokens) AS output, AVG(ms) AS avgMs, SUM(1 - ok) AS errors
       FROM ai_usage WHERE user_id = ? AND created_at > ? GROUP BY model, task ORDER BY calls DESC`, req.user.id, now() - 30 * 864e5);
     const analyzed = get("SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND ai_status = 'done'", req.user.id).n;
-    return { queue: queueStats(req.user.id), index: indexStats(req.user.id), usage, analyzed };
+    const mem = memoryStats(req.user.id);
+    const msgRows = mem.rows.filter((r) => r.kind === 'message').sort((a, b) => b.items - a.items);
+    return { queue: queueStats(req.user.id), index: { count: msgRows[0]?.items || 0, model: msgRows[0]?.model || null }, memory: mem, usage, analyzed, approvals: pendingApprovalCount(req.user.id) };
+  });
+
+  // ---- actions proposed by AI-driven rules (delete / spam / forward) waiting for the user's decision
+  app.get('/api/ai/approvals', async (req) => listApprovals(req.user.id));
+  app.post('/api/ai/approvals/:id', async (req, reply) => {
+    const r = await decideApproval(req.user.id, Number(req.params.id), req.body?.approve === true);
+    return r || httpError(reply, 404, 'Not found');
   });
 
   app.post('/api/ai/reprocess', async (req) => {
     const { what = 'analyze', days = 14 } = req.body || {};
     const since = now() - Number(days) * 864e5;
     const rows = all("SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND m.date >= ? AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')" + (what === 'analyze' ? " AND f.special_use = '\\Inbox'" : ''), req.user.id, since);
-    if (what === 'embed') invalidate(req.user.id);
+    if (what === 'embed') { run('DELETE FROM memory WHERE user_id = ? AND kind = ?', req.user.id, 'message'); invalidate(req.user.id); }
     for (const m of rows) enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : Math.max(10, 80 - Math.round((now() - m.date) / 864e5)), { force: true });
     return { queued: rows.length };
   });
@@ -124,20 +156,51 @@ export default async function aiRoutes(app) {
   });
 
   app.get('/api/ai/brief', async (req, reply) => {
-    try { return await T.dailyBrief(req.user.id, { force: req.query.refresh === '1' }); } catch (e) { return httpError(reply, 400, e.message); }
+    try { return await T.dailyBrief(req.user.id, { force: req.query.refresh === '1', space: reqSpace(req) }); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
   // ---- assistant chat
   app.post('/api/ai/ask', async (req, reply) => {
     const { chatId, question } = req.body || {};
     if (!question?.trim()) return httpError(reply, 400, 'Question required');
-    return streamNdjson(req, reply, (onToken) => ask(req.user.id, { chatId, question: question.trim() }, onToken));
+    return streamNdjson(req, reply, (onToken) => ask(req.user.id, { chatId, question: question.trim(), space: reqSpace(req) }, onToken));
   });
-  app.get('/api/ai/chats', async (req) => all('SELECT id, title, updated_at AS updatedAt FROM chats WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50', req.user.id));
+  // In a space only that space's chats are listed; "all spaces" lists every chat.
+  app.get('/api/ai/chats', async (req) => {
+    const space = scope(req.user.id, reqSpace(req))?.space;
+    return all(`SELECT id, title, space, updated_at AS updatedAt FROM chats WHERE user_id = ? ${space ? 'AND space = ?' : ''} ORDER BY updated_at DESC LIMIT 50`, req.user.id, ...(space ? [space] : []));
+  });
   app.get('/api/ai/chats/:id', async (req, reply) => {
     const c = get('SELECT * FROM chats WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!c) return httpError(reply, 404, 'Not found');
     return { id: c.id, title: c.title, messages: all('SELECT role, content, sources_json, created_at FROM chat_messages WHERE chat_id = ? ORDER BY id', c.id).map((m) => ({ role: m.role, content: m.content, sources: json(m.sources_json, []), createdAt: m.created_at })) };
   });
   app.delete('/api/ai/chats/:id', async (req) => { run('DELETE FROM chats WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+
+  // ---- memory: what the AI has indexed and the facts it remembers (visible, editable, deletable by the user)
+  app.get('/api/ai/memory', async (req) => {
+    const sc = scope(req.user.id, reqSpace(req)), map = spaceMap(req.user.id);
+    const facts = all('SELECT f.*, m.subject FROM facts f LEFT JOIN messages m ON m.id = f.source_message_id WHERE f.user_id = ? ORDER BY f.created_at DESC LIMIT 1000', req.user.id)
+      .filter((f) => !sc || sc.owners.has(f.owner))
+      .map((f) => ({ id: f.id, text: f.text, origin: f.origin, space: ownerSpace(req.user.id, f.owner, map), sourceMessageId: f.source_message_id, sourceSubject: f.subject, createdAt: f.created_at }));
+    return { stats: memoryStats(req.user.id), facts };
+  });
+  app.post('/api/ai/memory/facts', async (req, reply) => {
+    const text = String(req.body?.text || '').trim();
+    if (text.length < 3) return httpError(reply, 400, 'Text required');
+    return { id: T.rememberFact(req.user.id, text, cleanSpace(req.body.space ?? reqSpace(req))) };
+  });
+  app.delete('/api/ai/memory/facts/:id', async (req) => {
+    run('DELETE FROM facts WHERE id = ? AND user_id = ?', Number(req.params.id), req.user.id);
+    removeMemory(req.user.id, 'fact', [Number(req.params.id)]);
+    return { ok: true };
+  });
+  // what: 'facts' (learned + remembered facts) | 'all' (also the semantic index; rebuilt in the background if enabled)
+  app.delete('/api/ai/memory', async (req) => {
+    run('DELETE FROM facts WHERE user_id = ?', req.user.id);
+    if (req.query.what === 'all') run('DELETE FROM memory WHERE user_id = ?', req.user.id);
+    else run("DELETE FROM memory WHERE user_id = ? AND kind = 'fact'", req.user.id);
+    invalidate(req.user.id);
+    return { ok: true };
+  });
 }

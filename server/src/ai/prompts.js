@@ -49,6 +49,7 @@ Analyze the email and return a JSON object with exactly these keys:
 - "sentiment": one of positive, neutral, negative, urgent.
 - "language": ISO 639-1 code of the email.
 - "is_phishing": true only if the email shows clear signs of phishing/scam.
+- "facts": 0-3 short, self-contained facts worth remembering for months (who someone is and their role, agreements, commitments, deadlines, project names), written in ${language} with full names, e.g. "Ana Novak is the user's PhD student". Use [] for newsletters, notifications, promotions and routine mail — usually [].
 Output JSON only.`,
     messages: [{ role: 'user', content: `${senderInfo}\n\n${message}` }],
   };

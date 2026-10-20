@@ -110,7 +110,9 @@ const LANGS = ['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian',
 function Composer({ id, init, minimized }) {
   const accounts = store.use((s) => s.accounts);
   const settings = store.use((s) => s.settings);
-  const [accountId, setAccountId] = useState(init.accountId || settings.mail.defaultAccountId || accounts[0]?.id);
+  const space = store.get().space;
+  const inSpace = accounts.filter((a) => !space || !a.space || a.space === space);
+  const [accountId, setAccountId] = useState(init.accountId || (inSpace.some((a) => a.id === settings.mail.defaultAccountId) ? settings.mail.defaultAccountId : inSpace[0]?.id) || accounts[0]?.id);
   const account = accounts.find((a) => a.id === Number(accountId)) || accounts[0];
   const [to, setTo] = useState(init.to?.map((a) => (typeof a === 'string' ? parseAddr(a) : a)).filter(Boolean) || []);
   const [cc, setCc] = useState(init.cc?.map((a) => (typeof a === 'string' ? parseAddr(a) : a)).filter(Boolean) || []);

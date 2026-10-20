@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
-import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, Layers } from 'lucide-react';
 import { api, connectEvents, onEvent } from './api.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
-import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings } from './data.js';
-import { Toasts } from './components/common.jsx';
+import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace } from './data.js';
+import { Toasts, useMenu } from './components/common.jsx';
 import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
 import MailView from './mail/MailView.jsx';
@@ -26,6 +26,7 @@ export default function App() {
       setStatus(st);
       if (st.user) {
         await loadMe();
+        await loadSpaces().catch(() => {});
         await Promise.all([loadFolders(), loadAccounts(), loadLabels(), loadProviders()]);
         connectEvents();
       }
@@ -75,6 +76,7 @@ function Shell() {
         case 'mail:sendError': toast(`Sending failed: ${e.payload.error}`, { kind: 'error', duration: 10000 }); reload(); break;
         case 'outbox:changed': case 'folders:changed': case 'folder:synced': case 'mail:changed': case 'mail:unsnoozed': reload(); break;
         case 'sync:state': if (['idle', 'error'].includes(e.payload.state)) loadAccounts(); reload(); break;
+        case 'spaces:changed': loadSpaces().catch(() => {}); loadAccounts(); reload(); break;
         default: break;
       }
     });
@@ -103,6 +105,7 @@ function Shell() {
     ['tasks', CheckSquare, 'Tasks'], ['assistant', Sparkles, 'Assistant'],
   ];
   const dark = document.documentElement.dataset.theme === 'dark';
+  const space = store.use((s) => s.space);
   return (
     <div className="app">
       <nav className="rail">
@@ -113,11 +116,13 @@ function Shell() {
           </button>
         ))}
         <div className="spacer" />
+        <SpaceSwitcher />
         <button title="Sync now" aria-label="Sync now" onClick={() => api.post('/api/sync').then(() => toast('Syncing…'))}><RefreshCw size={19} /></button>
         <button title="Toggle theme" aria-label="Toggle theme" onClick={() => saveSettings({ ui: { theme: dark ? 'light' : 'dark' } })}>{dark ? <Sun size={19} /> : <Moon size={19} />}</button>
         <button className={section === 'settings' ? 'active' : ''} title="Settings" aria-label="Settings" onClick={() => navigate('#/settings')}><Settings size={21} /></button>
       </nav>
-      <main className="main">
+      {/* Remount views when the space changes so every list reloads in the new scope. */}
+      <main className="main" key={space}>
         {section === 'mail' && <MailView route={route} />}
         {section === 'calendar' && <CalendarView route={route} />}
         {section === 'contacts' && <ContactsView route={route} />}
@@ -129,6 +134,23 @@ function Shell() {
       <Toasts />
     </div>
   );
+}
+
+/** Rail button for choosing the active space (only shown once spaces are defined). */
+function SpaceSwitcher() {
+  const spaces = store.use((s) => s.spaces);
+  const space = store.use((s) => s.space);
+  const [openMenu, menuNode] = useMenu();
+  if (!spaces.length) return null;
+  const items = [{ section: 'Show' }, { label: `All spaces${!space ? ' ✓' : ''}`, onClick: () => setSpace('') },
+    ...spaces.map((s) => ({ label: `${s}${space === s ? ' ✓' : ''}`, onClick: () => setSpace(s) })), 'sep',
+    { label: 'Manage spaces…', icon: Settings, onClick: () => navigate('#/settings/spaces') }];
+  return <>
+    <button className={`space-btn ${space ? 'active' : ''}`} title={space ? `Space: ${space}` : 'All spaces'} aria-label="Switch space" onClick={(e) => openMenu(e, items)}>
+      {space ? <span className="space-initial">{space.slice(0, 2)}</span> : <Layers size={19} />}
+    </button>
+    {menuNode}
+  </>;
 }
 
 export function parseMailto(url) {

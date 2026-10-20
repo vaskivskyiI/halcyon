@@ -1,6 +1,25 @@
 // Shared data loaders kept in the global store.
-import { api } from './api.js';
+import { api, setApiSpace } from './api.js';
 import { store } from './store.js';
+
+// The chosen space is a per-device choice (a work laptop can stay in "Work").
+const SPACE_KEY = 'halcyon.space';
+const readSpace = () => { try { return localStorage.getItem(SPACE_KEY) || ''; } catch { return ''; } };
+setApiSpace(readSpace());
+store.set({ space: readSpace() });
+
+export async function loadSpaces() {
+  const spaces = (await api.get('/api/spaces')).spaces;
+  store.set({ spaces });
+  if (store.get().space && !spaces.includes(store.get().space)) setSpace('');
+  return spaces;
+}
+export function setSpace(space) {
+  try { if (space) localStorage.setItem(SPACE_KEY, space); else localStorage.removeItem(SPACE_KEY); } catch { /* private mode */ }
+  setApiSpace(space);
+  store.set({ space });
+  loadFolders();
+}
 
 export async function loadMe() {
   const me = await api.get('/api/me');

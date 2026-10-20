@@ -17,24 +17,36 @@ export function registerHandler(type, fn) { handlers[type] = fn; }
 export function enqueue(userId, type, refId, priority = 50, { delayMs = 0, force = false } = {}) {
   const ref = String(refId);
   const existing = get('SELECT id, status FROM ai_jobs WHERE user_id = ? AND type = ? AND ref_id = ?', userId, type, ref);
+  let queued = true;
   if (existing) {
     if (force && existing.status !== 'running') {
       run("UPDATE ai_jobs SET status = 'queued', attempts = 0, error = NULL, priority = ?, run_after = ?, updated_at = ? WHERE id = ?", priority, now() + delayMs, now(), existing.id);
     } else if (existing.status === 'queued') {
       run('UPDATE ai_jobs SET priority = MAX(priority, ?) WHERE id = ?', priority, existing.id);
-    }
+    } else queued = existing.status === 'running';
   } else {
     run('INSERT INTO ai_jobs (user_id, type, ref_id, priority, run_after, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', userId, type, ref, priority, now() + delayMs, now(), now());
   }
+  // Keep the message's visible state truthful: 'pending' only while a job will actually run.
+  if (queued && type === 'analyze') run("UPDATE messages SET ai_status = 'pending' WHERE id = ? AND ai_status != 'done'", Number(ref));
   kick();
+}
+
+/** Queues (re)indexing of one memory item: kind message | thread | event | contact | fact. */
+export function queueMemory(userId, kind, ref, priority = 5) {
+  const s = getSettings(userId).ai;
+  if (!s.enabled || !s.embeddings) return;
+  if (kind === 'message') enqueue(userId, 'embed', ref, priority, { force: true });
+  else enqueue(userId, 'memory', `${kind}:${ref}`, kind === 'fact' ? Math.max(priority, 20) : priority, { force: true });
 }
 
 export function kick() { if (!timer) timer = setTimeout(tick, 50); }
 
 async function runJob(job) {
+  // Atomic claim: an embed batch may already have taken this job since the tick's SELECT.
+  if (!run("UPDATE ai_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ? AND status = 'queued'", now(), job.id).changes) return;
   running++;
   perUser.set(job.user_id, (perUser.get(job.user_id) || 0) + 1);
-  run("UPDATE ai_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?", now(), job.id);
   try {
     const h = handlers[job.type];
     if (!h) throw new Error(`No handler for ${job.type}`);
@@ -44,6 +56,7 @@ async function runJob(job) {
     if (e.code === 'NO_PROVIDER' || e.code === 'AI_DISABLED') {
       // Parked until the user configures a provider (see resumeWaiting).
       run("UPDATE ai_jobs SET status = 'waiting', error = ?, attempts = 0, updated_at = ? WHERE id = ?", e.message, now(), job.id);
+      if (job.type === 'analyze') run("UPDATE messages SET ai_status = 'waiting' WHERE id = ? AND ai_status != 'done'", Number(job.ref_id));
     } else if (e.code === 'SKIP') {
       run("UPDATE ai_jobs SET status = 'done', error = ?, updated_at = ? WHERE id = ?", e.message, now(), job.id);
     } else {
@@ -77,7 +90,9 @@ function tick() {
 }
 
 export function resumeWaiting(userId) {
-  run("UPDATE ai_jobs SET status = 'queued', run_after = 0 WHERE user_id = ? AND status IN ('waiting', 'failed')", userId);
+  run(`UPDATE messages SET ai_status = 'pending' WHERE user_id = ? AND ai_status IN ('waiting', 'failed') AND CAST(id AS TEXT) IN
+    (SELECT ref_id FROM ai_jobs WHERE user_id = ? AND type = 'analyze' AND status IN ('waiting', 'failed'))`, userId, userId);
+  run("UPDATE ai_jobs SET status = 'queued', attempts = 0, run_after = 0 WHERE user_id = ? AND status IN ('waiting', 'failed')", userId);
   kick();
 }
 
@@ -90,7 +105,7 @@ export function startQueue() {
 
 export function queueStats(userId) {
   const rows = all('SELECT type, status, COUNT(*) AS n FROM ai_jobs WHERE user_id = ? GROUP BY type, status', userId);
-  const lastError = get("SELECT error, updated_at FROM ai_jobs WHERE user_id = ? AND error IS NOT NULL AND status != 'done' ORDER BY updated_at DESC LIMIT 1", userId);
+  const lastError = get("SELECT type, error, updated_at FROM ai_jobs WHERE user_id = ? AND error IS NOT NULL AND status != 'done' ORDER BY updated_at DESC LIMIT 1", userId);
   return { rows, lastError, running };
 }
 

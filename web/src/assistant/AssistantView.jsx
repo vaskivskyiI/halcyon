@@ -53,15 +53,16 @@ function Brief() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const user = store.use((s) => s.user);
+  const space = store.use((s) => s.space);
   const load = async (refresh) => {
     setBusy(true); setErr(null);
     try { setBrief(await api.get(`/api/ai/brief${refresh ? '?refresh=1' : ''}`)); } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
-  useEffect(() => { load(false); return onEvent((e) => e.type === 'ai:brief' && load(false)); }, []);
+  useEffect(() => { load(false); return onEvent((e) => e.type === 'ai:brief' && (e.payload.space || '') === space && load(false)); }, []);
   const hour = new Date().getHours();
   return (
     <div className="chat"><div className="chat-scroll"><div className="brief" style={{ width: '100%' }}>
-      <div className="row"><h2 className="grow" style={{ margin: 0 }}>{hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'}, {user.name?.split(' ')[0]}</h2>
+      <div className="row"><h2 className="grow" style={{ margin: 0 }}>{hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'}, {user.name?.split(' ')[0]}{space && <span className="chip" style={{ marginLeft: 10, verticalAlign: 'middle' }}>{space}</span>}</h2>
         <button className="btn" onClick={() => load(true)} disabled={busy}>{busy ? <Spinner size={14} /> : <RefreshCw size={15} />} Refresh</button></div>
       <div className="small faint" style={{ marginBottom: 16 }}>{brief ? `Prepared ${fmtListDate(brief.createdAt)} · ${brief.model || ''}` : 'Your daily brief is prepared in the background before your day starts.'}</div>
       {err && <div className="notice warn" style={{ margin: 0 }}>{err}</div>}
@@ -79,6 +80,7 @@ function Chat({ chatId, onCreated }) {
   const [busy, setBusy] = useState(false);
   const scroller = useRef();
   const ctl = useRef();
+  const space = store.use((s) => s.space);
   useEffect(() => {
     if (chatId) api.get(`/api/ai/chats/${chatId}`).then((c) => setMessages(c.messages)).catch(toastError);
     const pending = sessionStorage.getItem('halcyon.ask');
@@ -121,7 +123,7 @@ function Chat({ chatId, onCreated }) {
         ))}
       </div>
       <div className="chat-input">
-        <textarea className="input" rows={1} placeholder="Ask about your mail, schedule or contacts…" value={input} onChange={(e) => setInput(e.target.value)}
+        <textarea className="input" rows={1} placeholder={space ? `Ask about your ${space} mail, schedule or contacts… (or “remember that …”)` : 'Ask about your mail, schedule or contacts… (or “remember that …”)'} value={input} onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); } }} />
         {busy ? <button className="btn" onClick={() => ctl.current?.abort()}><Spinner size={14} /> Stop</button> : <button className="btn primary" onClick={() => ask()} disabled={!input.trim()}><Send size={15} /></button>}
       </div>

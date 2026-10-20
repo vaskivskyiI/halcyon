@@ -58,6 +58,8 @@ and going further on AI, privacy and self-hosting.
   - **daily brief** generated before your day starts (important mail, awaiting replies, schedule, tasks)
 - **On demand** (streamed token by token): write a new email from a description, draft a reply with an intent ("accept, propose Thursday"), rewrite (improve, fix grammar, shorter, longer, formal, friendly, confident, bullets), translate a message or your draft, extract an event from any email
 - **Assistant chat** over your mail, calendar, contacts and tasks with retrieval (hybrid keyword + semantic) and clickable citations; finds free time
+- **AI memory**: long emails are indexed passage by passage, plus conversation summaries, events, contacts and durable facts (learned from mail or told with "remember that …"); reviewable and deletable in Settings → AI → Memory
+- **Spaces** (e.g. Work / Private): accounts, calendars and address books are assigned to a space; mail, search, calendar, contacts, the daily brief and the assistant can work on one space or on everything
 - Personalisation: "about me" context (improves prioritisation), writing style, reply language; VIP contacts boost priority
 - Providers: Ollama, OpenAI, Anthropic, Google Gemini, OpenAI-compatible (LM Studio, vLLM, llama.cpp, LocalAI, Groq, Mistral, OpenRouter, DeepSeek); per-task routing; model listing; connection test; Ollama model pull
 - Privacy mode (local/LAN providers only); per-model usage, token and latency statistics; re-analyse / rebuild index

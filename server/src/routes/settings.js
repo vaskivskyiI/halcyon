@@ -1,6 +1,7 @@
 import { requireUser, publicUser } from '../auth.js';
 import { getSettings, saveSettings } from '../settings.js';
 import { resumeWaiting } from '../ai/queue.js';
+import { backfillAnalysis } from '../mail/pipeline.js';
 import { oauthAvailable } from '../mail/oauth.js';
 import { config } from '../config.js';
 
@@ -10,7 +11,7 @@ export default async function settingsRoutes(app) {
   }));
   app.patch('/api/settings', { preHandler: requireUser }, async (req) => {
     const s = saveSettings(req.user.id, req.body || {});
-    if (req.body?.ai) resumeWaiting(req.user.id);
+    if (req.body?.ai) { resumeWaiting(req.user.id); backfillAnalysis(req.user.id); }
     return s;
   });
 }

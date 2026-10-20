@@ -8,20 +8,27 @@
   label.opt small { display: block; color: #5b6474; }
   input[type=url] { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; border: 1px solid #d0d5dd; border-radius: 8px; margin-top: 8px; }
   button { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; float: right; }
+  .warn { color: #92400e; font-size: 12px; margin-top: 6px; }
+  .note { font-size: 12px; color: #5b6474; clear: both; padding-top: 14px; }
   .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
 </style></head>
 <body>
   <h2>Connection</h2>
-  <p>Run Halcyon entirely on this PC, or connect to a Halcyon server (e.g. on your Ubuntu server) to share mail and AI processing across devices.</p>
+  <p>Choose where mail is synced and analysed by AI. Only one place does the work, so nothing is analysed twice.</p>
   <div id="err" class="err" hidden></div>
-  <label class="opt"><input type="radio" name="mode" value="local"><span><b>On this computer</b><small>Mail, calendar and AI jobs run locally. Data is stored in your user profile.</small></span></label>
-  <label class="opt"><input type="radio" name="mode" value="remote"><span><b>Halcyon server</b><small>Use a self-hosted Halcyon server. AI processing happens on the server, even while this PC is off.</small>
-    <input type="url" id="url" placeholder="https://mail.example.com"></span></label>
+  <label class="opt"><input type="radio" name="mode" value="local"><span><b>This PC — local AI</b><small>Mail, calendar and AI run on this computer, e.g. on the NPU of a Surface / Copilot+ PC via Foundry Local, or with Ollama. Works offline; data stays in your user profile.</small></span></label>
+  <label class="opt"><input type="radio" name="mode" value="remote"><span><b>Halcyon server</b><small>Use your self-hosted Halcyon server. AI runs once on the server, even while this PC is off; this PC runs no background AI.</small>
+    <input type="url" id="url" placeholder="https://mail.example.com"><div id="insecure" class="warn" hidden>Plain http: passwords and mail would cross the network unencrypted. Use https, or http only via VPN/LAN.</div></span></label>
   <button id="save">Save & restart</button>
+  <div class="note">Accounts are not shared between the two modes. Add a mail account in one of them only — an account added to both would be synced and analysed twice.</div>
 <script>
   const q = new URLSearchParams(location.search);
   document.querySelector(`input[value=${q.get('mode') || 'local'}]`).checked = true;
-  document.getElementById('url').value = q.get('url') || '';
+  const urlInput = document.getElementById('url');
+  urlInput.value = q.get('url') || '';
+  const lan = /^http:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^/:]+\.(lan|local|internal)(:|\/|$))/i;
+  const checkUrl = () => { document.getElementById('insecure').hidden = !(/^http:/i.test(urlInput.value) && !lan.test(urlInput.value)); };
+  urlInput.oninput = checkUrl; checkUrl();
   if (q.get('error')) { const e = document.getElementById('err'); e.hidden = false; e.textContent = q.get('error'); }
   document.getElementById('save').onclick = () => {
     const mode = document.querySelector('input[name=mode]:checked').value;

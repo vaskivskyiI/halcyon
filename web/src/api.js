@@ -1,6 +1,11 @@
 // REST client, NDJSON streaming for AI responses, and the real-time event socket.
 const base = (window.HALCYON_SERVER || '').replace(/\/$/, '');
 
+// The active space (e.g. "Work") travels with every request; the server scopes lists, search and the assistant by it.
+let activeSpace = '';
+export const setApiSpace = (s) => { activeSpace = s || ''; };
+const spaceHeader = () => (activeSpace ? { 'x-halcyon-space': encodeURIComponent(activeSpace) } : {});
+
 export class ApiError extends Error {
   constructor(message, status, code) { super(message); this.status = status; this.code = code; }
 }
@@ -8,7 +13,7 @@ export class ApiError extends Error {
 async function request(method, url, body) {
   const r = await fetch(base + url, {
     method, credentials: 'include',
-    headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+    headers: { ...spaceHeader(), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const ct = r.headers.get('content-type') || '';
@@ -30,7 +35,7 @@ export const api = {
 
 /** Streams an NDJSON AI endpoint. onToken receives text deltas; resolves with the final result. */
 export async function stream(url, body, { onToken, signal } = {}) {
-  const r = await fetch(base + url, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+  const r = await fetch(base + url, { method: 'POST', credentials: 'include', headers: { ...spaceHeader(), 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).error; } catch { /* ignore */ }

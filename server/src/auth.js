@@ -28,7 +28,8 @@ function createSession(reply, userId, ua) {
 const isLoopback = (ip) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip);
 
 export function userFromRequest(req) {
-  const token = req.cookies?.[COOKIE] || (req.headers.authorization || '').replace(/^Bearer /, '') || req.query?.token;
+  // Never from the query string: URLs end up in proxy logs, browser history and Referer headers.
+  const token = req.cookies?.[COOKIE] || (req.headers.authorization || '').replace(/^Bearer /, '');
   if (token) {
     const s = get('SELECT * FROM sessions WHERE token = ?', token);
     if (s && s.expires_at > now()) return get('SELECT * FROM users WHERE id = ?', s.user_id);

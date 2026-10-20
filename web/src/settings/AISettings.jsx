@@ -17,6 +17,7 @@ const PRESETS = [
   { key: 'groq', type: 'openai-compatible', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', defaultModel: 'llama-3.3-70b-versatile', embedModel: '' },
   { key: 'openrouter', type: 'openai-compatible', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'meta-llama/llama-3.3-70b-instruct', embedModel: '' },
   { key: 'deepseek', type: 'openai-compatible', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat', embedModel: '' },
+  { key: 'foundry', type: 'openai-compatible', label: 'Foundry Local (Windows NPU / GPU)', baseUrl: 'http://127.0.0.1:5273/v1', defaultModel: '', embedModel: '' },
   { key: 'lmstudio', type: 'openai-compatible', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1', defaultModel: '', embedModel: '' },
   { key: 'vllm', type: 'openai-compatible', label: 'vLLM / llama.cpp / LocalAI', baseUrl: 'http://localhost:8000/v1', defaultModel: '', embedModel: '' },
   { key: 'custom', type: 'openai-compatible', label: 'Other OpenAI-compatible endpoint', baseUrl: '', defaultModel: '', embedModel: '' },
@@ -52,6 +53,7 @@ export default function AISettings() {
           <div className="grow" style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>{p.name} {!p.enabled && <span className="chip">disabled</span>}</div>
             <div className="small muted truncate">{p.type} · {p.baseUrl} · chat: {p.defaultModel || '—'}{p.embedModel ? ` · embeddings: ${p.embedModel}` : ''}</div>
+            {p.insecure && <div className="small error-text">Unencrypted connection over the internet: email content sent for analysis can be read in transit. Use https (e.g. a reverse proxy with TLS) or a VPN/LAN address.</div>}
           </div>
           <button className="icon-btn" onClick={() => setEditing(p)}><Pencil size={16} /></button>
           <button className="icon-btn" onClick={async () => { if (confirm(`Remove ${p.name}?`)) { await api.del(`/api/ai/providers/${p.id}`); loadProviders(); } }}><Trash2 size={16} /></button>
@@ -85,6 +87,8 @@ export default function AISettings() {
       <label className="field" style={{ maxWidth: 320 }}>Reply language<select className="input" value={ai.replyLanguage} onChange={(e) => setAi({ replyLanguage: e.target.value })}>
         <option value="auto">Same as the email</option>{['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian', 'Croatian', 'Serbian', 'Ukrainian', 'Polish'].map((l) => <option key={l}>{l}</option>)}</select></label>
 
+      <Memory enabled={ai.embeddings} />
+
       <h3>Status</h3>
       {status && <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div className="row small" style={{ flexWrap: 'wrap', gap: 16 }}>
@@ -93,8 +97,9 @@ export default function AISettings() {
           <span><b>{q(null, 'queued') + q(null, 'running')}</b> jobs pending</span>
           {q(null, 'waiting') > 0 && <span className="error-text"><b>{q(null, 'waiting')}</b> waiting for a provider</span>}
           {q(null, 'failed') > 0 && <span className="error-text"><b>{q(null, 'failed')}</b> failed</span>}
+          {status.approvals > 0 && <a href="#/mail/unified"><b>{status.approvals}</b> AI rule actions awaiting your approval</a>}
         </div>
-        {status.queue.lastError && <div className="small error-text">Last error: {status.queue.lastError.error}</div>}
+        {status.queue.lastError && <div className="small error-text">Last error ({status.queue.lastError.type}): {status.queue.lastError.error}</div>}
         <div className="row">
           <button className="btn sm" onClick={async () => { const r = await api.post('/api/ai/reprocess', { what: 'analyze', days: 14 }); toast(`Queued ${r.queued} emails`); }}><RefreshCw size={13} /> Re-analyse last 14 days</button>
           <button className="btn sm" onClick={async () => { const r = await api.post('/api/ai/reprocess', { what: 'embed', days: 365 }); toast(`Indexing ${r.queued} emails`); }}><RefreshCw size={13} /> Rebuild search index</button>
@@ -105,6 +110,49 @@ export default function AISettings() {
       {editing && <ProviderEditor provider={editing.id ? editing : null} onClose={() => setEditing(null)} />}
     </div>
   );
+}
+
+const KIND_LABELS = { message: 'email chunks', thread: 'conversation summaries', event: 'events', contact: 'contacts', fact: 'facts' };
+
+/** What the AI remembers: index statistics and the facts it learned or was told, with add / delete / clear. */
+function Memory({ enabled }) {
+  const [mem, setMem] = useState(null);
+  const [text, setText] = useState('');
+  const space = store.use((s) => s.space);
+  const load = () => api.get('/api/ai/memory').then(setMem).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const add = async () => { if (!text.trim()) return; try { await api.post('/api/ai/memory/facts', { text }); setText(''); setTimeout(load, 300); } catch (e) { toastError(e); } };
+  const del = async (id) => { await api.del(`/api/ai/memory/facts/${id}`).catch(toastError); load(); };
+  const clear = async (what) => {
+    if (!confirm(what === 'all' ? 'Delete all facts and the whole semantic index? The index is rebuilt in the background from your mail.' : 'Forget all facts (learned and the ones you told the assistant)?')) return;
+    await api.del(`/api/ai/memory?what=${what}`).catch(toastError); load();
+  };
+  const byKind = {};
+  for (const r of mem?.stats.rows || []) (byKind[r.kind] ||= { items: 0, chunks: 0 }), byKind[r.kind].items += r.items, byKind[r.kind].chunks += r.n;
+  return <>
+    <h3>Memory</h3>
+    <div className="small muted" style={{ marginTop: -6 }}>For search and the assistant, Halcyon keeps a semantic memory of your emails (split into passages), conversation summaries, events, contacts and short facts.
+      It is stored only in this Halcyon database, per user, and respects spaces{space ? ` — showing facts visible in “${space}”` : ''}. {!enabled && <b>Turn on “Semantic search index” above to build it.</b>}</div>
+    {mem && <div className="row small" style={{ flexWrap: 'wrap', gap: 14 }}>
+      {Object.entries(KIND_LABELS).map(([k, label]) => <span key={k}><b>{byKind[k]?.items || 0}</b> {label}{k === 'message' && byKind[k] ? <span className="faint"> ({byKind[k].chunks} passages)</span> : ''}</span>)}
+    </div>}
+    <div className="row">
+      <input className="input" placeholder={`Tell the assistant something to remember${space ? ` in ${space}` : ''}, e.g. “My office is room 4.12”`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} />
+      <button className="btn" onClick={add} disabled={!text.trim()}><Plus size={14} /> Remember</button>
+    </div>
+    {mem?.facts.length > 0 && <div className="card" style={{ padding: 6, maxHeight: 320, overflow: 'auto' }}>
+      {mem.facts.map((f) => (
+        <div key={f.id} className="row small" style={{ padding: '5px 8px', borderBottom: '1px solid var(--border)' }}>
+          <span className="grow">{f.text}
+            <span className="faint"> · {f.origin === 'user' ? 'told by you' : <>learned from {f.sourceMessageId ? <a href={`#/mail/unified/${f.sourceMessageId}`}>{f.sourceSubject || 'an email'}</a> : 'an email'}</>}{f.space ? ` · ${f.space}` : ''}</span></span>
+          <button className="icon-btn" style={{ width: 24, height: 24 }} title="Forget this" onClick={() => del(f.id)}><Trash2 size={13} /></button>
+        </div>))}
+    </div>}
+    <div className="row">
+      <button className="btn sm" onClick={() => clear('facts')}><Trash2 size={13} /> Forget all facts</button>
+      <button className="btn sm" onClick={() => clear('all')}><Trash2 size={13} /> Clear all memory</button>
+    </div>
+  </>;
 }
 
 function RouteRow({ task, label, hint, providers, route, onChange }) {
@@ -134,6 +182,9 @@ function ProviderEditor({ provider, onClose }) {
   const [test, setTest] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pull, setPull] = useState('');
+  const [detected, setDetected] = useState(null);
+  const detect = async () => { setBusy(true); try { setDetected(await api.get('/api/ai/local-detect')); } catch (e) { toastError(e); } finally { setBusy(false); } };
+  const useDetected = (d) => { setPreset(PRESETS.some((x) => x.key === d.key) ? d.key : 'custom'); setF((x) => ({ ...x, name: d.label, type: d.type, baseUrl: d.baseUrl, defaultModel: d.models.find((m) => !/embed/i.test(m)) || '', embedModel: d.models.find((m) => /embed/i.test(m)) || '' })); setModels(d.models.map((id) => ({ id, embedding: /embed/i.test(id) }))); setTest(null); };
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const choose = (key) => { const p = PRESETS.find((x) => x.key === key); setPreset(key); setF((x) => ({ ...x, name: p.label, type: p.type, baseUrl: p.baseUrl, defaultModel: p.defaultModel, embedModel: p.embedModel })); setModels([]); setTest(null); };
   const req = () => ({ id: provider?.id, type: f.type, baseUrl: f.baseUrl, apiKey: f.apiKey || undefined, defaultModel: f.defaultModel, embedModel: f.embedModel });
@@ -152,6 +203,9 @@ function ProviderEditor({ provider, onClose }) {
     <Modal title={provider ? `Edit ${provider.name}` : 'Add AI provider'} onClose={onClose} wide footer={<>
       <button className="btn" onClick={runTest} disabled={busy}>{busy && <Spinner size={14} />} Test</button><span className="grow" />
       <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={save}>Save</button></>}>
+      {!provider && <div className="row" style={{ flexWrap: 'wrap' }}><button className="btn sm" onClick={detect} disabled={busy}><Server size={13} /> Detect AI on this machine</button>
+        {detected && !detected.length && <span className="small faint">Nothing found. Start Foundry Local (<code>foundry model run phi-4-mini</code>), Ollama or LM Studio and try again.</span>}
+        {detected?.map((d) => <button key={d.key} className="btn sm ai" onClick={() => useDetected(d)}>{d.label} · {d.models.length} models</button>)}</div>}
       {!provider && <label className="field">Provider<select className="input" value={preset} onChange={(e) => choose(e.target.value)}>{PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</select></label>}
       <div className="form-grid">
         <label className="field">Name<input className="input" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
@@ -164,6 +218,7 @@ function ProviderEditor({ provider, onClose }) {
       </div>
       <div className="row"><button className="btn sm" onClick={fetchModels} disabled={busy}><RefreshCw size={13} /> Load available models</button>{models.length > 0 && <span className="small faint">{models.length} models found</span>}</div>
       {f.type === 'ollama' && provider && <div className="row"><input className="input" placeholder="Pull a model, e.g. qwen2.5:7b" value={pull} onChange={(e) => setPull(e.target.value)} /><button className="btn sm" disabled={!pull} onClick={async () => { toast(`Pulling ${pull}… this can take a while`); try { await api.post(`/api/ai/providers/${provider.id}/pull`, { model: pull }); toast(`${pull} ready`); fetchModels(); } catch (e) { toastError(e); } }}><Download size={13} /> Pull</button></div>}
+      {preset === 'foundry' && <div className="small faint"><Lock size={12} /> Runs on this PC's NPU/GPU via Microsoft Foundry Local — email content stays on the device. Install with <code>winget install Microsoft.FoundryLocal</code>, then <code>foundry model run phi-4-mini</code> (it picks the NPU build when available). The port can change: use “Detect AI on this machine”.</div>}
       {f.type === 'ollama' && <div className="small faint"><Lock size={12} /> Runs on your own hardware — email content never leaves your network. Recommended: <code>llama3.1:8b</code>, <code>qwen2.5:7b</code> or <code>gemma2:9b</code> for analysis and <code>nomic-embed-text</code> for search.</div>}
       {test && <div className="card" style={{ padding: 10 }}>
         <div className="row small">{test.chat?.ok ? <CheckCircle2 size={15} color="var(--success)" /> : <XCircle size={15} color="var(--danger)" />}<b>Chat</b>{test.chat?.ok ? `“${test.chat.reply}” in ${test.chat.ms} ms` : <span className="error-text">{test.chat?.error}</span>}</div>

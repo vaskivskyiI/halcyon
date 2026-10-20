@@ -27,14 +27,18 @@ npm run build                    # web UI → web/dist (server serves it)
 npm start                        # server on :8080
 npm run dev                      # server --watch + Vite on :5173 (proxy /api)
 sudo ./server/test/setup-dovecot.sh && ./server/test/setup-radicale.sh
-TEST_DAV_URL=http://127.0.0.1:5232/alice/ npm test     # 32 tests (unit + e2e IMAP/SMTP + DAV)
+TEST_DAV_URL=http://127.0.0.1:5232/alice/ npm test     # unit + ai (no IMAP needed) + e2e IMAP/SMTP + DAV
+./deploy/podman-pod.sh up --with-ollama                # server as a podman pod
 npm run dist:win                 # Windows installer (on Linux needs wine64 + wine32:i386)
 ```
 
 ## Conventions
 - Match surrounding style: 2-space indent, single quotes, semicolons, compact functions, sparse comments that explain *why*.
 - DB access through `db/index.js` helpers (`get/all/run/tx/update`); timestamps are epoch ms; JSON columns end with `_json`.
-- Every user-scoped query must filter by `user_id` (multi-user server).
+- Every user-scoped query must filter by `user_id` (multi-user server). Lists, search and AI retrieval must also honour the
+  active space: `const sc = scope(userId, reqSpace(req))` and `inIds(column, sc?.accountIds | calendarIds | bookIds)` (`spaces.js`).
+- New content the assistant should know about gets indexed with `queueMemory(userId, kind, ref)` (`ai/queue.js`).
+- AI must never delete, spam or send/forward mail by itself: such actions from AI-driven paths go through `ai_approvals` (see `rules.js`).
 - Mail actions: apply locally first, then `queueOp(accountId, op, payload)`; never talk to IMAP from routes.
 - Long AI work goes through `enqueue(userId, type, refId, priority)` + `registerHandler`; push results with `notify(userId, type, payload)`.
 - Streaming AI endpoints use `streamNdjson` (server) / `stream()` (web `api.js`).

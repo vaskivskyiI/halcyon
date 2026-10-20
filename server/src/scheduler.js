@@ -6,6 +6,8 @@ import { listRange } from './calendar/repo.js';
 import { syncCalDav } from './calendar/caldav.js';
 import { syncCardDav } from './contacts/carddav.js';
 import { enqueue } from './ai/queue.js';
+import { backfillAnalysis, purgeMemory } from './mail/pipeline.js';
+import { listSpaces } from './spaces.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
@@ -61,7 +63,10 @@ function scheduleBriefs() {
     // Generate ahead of brief time (30 min earlier) so it is ready when the user opens the app.
     const [h, m] = s.ai.briefTime.split(':').map(Number);
     const target = new Date(d); target.setHours(h, m - 30, 0, 0);
-    if (d >= target && !get('SELECT 1 AS x FROM briefs WHERE user_id = ? AND day = ?', u.id, day)) enqueue(u.id, 'brief', day, 60);
+    // One brief for everything and one per space (e.g. a Work-only brief).
+    for (const key of [day, ...listSpaces(u.id).map((sp) => `${day}@${sp}`)]) {
+      if (d >= target && !get('SELECT 1 AS x FROM briefs WHERE user_id = ? AND day = ?', u.id, key)) enqueue(u.id, 'brief', key, 60);
+    }
   }
   return hhmm;
 }
@@ -71,6 +76,11 @@ export function startScheduler() {
   setInterval(() => { try { wakeSnoozed(); checkReminders(); scheduleBriefs(); } catch (e) { log.error(e); } }, 30e3).unref();
   const davAll = () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); };
   setTimeout(davAll, 5e3).unref();
+  // Catch up on mail that was never queued for AI (e.g. arrived while AI was off); cheap when nothing is missing.
+  const backfillAll = () => { for (const u of all('SELECT id FROM users')) { try { backfillAnalysis(u.id); } catch (e) { log.error(e); } } };
+  setTimeout(backfillAll, 15e3).unref();
+  setInterval(backfillAll, 15 * 60e3).unref();
+  setInterval(() => { try { purgeMemory(); } catch (e) { log.error(e); } }, 3600e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
   // Clean up old reminder markers.
   setInterval(() => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000), 3600e3).unref();

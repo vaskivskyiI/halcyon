@@ -7,21 +7,26 @@ import { importIcsInto } from '../calendar/caldav.js';
 import { respondToInvitation, sendInvitations } from '../calendar/invites.js';
 import { notify } from '../util/events.js';
 import { syncDav } from '../scheduler.js';
+import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 
-const calOut = (c) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined });
+const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
+  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space });
 
 export default async function calendarRoutes(app) {
   app.addHook('preHandler', requireUser);
 
-  app.get('/api/calendars', async (req) => all('SELECT * FROM calendars WHERE user_id = ? ORDER BY is_default DESC, name', req.user.id).map(calOut));
+  app.get('/api/calendars', async (req) => {
+    const sc = scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
+    return all(`SELECT * FROM calendars WHERE user_id = ? AND ${inIds('id', sc?.calendarIds)} ORDER BY is_default DESC, name`, req.user.id).map((c) => calOut(c, spaces));
+  });
 
   app.post('/api/calendars', async (req) => {
-    const { name, color, url } = req.body || {};
-    // url → read-only ICS subscription (e.g. holidays, shared calendars).
-    const r = run('INSERT INTO calendars (user_id, name, color, source, url, readonly, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      req.user.id, name || 'Calendar', color || '#10b981', url ? 'subscription' : 'local', url || null, url ? 1 : 0, now());
+    const { name, color, url, space } = req.body || {};
+    // url → read-only ICS subscription (e.g. holidays, shared calendars). New calendars belong to the active space.
+    const r = run('INSERT INTO calendars (user_id, name, color, source, url, readonly, space, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      req.user.id, name || 'Calendar', color || '#10b981', url ? 'subscription' : 'local', url || null, url ? 1 : 0, cleanSpace(space ?? reqSpace(req)), now());
     if (url) await refreshSubscription(req.user.id, r.lastInsertRowid).catch(() => {});
-    return calOut(get('SELECT * FROM calendars WHERE id = ?', r.lastInsertRowid));
+    return calOut(get('SELECT * FROM calendars WHERE id = ?', r.lastInsertRowid), spaceMap(req.user.id));
   });
 
   app.patch('/api/calendars/:id', async (req, reply) => {
@@ -32,7 +37,7 @@ export default async function calendarRoutes(app) {
     run('UPDATE calendars SET name = COALESCE(?, name), color = COALESCE(?, color), enabled = COALESCE(?, enabled), is_default = COALESCE(?, is_default) WHERE id = ?',
       name ?? null, color ?? null, enabled === undefined ? null : (enabled ? 1 : 0), isDefault ? 1 : null, c.id);
     notify(req.user.id, 'calendar:changed', {});
-    return calOut(repo.userCalendar(req.user.id, c.id));
+    return calOut(repo.userCalendar(req.user.id, c.id), spaceMap(req.user.id));
   });
 
   app.delete('/api/calendars/:id', async (req, reply) => {
@@ -73,12 +78,16 @@ export default async function calendarRoutes(app) {
   app.get('/api/events', async (req) => {
     const from = Number(req.query.from) || Date.now() - 7 * 864e5;
     const to = Number(req.query.to) || from + 42 * 864e5;
-    return repo.listRange(req.user.id, from, to, req.query.calendars ? String(req.query.calendars).split(',').map(Number) : null);
+    const sc = scope(req.user.id, reqSpace(req));
+    let ids = req.query.calendars ? String(req.query.calendars).split(',').map(Number) : null;
+    if (sc) ids = (ids || sc.calendarIds).filter((id) => sc.calendarIds.includes(id));
+    return ids && !ids.length ? [] : repo.listRange(req.user.id, from, to, ids);
   });
 
   app.get('/api/events/search', async (req) => {
     const q = `%${req.query.q || ''}%`;
-    return all(`SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.deleted = 0 AND (e.title LIKE ? OR e.location LIKE ? OR e.description LIKE ?) ORDER BY e.start DESC LIMIT 50`, req.user.id, q, q, q).map(repo.serializeEvent);
+    const sc = scope(req.user.id, reqSpace(req));
+    return all(`SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} AND e.deleted = 0 AND (e.title LIKE ? OR e.location LIKE ? OR e.description LIKE ?) ORDER BY e.start DESC LIMIT 50`, req.user.id, q, q, q).map(repo.serializeEvent);
   });
 
   app.get('/api/events/:id', async (req, reply) => {

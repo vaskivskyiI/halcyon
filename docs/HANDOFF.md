@@ -32,7 +32,54 @@ Derived requirements / design decisions:
   `Halcyon-Setup-1.0.0.exe` (≈121 MB) built on Linux; packaged Windows server + SQLite + IMAP sync verified under Wine.
   The installer is a build output (not in git) — rebuild with `npm run dist:win` or the *Desktop builds* GitHub workflow.
 
+### 2026-10-20 session: AI safety, privacy, background analysis, podman, desktop modes
+- **AI may not delete/send on its own.** Rules whose conditions use AI output (category / priority / needsReply)
+  still run harmless actions (mark read, flag, label, move/archive), but `trash`, `spam`, `forward` and moves into
+  Trash/Junk become rows in `ai_approvals` (migration 2) that the user approves/dismisses in the mail list banner
+  (`GET/POST /api/ai/approvals`). Rationale: email content steers the model (prompt injection), so a crafted mail could
+  otherwise trigger a forward (exfiltration) or deletion. Non-AI rules and user-clicked actions are unchanged. The
+  assistant has no tools; AI drafts are only ever inserted into the composer. Covered by `server/test/ai.test.js`.
+- **Background analysis**: the queue itself worked (checked on a real desktop DB: 28/28 inbox mails analysed), but
+  the reader claimed "Analysis queued…" for mail that is never queued (sent, >30 days, other folders) — looked broken.
+  Now `messages.ai_status` ∈ pending | waiting (no provider) | failed | done | none (not scheduled) and the reader says
+  which. `backfillAnalysis()` (pipeline.js) queues eligible mail with no insight and no job — on start (+15 s), every
+  15 min, when a provider is added and when AI settings change. Job claiming is atomic (embed batches could
+  double-claim), batch-claimed jobs clear stale errors, "Analyze now" waits for a running background job instead of
+  analysing twice. iMIP REPLY/CANCEL processing moved from the AI handler to ingest (worked only with AI on).
+- **Privacy/security**: calendar CANCEL accepted only from the event organizer, REPLY only updates the sender's own
+  attendance (previously anyone could cancel meetings); session tokens no longer accepted in `?token=` (leak via logs/
+  history); global Content-Security-Policy (also applies to the srcdoc email iframe: no scripts, no remote fonts);
+  `cid:` images served with a sandbox CSP (scripted SVG); AI providers on plain http to non-LAN hosts are flagged
+  `insecure` and warned about in Settings → AI.
+- **Deploy**: `npm ci` ran node-gyp for better-sqlite3 (despite prebuilds) and failed without python/make → Dockerfile
+  and installer use `--ignore-scripts`. New `deploy/podman-pod.sh` (pod with Halcyon + optional Ollama, env file with
+  the secret, systemd unit generation). Not run here — no podman on the dev machine.
+- **Desktop**: two modes, exactly one does sync+AI: "This PC — local AI" (Foundry Local on the NPU / Ollama / LM Studio,
+  auto-detected via `GET /api/ai/local-detect`; the shell passes Foundry's dynamic port as `HALCYON_FOUNDRY_URL`) or
+  "Halcyon server" (no local server started; reachability checked before loading). Windows arm64 build
+  (`npm run dist:win-arm64`) for Snapdragon Surfaces. Not built/run on Windows in this session.
+
+### 2026-10-20 (later): AI memory and spaces
+- Requirement: efficient AI search/chat over email content; multi-user server; one user with several accounts (work,
+  private) must be able to use them together or separately — also for calendars and contacts.
+- Implemented `memory` + `facts` tables (migration 3, replaces `embeddings`), `ai/memory.js` (int8 in-RAM index per
+  active user, idle eviction, owner-key scoping), chunked email indexing, thread/event/contact/fact memory,
+  `spaces.js` + `/api/spaces`, `x-halcyon-space` header handled by mail/calendar/contacts/AI routes, per-space brief
+  and chats, "remember that …" in the assistant, Settings → Spaces and Settings → AI → Memory. Tests:
+  `server/test/memory.test.js` (scoping never crosses spaces or users, dedupe, deletion).
+- Also fixed: `index.html` was cached for 1 h (users kept an old UI after upgrades); the prepared-statement cache was
+  unbounded (dynamic SQL on a long-running multi-user server).
+- Decisions: unassigned items are *shared* (visible in every space) so a single local calendar keeps working; tasks are
+  not split by space (tasks created from mail follow that mail's space in brief/assistant); free/busy is computed over
+  all calendars. With a real embedding model the assistant ranks by relevance with a low score floor (0.1) because
+  models differ in their similarity baseline — check retrieval quality with nomic-embed-text on real mail.
+- Scale notes: brute-force int8 scan is fine to a few hundred thousand passages per user; beyond that add an ANN index
+  (roadmap item 8). Embedding volume grows ~2–3× vs. one vector per mail (≤ 6 passages per email).
+
 ## 3. Not verified yet (do these first on real infrastructure)
+0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
+   `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,
+   Foundry Local detection and the arm64 installer are untested on real hardware.
 1. Real AI models (Ollama, OpenAI, Anthropic, Gemini) — only protocol-level fakes + mock were used. Check JSON reliability of
    `analyzePrompt` with small local models (llama3.1:8b, qwen2.5:7b) and tune prompts/temperature.
 2. Google / Microsoft OAuth (needs app registration; redirect `<HALCYON_PUBLIC_URL>/api/oauth/callback`).
@@ -71,6 +118,7 @@ Derived requirements / design decisions:
 - `trustProxy` is restricted to loopback by default; `true` would allow spoofing `X-Forwarded-For` (bypassing single-user/loopback checks and login throttling).
 - Address parsing: plain `a@b.c` must be checked before `Name <addr>` (greedy regex bug).
 - Radicale reorders ICS properties — tests must not assume order.
+- `npm ci` without `--ignore-scripts` needs python3 + make for better-sqlite3 even though prebuilds are used.
 - Tests use an ephemeral SMTP port; node:test runs each file in its own process (config is read at import time).
 
 ## 7. Environment used for development/testing

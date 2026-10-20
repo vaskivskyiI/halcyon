@@ -44,7 +44,7 @@ rsync -a --delete --exclude node_modules --exclude .git --exclude 'desktop/out' 
 
 echo "==> Installing dependencies and building the web UI"
 cd "$APP"
-npm ci --no-audit --no-fund -w server -w web
+npm ci --no-audit --no-fund --ignore-scripts -w server -w web   # prebuilt sqlite, no compiler needed
 npm run build -w web
 npm prune --omit=dev -w server >/dev/null 2>&1 || true
 chown -R halcyon:halcyon "$DATA"

@@ -107,6 +107,9 @@ export function deleteMessages(ids) {
   if (!ids.length) return;
   db.transaction(() => {
     for (const id of ids) {
+      // The AI memory must not keep text of deleted mail (facts derived from it stay until the user removes them).
+      const uid = get('SELECT user_id FROM messages WHERE id = ?', id)?.user_id;
+      if (uid) run("DELETE FROM memory WHERE user_id = ? AND kind = 'message' AND ref_id = ?", uid, String(id));
       run('DELETE FROM messages_fts WHERE rowid = ?', id);
       run('DELETE FROM messages WHERE id = ?', id);
     }

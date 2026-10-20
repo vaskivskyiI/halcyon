@@ -20,7 +20,11 @@ for (let v = current; v < migrations.length; v++) {
 const cache = new Map();
 const stmt = (sql) => {
   let s = cache.get(sql);
-  if (!s) { s = db.prepare(sql); cache.set(sql, s); }
+  if (!s) {
+    // Scoped queries embed id lists, so the SQL text varies; keep the cache bounded on long-running servers.
+    if (cache.size > 1000) cache.clear();
+    s = db.prepare(sql); cache.set(sql, s);
+  }
   return s;
 };
 export const all = (sql, ...p) => stmt(sql).all(...p);

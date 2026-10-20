@@ -5,7 +5,9 @@ COPY package.json package-lock.json ./
 COPY server/package.json server/
 COPY web/package.json web/
 COPY desktop/package.json desktop/
-RUN npm ci --no-audit --no-fund -w server -w web
+# better-sqlite3 ships prebuilt binaries; skipping install scripts avoids a pointless node-gyp run that
+# needs python/make (absent in the slim image).
+RUN npm ci --no-audit --no-fund --ignore-scripts -w server -w web
 COPY server server
 COPY web web
 RUN npm run build -w web && npm prune --omit=dev -w server
