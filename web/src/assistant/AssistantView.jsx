@@ -87,7 +87,11 @@ function Brief() {
   const addTask = async (e) => {
     e.preventDefault();
     if (!newTask.trim()) return;
-    try { await api.post('/api/tasks', { title: newTask.trim() }); setNewTask(''); load(false); } catch (err2) { toastError(err2); }
+    try {
+      const t = await api.post('/api/tasks', { text: newTask.trim() });
+      if (t.due) toast(`Added “${t.title}” — due ${new Date(t.due).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
+      setNewTask(''); load(false);
+    } catch (err2) { toastError(err2); }
   };
   const hour = new Date().getHours();
   const live = brief?.live;
@@ -135,7 +139,7 @@ function Brief() {
             </div>))}
           <form className="brief-row" onSubmit={addTask}>
             <Plus size={15} className="faint" />
-            <input className="input grow" style={{ border: 0, background: 'transparent' }} placeholder="Add a task…" value={newTask} onChange={(e) => setNewTask(e.target.value)} />
+            <input className="input grow" style={{ border: 0, background: 'transparent' }} placeholder="Add a task… (“call Ana tomorrow at 10”)" value={newTask} onChange={(e) => setNewTask(e.target.value)} />
             {newTask.trim() && <button className="btn sm primary">Add</button>}
           </form>
         </div>

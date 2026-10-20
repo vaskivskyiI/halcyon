@@ -201,4 +201,14 @@ export const migrations = [
   ALTER TABLE ai_insights ADD COLUMN dismissed_at INTEGER;
   CREATE INDEX idx_ai_insights_topic ON ai_insights(topic);
   `,
+  // 6: drafts know their reply target and their copy in the IMAP Drafts folder; "needs reply" can be set by the
+  //    user (and then survives re-analysis); jobs can carry options (e.g. quiet analysis of old mail).
+  `
+  ALTER TABLE drafts ADD COLUMN in_reply_to INTEGER;
+  ALTER TABLE drafts ADD COLUMN server_msgid TEXT;
+  CREATE INDEX idx_drafts_reply ON drafts(user_id, in_reply_to);
+  ALTER TABLE ai_insights ADD COLUMN needs_reply_user INTEGER;
+  ALTER TABLE ai_jobs ADD COLUMN options_json TEXT;
+  UPDATE drafts SET in_reply_to = json_extract(payload_json, '$.inReplyToId');
+  `,
 ];

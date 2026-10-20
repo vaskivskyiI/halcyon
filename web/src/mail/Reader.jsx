@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -38,7 +38,7 @@ export default function Reader({ id, view }) {
         const t = await api.get(`/api/threads/${encodeURIComponent(m.threadId)}${images ? '?images=1' : ''}`);
         if (t.messages.length) data = t;
       }
-      setThread({ ...data, current: m });
+      setThread({ ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m });
       const last = data.messages[data.messages.length - 1];
       setExpanded(new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]));
     } catch (e) { toastError(e); setThread(null); } finally { setLoading(false); }
@@ -75,7 +75,27 @@ export default function Reader({ id, view }) {
     if (!action) return;
     mailAction(action, ids.length ? ids : [target.id], extra, { onDone: (undone) => { if (undone) load(); else if (['archive', 'trash', 'spam', 'move', 'snooze', 'delete'].includes(action)) navigate(`#/mail/${view}`); else load(); } });
   };
-  function reply(mode, msg = latest, extra = {}) { openComposer(replyPayload(mode, msg, store.get().accounts, extra)); }
+  // Reply / Reply all: continue an existing draft for that message instead of starting a second one.
+  async function reply(mode, msg = latest, extra = {}) {
+    if (mode !== 'forward' && !extra.aiIntent && thread?.related?.drafts?.some((d) => d.inReplyToId === msg.id)) {
+      const d = (await api.get(`/api/drafts?inReplyTo=${msg.id}`).catch(() => []))[0];
+      if (d) return openComposer({ ...d, draftId: d.id });
+    }
+    openComposer(replyPayload(mode, msg, store.get().accounts, extra));
+  }
+  const openDraft = async (draftId) => {
+    const d = (await api.get('/api/drafts').catch(() => [])).find((x) => x.id === draftId);
+    if (d) openComposer({ ...d, draftId: d.id });
+  };
+  const deleteDraft = async (draftId) => {
+    if (!confirm('Delete this draft?')) return;
+    await api.del(`/api/drafts/${draftId}`).catch(toastError);
+    load();
+  };
+  const toggleTask = async (t) => { await api.patch(`/api/tasks/${t.id}`, { done: !t.done }).catch(toastError); load(); };
+  const setNeedsReply = async (value) => {
+    try { await api.post('/api/messages/needs-reply', { ids: [latest.id], value }); toast(value ? 'Marked as needs reply' : 'Removed “needs reply”'); load(); } catch (e) { toastError(e); }
+  };
 
   const aiReply = async (intent) => {
     // Opens a reply composer that streams the AI draft into the body.
@@ -135,6 +155,7 @@ export default function Reader({ id, view }) {
     target.listUnsubscribe && { label: 'Unsubscribe', icon: BellOff, onClick: unsubscribe },
     'sep',
     { label: target.isRead ? 'Mark as unread' : 'Mark as read', icon: target.isRead ? MailIcon : MailOpen, onClick: () => act(target.isRead ? 'unread' : 'read') },
+    { label: latest.insight?.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply', icon: CornerUpLeft, onClick: () => setNeedsReply(!latest.insight?.needsReply) },
     settings.ai.enabled && { label: 'Mark as important', icon: ThumbsUp, hint: 'AI learns', onClick: () => feedback('important') },
     settings.ai.enabled && { label: 'Mark as not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => feedback('unimportant') },
     { label: 'Print', icon: Printer, onClick: () => printThread(msgs) },
@@ -172,10 +193,12 @@ export default function Reader({ id, view }) {
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
         </div>
 
+        <RelatedBar related={thread.related} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />
+
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
         {settings.ai.enabled && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
-          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
+          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
             setAiWorking(true);
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
@@ -210,7 +233,7 @@ const AI_STATUS_TEXT = {
 
 const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester }) {
+function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply }) {
   const [openMenu, menuNode] = useMenu();
   if (!ins && !summary) {
     return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
@@ -224,6 +247,8 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
           {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Change category (the AI learns from it)"
             onClick={(e) => openMenu(e, [{ section: 'Category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => onFeedback('category', c) }))])}>{ins.category} ▾</button>}
           {ins?.priority != null && <span className="chip" style={{ background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
+          {ins && <button className={`chip ${ins.needsReply ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={ins.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply'} onClick={() => onNeedsReply(!ins.needsReply)}>
+            <CornerUpLeft size={11} /> {ins.needsReply ? 'Needs reply ✕' : 'Needs reply?'}</button>}
           {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Important — the AI learns from this" onClick={() => onFeedback('important')}><ThumbsUp size={14} /></button>}
           {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Not important — the AI learns from this" onClick={() => onFeedback('unimportant')}><ThumbsDown size={14} /></button>}
         </span>
@@ -258,6 +283,33 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
           <button className="btn sm ghost" onClick={() => onReply('')}><Reply size={13} /> Write reply with AI</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Tasks, events and draft replies created from this message / conversation. */
+function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
+  if (!related || (!related.tasks.length && !related.events.length && !related.drafts.length)) return null;
+  const when = (t, allDay) => new Date(t).toLocaleString([], allDay ? { weekday: 'short', day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return (
+    <div className="related-bar">
+      {related.drafts.map((d) => (
+        <div key={`d${d.id}`} className="related-item draft">
+          <PenLine size={14} /><span className="grow truncate"><b>Your draft reply</b> · {when(d.updatedAt)}{d.onServer ? ' · in Drafts folder' : ''}{d.snippet ? ` — ${d.snippet}` : ''}</span>
+          <button className="btn sm primary" onClick={() => onDraft(d.id)}>Continue</button>
+          <button className="icon-btn" title="Delete draft" onClick={() => onDeleteDraft(d.id)}><Trash2 size={14} /></button>
+        </div>))}
+      {related.tasks.map((t) => (
+        <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
+          <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
+          <span className="grow truncate"><b>Task:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
+          <a href="#/tasks" className="small">Tasks</a>
+        </div>))}
+      {related.events.map((e) => (
+        <div key={`e${e.id}`} className="related-item">
+          <CalendarPlus size={14} /><span className="grow truncate"><b>Event:</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
+          <a href="#/calendar" className="small">Calendar</a>
+        </div>))}
     </div>
   );
 }
@@ -418,35 +470,83 @@ function Invitation({ messageId, onChanged }) {
   );
 }
 
+/** Reply box under the conversation: reply or reply all; what is typed is kept as a draft of this reply. */
 function QuickReply({ latest, onSent, hasDraft }) {
   const [text, setText] = useState('');
+  const [mode, setMode] = useState('reply');
   const [busy, setBusy] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
+  const [draftId, setDraftId] = useState(null);
   const accounts = store.use((s) => s.accounts);
-  useEffect(() => setText(''), [latest.id]);
+  const settings = store.use((s) => s.settings);
+  const typed = useRef(false);
+  const payloadFor = (m) => replyPayload(m, latest, accounts);
+  const all = payloadFor('replyAll');
+  const canReplyAll = all.to.length + all.cc.length > payloadFor('reply').to.length;
+
+  // Restore an unfinished quick reply (saved as a draft) for this message.
+  useEffect(() => {
+    setText(''); setDraftId(null); setMode('reply'); typed.current = false;
+    api.get(`/api/drafts?inReplyTo=${latest.id}`).then((l) => {
+      const d = l.find((x) => x.quick);
+      if (d) { setDraftId(d.id); setText(d.text || ''); setMode(d.mode || 'reply'); }
+    }).catch(() => {});
+  }, [latest.id]);
+
+  // Autosave the typed text as a draft (deleted again when sent or emptied).
+  useEffect(() => {
+    if (!typed.current) return undefined;
+    const t = setTimeout(async () => {
+      try {
+        if (!text.trim()) { if (draftId) { await api.del(`/api/drafts/${draftId}`); setDraftId(null); } return; }
+        const p = payloadFor(mode);
+        const r = await api.post('/api/drafts', { ...p, id: draftId, html: textToHtml(text) + (p.quoteHtml || ''), quick: true, text, mode });
+        setDraftId(r.id);
+      } catch { /* retried on next change */ }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [text, mode]);
+
   const send = async () => {
     setBusy(true);
     try {
-      const p = replyPayload('reply', latest, accounts);
-      await api.post('/api/send', { ...p, html: textToHtml(text) + (p.html || '') });
-      toast('Sending…'); setText(''); onSent?.();
+      const p = payloadFor(mode);
+      const r = await api.post('/api/send', { ...p, html: textToHtml(text) + (p.quoteHtml || ''), draftId: draftId || undefined });
+      setText(''); setDraftId(null); typed.current = false;
+      if (settings.mail.undoSendSeconds > 0) {
+        toast('Sending…', { duration: settings.mail.undoSendSeconds * 1000, action: { label: 'Undo', onClick: async () => {
+          try { const c = await api.post(`/api/outbox/${r.id}/cancel`); openComposer({ ...c.payload, draftId: null }); } catch { toast('Too late — message already sent', { kind: 'error' }); }
+        } } });
+      } else toast('Sent');
+      onSent?.();
     } catch (e) { toastError(e); } finally { setBusy(false); }
   };
   const draft = async () => {
-    setGenBusy(true); setText('');
+    setGenBusy(true); setText(''); typed.current = true;
     try {
       if (hasDraft) { const r = await api.post('/api/ai/draft-reply', { messageId: latest.id }); setText(r.text); }
       else { let t = ''; await stream('/api/ai/draft-reply', { messageId: latest.id, stream: true }, { onToken: (x) => { t += x; setText(t); } }); }
     } catch (e) { toastError(e); } finally { setGenBusy(false); }
   };
+  const p = payloadFor(mode);
+  const recipients = [...p.to, ...p.cc].map((a) => a.name || a.address);
   return (
     <div className="card quick-reply">
-      <textarea className="input" rows={text ? 6 : 2} placeholder={`Quick reply to ${latest.from.name || latest.from.address}…`} value={text} onChange={(e) => setText(e.target.value)}
+      <div className="row small" style={{ marginBottom: 6, gap: 6 }}>
+        <div className="seg">
+          <button className={mode === 'reply' ? 'on' : ''} onClick={() => { setMode('reply'); typed.current = true; }}><Reply size={13} /> Reply</button>
+          <button className={mode === 'replyAll' ? 'on' : ''} disabled={!canReplyAll} title={canReplyAll ? '' : 'There are no other recipients'} onClick={() => { setMode('replyAll'); typed.current = true; }}><ReplyAll size={13} /> Reply all</button>
+        </div>
+        <span className="faint truncate" title={recipients.join(', ')}>to {recipients.slice(0, 4).join(', ')}{recipients.length > 4 ? ` +${recipients.length - 4}` : ''}</span>
+        {draftId && <span className="faint" style={{ marginLeft: 'auto' }}>Draft saved</span>}
+      </div>
+      <textarea className="input" rows={text ? 6 : 2} placeholder={`Quick ${mode === 'replyAll' ? 'reply to all' : 'reply'} to ${latest.from.name || latest.from.address}…`} value={text}
+        onChange={(e) => { typed.current = true; setText(e.target.value); }}
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && text.trim()) send(); }} />
       <div className="row" style={{ marginTop: 8 }}>
         <button className="btn primary" disabled={!text.trim() || busy} onClick={send}>{busy ? <Spinner size={14} /> : <Reply size={15} />} Send</button>
         <button className="btn ai" disabled={genBusy} onClick={draft}>{genBusy ? <Spinner size={14} /> : <Sparkles size={15} />} {hasDraft ? 'Insert AI draft' : 'Draft with AI'}</button>
-        {text && <button className="btn ghost" onClick={() => { openComposer({ ...replyPayload('reply', latest, accounts), prefixHtml: textToHtml(text) }); setText(''); }}>Open in editor</button>}
+        {text && <button className="btn ghost" onClick={() => { openComposer({ ...payloadFor(mode), prefixHtml: textToHtml(text), draftId: draftId || undefined }); setText(''); setDraftId(null); typed.current = false; }}>Open in editor</button>}
         <span className="grow" /><span className="small faint">Ctrl+Enter to send</span>
       </div>
     </div>

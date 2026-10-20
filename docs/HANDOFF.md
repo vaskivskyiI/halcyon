@@ -129,6 +129,22 @@ Derived requirements / design decisions:
   operations, last SMTP result, outbox problems, "Test connection" for saved accounts (`/api/accounts/status`, `/test`).
 - AI accent colour changed from purple to teal; AI summaries in the list use normal text colour.
 
+### 2026-10-21 (later): drafts, replies, style, tasks
+- Drafts: the composer's × used to *discard* (delete) the draft. Now × asks Save / Delete / Cancel (empty drafts close
+  silently); "Save draft" also writes one copy to the IMAP Drafts folder, replacing the previous copy via a
+  `deleteByMessageId` op that only matches the draft's own Message-ID (`drafts.server_msgid`, migration 6). Sending or
+  deleting a draft removes the server copy. Draft replies are shown on their message/thread (`related.drafts`) and as a
+  "Draft" chip in the list; Reply/Reply all continue an existing draft. Quick reply: Reply / Reply all, autosaved as a
+  draft (`quick: true` in the payload, local only), Undo after send, now includes the quoted original.
+- "Needs reply" set/cleared by the user (`POST /api/messages/needs-reply`, bulk) is stored in `needs_reply_user` and
+  survives re-analysis and expiry.
+- Reader shows tasks/events created from the conversation (`related.tasks/events`).
+- Old-mail analysis can be "quiet" (job option, `ai_jobs.options_json`): no needs-reply, dismissed from brief/priority.
+- Style: `styleExamples()` (sent mail to the same recipient, else same non-public domain) in draft/compose prompts;
+  weekly `style` job writes `settings.ai.learnedStyle`. The user's own "Writing style" text takes precedence.
+- Tasks in plain language: `util/dates.js` (en/sl, tz/DST aware) with AI fallback (`aiParseTask`); preview while typing.
+- Unread/Focused/Other keep the open message in the list until the user moves to another one.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

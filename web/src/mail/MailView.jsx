@@ -185,12 +185,32 @@ function MessageList({ view, openId, onMenu }) {
     return p;
   }, [view, tab, activeQuery, threaded]);
 
+  // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one.
+  const openRef = useRef(openId);
+  const keepOpen = (next, cur) => {
+    const id = openRef.current;
+    if (!id || next.some((m) => m.id === id)) return next;
+    const i = cur.findIndex((m) => m.id === id);
+    if (i < 0) return next;
+    const out = [...next];
+    out.splice(Math.min(i, out.length), 0, cur[i]);
+    return out;
+  };
+  useEffect(() => {
+    const prev = openRef.current;
+    openRef.current = openId;
+    // Leaving a message: let filtered views drop it now if it no longer matches.
+    if (prev && prev !== openId && ['unread', 'focused', 'other'].includes(tab)) {
+      api.get(`/api/messages?${params(null)}`).then((r) => setItems((cur) => keepOpen(r.items, cur))).catch(() => {});
+    }
+  }, [openId]);
+
   const load = useCallback(async (append = false) => {
     setLoading(true);
     try {
       const before = append && items.length ? items[items.length - 1].date : null;
       const r = await api.get(`/api/messages?${params(before)}`);
-      setItems((cur) => (append ? [...cur, ...r.items] : r.items));
+      setItems((cur) => (append ? [...cur, ...r.items] : keepOpen(r.items, cur)));
       setHasMore(r.hasMore);
       // Keyword results are shown at once; matches by meaning follow when the AI answers.
       if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
@@ -219,14 +239,14 @@ function MessageList({ view, openId, onMenu }) {
     // A finished analysis can move a message between Focused and Other: re-query those tabs.
     if (e.type === 'ai:insight' && (tab === 'focused' || tab === 'other')) {
       clearTimeout(reloadTimer.current);
-      reloadTimer.current = setTimeout(async () => { const r = await api.get(`/api/messages?${params(null)}`).catch(() => null); if (r) setItems(r.items); }, 800);
+      reloadTimer.current = setTimeout(async () => { const r = await api.get(`/api/messages?${params(null)}`).catch(() => null); if (r) setItems((cur) => keepOpen(r.items, cur)); }, 800);
     }
     if (['mail:changed', 'folder:synced', 'mail:unsnoozed', 'mail:new'].includes(e.type)) {
       if (e.type === 'folder:synced' && !e.payload.newCount) return;
       clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(async () => {
         const r = await api.get(`/api/messages?${params(null)}`).catch(() => null);
-        if (r) setItems((cur) => [...r.items, ...cur.slice(r.items.length).filter((x) => !r.items.some((y) => y.id === x.id))].slice(0, Math.max(cur.length, r.items.length)));
+        if (r) setItems((cur) => keepOpen([...r.items, ...cur.slice(r.items.length).filter((x) => !r.items.some((y) => y.id === x.id))].slice(0, Math.max(cur.length, r.items.length)), cur));
       }, 400);
     }
     if (e.type === 'ai:insight') {
@@ -310,12 +330,24 @@ function MessageList({ view, openId, onMenu }) {
     } catch (e) { toastError(e); }
   };
 
+  const needsReplyMany = async (ids, value) => {
+    try {
+      await api.post('/api/messages/needs-reply', { ids, value });
+      setItems((cur) => cur.map((x) => (ids.includes(x.id) ? { ...x, ai: { ...(x.ai || {}), needsReply: value } } : x)));
+      setSelected(new Set());
+      toast(`${value ? 'Marked' : 'Unmarked'} ${ids.length} message${ids.length > 1 ? 's' : ''} as “needs reply”`);
+      loadFolders();
+    } catch (e) { toastError(e); }
+  };
+
   const rowMenu = (e, m) => {
     const ids = selected.has(m.id) ? [...selected] : [m.id];
     openMenu(e, [
       { label: 'Reply', icon: Reply, onClick: () => { open(m); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:reply', { detail: { mode: 'reply' } })), 300); } },
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
       { label: m.isFlagged ? 'Unflag' : 'Flag', icon: Star, onClick: () => act(m.isFlagged ? 'unflag' : 'flag', {}, ids) },
+      { label: 'Mark as needs reply', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, true) },
+      { label: 'Remove “needs reply”', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, false) },
       settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },
       settings.ai.enabled && { label: 'Mark as not important', icon: MailOpen, hint: 'AI learns', onClick: () => feedbackMany(ids, 'unimportant') },
       { label: 'Archive', icon: Archive, onClick: () => act('archive', {}, ids) },
@@ -375,6 +407,7 @@ function MessageList({ view, openId, onMenu }) {
           <button className="icon-btn" title="Mark unread" onClick={() => act('unread')}><MailIcon size={16} /></button>
           <button className="icon-btn" title="Archive" onClick={() => act('archive')}><Archive size={16} /></button>
           <button className="icon-btn" title="Delete" onClick={() => act('trash')}><Trash2 size={16} /></button>
+          <button className="icon-btn" title="Mark as needs reply" onClick={() => needsReplyMany([...selected], true)}><CornerUpLeft size={16} /></button>
           <button className="icon-btn" title="More" onClick={(e) => rowMenu(e, items.find((m) => selected.has(m.id)))}><ChevronDown size={16} /></button>
         </div>
       )}
@@ -433,6 +466,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
           {ai?.category && !['work', 'personal', 'other'].includes(ai.category) && <span className="chip" style={{ color: CATEGORY_COLORS[ai.category] }}>{ai.category}</span>}
           {m.hasInvite && <span className="chip"><CalendarPlus size={11} /> Invitation</span>}
           {m.hasAttachments && <Paperclip size={13} className="faint" />}
+          {m.hasDraft && <span className="chip draft" title="You have an unsent reply in this conversation">Draft</span>}
           {m.isFlagged && <Star size={13} fill="#f59e0b" color="#f59e0b" />}
           {m.labels?.map((id) => { const l = store.get().labels.find((x) => x.id === id); return l && <span key={id} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
         </div>

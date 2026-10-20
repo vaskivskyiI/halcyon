@@ -83,7 +83,13 @@ export default function AISettings() {
 
       <h3>Personalisation</h3>
       <label className="field">About you (role, company, what matters — helps prioritisation)<textarea className="input" defaultValue={ai.aboutMe} onBlur={(e) => setAi({ aboutMe: e.target.value })} placeholder="e.g. I'm a researcher at the Jožef Stefan Institute; emails from students and grant agencies are important." /></label>
-      <label className="field">Writing style<textarea className="input" defaultValue={ai.writingStyle} onBlur={(e) => setAi({ writingStyle: e.target.value })} placeholder="e.g. Concise and friendly. Use 'Best regards'. Avoid exclamation marks." /></label>
+      <Switch label="Learn my writing style from sent mail" hint="Drafts use your earlier emails to the same person as examples, and a short description of how you write (refreshed weekly)." checked={ai.learnStyle} onChange={(v) => setAi({ learnStyle: v })} />
+      {ai.learnStyle && <div className="card" style={{ padding: 10 }}>
+        <div className="row"><b className="grow small">Learned from your sent mail</b><span className="small faint">{ai.learnedStyleAt ? `updated ${new Date(ai.learnedStyleAt).toLocaleDateString()}` : 'not learned yet'}</span>
+          <button className="btn sm" onClick={async () => { try { await api.post('/api/ai/style/refresh'); toast('Learning your style in the background…'); } catch (e) { toastError(e); } }}><RefreshCw size={13} /> Learn now</button></div>
+        {ai.learnedStyle ? <div className="small muted" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{ai.learnedStyle}</div> : <div className="small faint" style={{ marginTop: 6 }}>Needs at least 5 sent emails.</div>}
+      </div>}
+      <label className="field">Writing style (your own words — takes precedence)<textarea className="input" defaultValue={ai.writingStyle} onBlur={(e) => setAi({ writingStyle: e.target.value })} placeholder="e.g. Concise and friendly. Use 'Best regards'. Avoid exclamation marks." /></label>
       <label className="field" style={{ maxWidth: 320 }}>Reply language<select className="input" value={ai.replyLanguage} onChange={(e) => setAi({ replyLanguage: e.target.value })}>
         <option value="auto">Same as the email</option>{['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian', 'Croatian', 'Serbian', 'Ukrainian', 'Polish'].map((l) => <option key={l}>{l}</option>)}</select></label>
 
@@ -168,10 +174,11 @@ function Memory({ enabled }) {
 function OlderMail({ pending, onChange }) {
   const [days, setDays] = useState('90');
   const [redo, setRedo] = useState(false);
+  const [actions, setActions] = useState(false);
   const start = async () => {
     const label = days === 'all' ? 'all your mail' : `mail from the last ${days} days`;
     if (!confirm(`${redo ? 'Re-analyse' : 'Analyse'} ${label}? This runs in the background with low priority (new mail always goes first) and can keep your AI server busy for a while.`)) return;
-    try { const r = await api.post('/api/ai/reprocess', { what: 'analyze', days: days === 'all' ? 'all' : Number(days), mode: redo ? 'all' : 'missing' }); toast(`${r.queued} emails queued for analysis`); onChange(); } catch (e) { toastError(e); }
+    try { const r = await api.post('/api/ai/reprocess', { what: 'analyze', days: days === 'all' ? 'all' : Number(days), mode: redo ? 'all' : 'missing', quiet: !actions }); toast(`${r.queued} emails queued for analysis`); onChange(); } catch (e) { toastError(e); }
   };
   const stop = async () => { const r = await api.post('/api/ai/cancel', { type: 'analyze' }).catch(toastError); if (r) { toast(`Stopped — ${r.cancelled} queued analyses removed`); onChange(); } };
   return (
@@ -183,6 +190,8 @@ function OlderMail({ pending, onChange }) {
           <option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All mail</option>
         </select>
         <label className="row small"><input type="checkbox" checked={redo} onChange={(e) => setRedo(e.target.checked)} /> also re-analyse mail that was already analysed</label>
+        <label className="row small" title="Off: old mail is analysed for search, memory and topics only, and treated as already handled (no “needs reply”, not in the brief or Important)">
+          <input type="checkbox" checked={actions} onChange={(e) => setActions(e.target.checked)} /> create action requests (needs reply, brief items) for this mail</label>
         <button className="btn sm" onClick={start}><RefreshCw size={13} /> Start</button>
         {pending > 0 && <button className="btn sm" onClick={stop}><XCircle size={13} /> Stop ({pending} waiting)</button>}
         <button className="btn sm ghost" onClick={async () => { if (!confirm('Rebuild the search index from scratch? All mail is re-indexed in the background.')) return; const r = await api.post('/api/ai/reprocess', { what: 'embed', days: 'all' }); toast(`Indexing ${r.queued} emails`); }}><RefreshCw size={13} /> Rebuild search index</button>

@@ -14,18 +14,20 @@ const MAX_GLOBAL = Number(process.env.HALCYON_AI_CONCURRENCY || 4);
 
 export function registerHandler(type, fn) { handlers[type] = fn; }
 
-export function enqueue(userId, type, refId, priority = 50, { delayMs = 0, force = false } = {}) {
+/** options: stored with the job and handed to the handler (job.options_json), e.g. { quiet: true }. */
+export function enqueue(userId, type, refId, priority = 50, { delayMs = 0, force = false, options = null } = {}) {
+  const opts = options ? JSON.stringify(options) : null;
   const ref = String(refId);
   const existing = get('SELECT id, status FROM ai_jobs WHERE user_id = ? AND type = ? AND ref_id = ?', userId, type, ref);
   let queued = true;
   if (existing) {
     if (force && existing.status !== 'running') {
-      run("UPDATE ai_jobs SET status = 'queued', attempts = 0, error = NULL, priority = ?, run_after = ?, updated_at = ? WHERE id = ?", priority, now() + delayMs, now(), existing.id);
+      run("UPDATE ai_jobs SET status = 'queued', attempts = 0, error = NULL, priority = ?, run_after = ?, options_json = ?, updated_at = ? WHERE id = ?", priority, now() + delayMs, opts, now(), existing.id);
     } else if (existing.status === 'queued') {
       run('UPDATE ai_jobs SET priority = MAX(priority, ?) WHERE id = ?', priority, existing.id);
     } else queued = existing.status === 'running';
   } else {
-    run('INSERT INTO ai_jobs (user_id, type, ref_id, priority, run_after, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', userId, type, ref, priority, now() + delayMs, now(), now());
+    run('INSERT INTO ai_jobs (user_id, type, ref_id, priority, run_after, options_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', userId, type, ref, priority, now() + delayMs, opts, now(), now());
   }
   // Keep the message's visible state truthful: 'pending' only while a job will actually run.
   if (queued && type === 'analyze') run("UPDATE messages SET ai_status = 'pending' WHERE id = ? AND ai_status != 'done'", Number(ref));

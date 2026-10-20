@@ -321,6 +321,15 @@ export class AccountSync {
         this.dirtyFolders.add(p.folder);
         break;
       }
+      case 'deleteByMessageId': {
+        // Replaced / discarded draft copies: only the message carrying this exact Message-ID.
+        const lock = await c.getMailboxLock(p.folder);
+        try {
+          const uids = await c.search({ header: { 'message-id': p.messageId } }, { uid: true });
+          if (uids?.length) await c.messageDelete(uids, { uid: true });
+        } finally { lock.release(); }
+        break;
+      }
       case 'createFolder': await c.mailboxCreate(p.path); await this.syncFolderList(); break;
       case 'renameFolder': await c.mailboxRename(p.from, p.to); await this.syncFolderList(); break;
       case 'deleteFolder': await c.mailboxDelete(p.path); await this.syncFolderList(); break;

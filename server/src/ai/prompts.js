@@ -71,19 +71,19 @@ Write a concise summary in ${language} as 2-5 bullet points ("- "): what was dis
   };
 }
 
-export function draftReplyPrompt({ ctx, style, thread, intent, language, signatureName }) {
+export function draftReplyPrompt({ ctx, style, learned, examples, thread, intent, language, signatureName }) {
   return {
     system: `You write email replies on behalf of the user. ${ctx}
-${style ? `User's writing style: ${style}\n` : ''}Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
+${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
 Reply in ${language}. Keep it natural, concise and appropriate in tone. Sign off as ${signatureName || 'the user'}.`,
     messages: [{ role: 'user', content: `Conversation (most recent last):\n\n${thread}\n\n${intent ? `The reply should: ${intent}` : 'Write the most appropriate reply.'}` }],
   };
 }
 
-export function composePrompt({ ctx, style, instruction, recipients, language, signatureName }) {
+export function composePrompt({ ctx, style, learned, examples, instruction, recipients, language, signatureName }) {
   return {
     system: `You draft new emails on behalf of the user. ${ctx}
-${style ? `User's writing style: ${style}\n` : ''}Output format exactly:
+${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Output format exactly:
 Subject: <subject line>
 
 <email body>
@@ -102,6 +102,15 @@ const REWRITE_MODES = {
   confident: 'Rewrite to sound more confident and assertive, without being rude.',
   bullet: 'Restructure the content into clear bullet points where appropriate.',
 };
+
+export function stylePrompt({ samples }) {
+  return {
+    system: `You analyse how a person writes emails. From the samples of their sent emails, describe their writing style in 4-8 short bullet points:
+greetings and sign-offs they use (by recipient type, e.g. colleagues vs. external, formal vs. informal), tone and formality, typical length and structure,
+languages they use and with whom, recurring phrases. Be concrete and quote short phrases. Do not mention names, addresses or confidential content.`,
+    messages: [{ role: 'user', content: samples.map((s, i) => `### Email ${i + 1} (to ${s.to})\n${s.text}`).join('\n\n') }],
+  };
+}
 
 export function rewritePrompt({ text, mode, instruction, language }) {
   let task = REWRITE_MODES[mode] || instruction || REWRITE_MODES.improve;

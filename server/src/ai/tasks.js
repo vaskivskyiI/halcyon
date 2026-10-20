@@ -1,7 +1,7 @@
 // AI features. Background handlers precompute insights, thread summaries, embeddings, reply drafts and the
 // daily brief; on-demand functions reuse those results when available and stream otherwise.
 import { get, all, run, json, now } from '../db/index.js';
-import { getSettings } from '../settings.js';
+import { getSettings, saveSettings } from '../settings.js';
 import { chat, chatJSON, embed } from './router.js';
 import { registerHandler, enqueue, notifyAI, queueMemory } from './queue.js';
 import * as P from './prompts.js';
@@ -49,15 +49,20 @@ function expiryOf(d, m, tz) {
   return CODE_RE.test(head) && /\b\d{4,8}\b|\b[A-Z0-9]{6,8}\b/.test(head) ? m.date + 30 * 60e3 : null;
 }
 
-function saveInsight(m, d, model, tz) {
+/** quiet: analysis of old mail that was most likely handled already — no "needs reply", out of brief/priority views. */
+function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   const messageId = m.id;
   const events = (Array.isArray(d.events) ? d.events : []).map((e) => normalizeEvent(e, tz)).filter(Boolean).slice(0, 5);
   const expires = expiryOf(d, m, tz);
-  let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply ? 1 : 0;
+  let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply && !quiet ? 1 : 0;
   if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; } // analysed after it expired
+  // What the user decided by hand survives re-analysis.
+  const prev = get('SELECT needs_reply_user, dismissed_at FROM ai_insights WHERE message_id = ?', messageId);
+  if (prev?.needs_reply_user != null) needsReply = prev.needs_reply_user;
+  const dismissed = prev?.dismissed_at ?? (quiet ? now() : null);
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
-    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,(SELECT dismissed_at FROM ai_insights WHERE message_id = ?))`,
+    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_reply_user)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,?,?)`,
     messageId, String(d.summary || '').slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
     priority, String(d.priority_reason || '').slice(0, 200), needsReply,
     JSON.stringify((Array.isArray(d.action_items) ? d.action_items : []).slice(0, 10).map((a) => (typeof a === 'string' ? { text: a, due: null } : { text: String(a.text || ''), due: a.due || null })).filter((a) => a.text)),
@@ -65,7 +70,7 @@ function saveInsight(m, d, model, tz) {
     JSON.stringify(events),
     ['positive', 'neutral', 'negative', 'urgent'].includes(d.sentiment) ? d.sentiment : 'neutral',
     String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null,
-    d.topic || null, messageId);
+    d.topic || null, dismissed, prev?.needs_reply_user ?? null);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
 }
 
@@ -144,7 +149,8 @@ export function normalizeTopic(topic, existing = []) {
 
 /** Expired insights (login codes, past deadlines…) drop out of priority views and "needs reply". */
 export function expireInsights() {
-  return run('UPDATE ai_insights SET priority = MIN(priority, 10), needs_reply = 0 WHERE expires_at IS NOT NULL AND expires_at < ? AND (priority > 10 OR needs_reply = 1)', now()).changes;
+  return run(`UPDATE ai_insights SET priority = MIN(priority, 10), needs_reply = CASE WHEN needs_reply_user = 1 THEN 1 ELSE 0 END
+    WHERE expires_at IS NOT NULL AND expires_at < ? AND (priority > 10 OR (needs_reply = 1 AND needs_reply_user IS NOT 1))`, now()).changes;
 }
 
 /**
@@ -174,7 +180,7 @@ export async function findRequestedEmails(userId, m, items) {
 
 // ---------- background handlers ----------
 
-export async function analyzeMessage(userId, messageId, { interactive = false } = {}) {
+export async function analyzeMessage(userId, messageId, { interactive = false, quiet = false } = {}) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw skip('message gone');
   // Same message seen in another folder (e.g. Gmail labels) → reuse the analysis.
@@ -211,17 +217,17 @@ export async function analyzeMessage(userId, messageId, { interactive = false } 
     applyPreference(res.data, pref);
     res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
-    if (Array.isArray(res.data.requested_items) && res.data.requested_items.length) {
+    if (!quiet && Array.isArray(res.data.requested_items) && res.data.requested_items.length) {
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
-    saveInsight(m, res.data, model, tz);
+    saveInsight(m, res.data, model, tz, { quiet });
     if (settings.ai.embeddings) saveFacts(userId, m, res.data.facts, res.data.category);
   }
   const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
   notifyAI(userId, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(ins) });
   const settings = getSettings(userId);
   if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
-  if (ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
+  if (!quiet && ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
   if (ins.priority >= 60 && now() - m.date < 36 * 3600e3) scheduleBriefRefresh(userId);
   const count = get('SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND thread_id = ?', userId, m.thread_id).n;
   if (settings.ai.threadSummaries && count >= 3) enqueue(userId, 'thread', m.thread_id, 30, { force: true });
@@ -370,7 +376,7 @@ export async function briefJob(userId, ref) {
   return dailyBrief(userId, { day, space, force: true });
 }
 
-registerHandler('analyze', analyzeMessage);
+registerHandler('analyze', (userId, ref, job) => analyzeMessage(userId, ref, { quiet: !!json(job?.options_json, {})?.quiet }));
 registerHandler('thread', summarizeThreadJob);
 registerHandler('embed', memoryJob);
 registerHandler('memory', memoryJob);
@@ -388,7 +394,8 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
   }
   const { ctx, settings, user, accounts } = ctxFor(userId);
   const acc = accounts.find((a) => a.id === m.account_id);
-  const prompt = P.draftReplyPrompt({ ctx, style: settings.ai.writingStyle, thread: threadText(userId, m), intent, language: replyLanguage(settings), signatureName: acc?.display_name || user.name });
+  const prompt = P.draftReplyPrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, [m.reply_to_json && json(m.reply_to_json, [])[0]?.address || m.from_addr]),
+    thread: threadText(userId, m), intent, language: replyLanguage(settings), signatureName: acc?.display_name || user.name });
   const res = await chat(userId, task, { ...prompt, temperature: 0.5, maxTokens: 900, onToken });
   return res.text.trim();
 }
@@ -396,10 +403,51 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
 export async function composeNew(userId, { instruction, to }, onToken) {
   const { ctx, settings, user, uiLanguage } = ctxFor(userId);
   const lang = settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : `${uiLanguage} (unless the instruction implies another language)`;
-  const res = await chat(userId, 'compose', { ...P.composePrompt({ ctx, style: settings.ai.writingStyle, instruction, recipients: to, language: lang, signatureName: user.name }), temperature: 0.6, maxTokens: 1200, onToken });
+  const addrs = String(to || '').match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || [];
+  const res = await chat(userId, 'compose', { ...P.composePrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, addrs),
+    instruction, recipients: to, language: lang, signatureName: user.name }), temperature: 0.6, maxTokens: 1200, onToken });
   const m = res.text.match(/^\s*Subject:\s*(.+)\n+([\s\S]*)$/i);
   return m ? { subject: m[1].trim(), body: m[2].trim() } : { subject: '', body: res.text.trim() };
 }
+
+/** Task title and due date from free text, by the AI (used when the rules in util/dates.js found no date). */
+export async function aiParseTask(userId, text, tz) {
+  const { ctx } = ctxFor(userId);
+  const { data } = await chatJSON(userId, 'compose', { system: `You turn a to-do note into a task. ${ctx}
+Return JSON {"title": short task title without the date words, "date": "YYYY-MM-DD" or null, "time": "HH:MM" or null}. Times are wall-clock in ${tz}. Resolve relative dates from today.`,
+  messages: [{ role: 'user', content: String(text).slice(0, 500) }], temperature: 0, maxTokens: 120 });
+  const due = data?.date ? localToEpoch(data.date, data.time || '09:00', tz) : null;
+  return { title: String(data?.title || text).trim().slice(0, 200), due: Number.isNaN(due) ? null : due };
+}
+
+// ---------- writing style learned from sent mail ----------
+
+const PUBLIC_MAIL = /@(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|gmx|web|proton|protonmail|siol|t-2|amis|aol|mail)\.[a-z.]+$/i;
+const sentRows = (userId, where, params, limit) => all(`SELECT m.to_json, m.body_text, m.date FROM messages m JOIN folders f ON f.id = m.folder_id
+  WHERE m.user_id = ? AND f.special_use = '\\Sent' AND ${where} ORDER BY m.date DESC LIMIT ?`, userId, ...params, limit);
+
+/** Up to three of the user's own recent emails to these recipients (else to their organisation) as style examples. */
+export function styleExamples(userId, recipients) {
+  const addrs = (recipients || []).filter(Boolean).map((a) => String(a).toLowerCase()).slice(0, 3);
+  if (!addrs.length) return '';
+  let rows = [];
+  for (const a of addrs) if (rows.length < 3) rows.push(...sentRows(userId, 'lower(m.to_json) LIKE ?', [`%"${a}"%`], 3 - rows.length));
+  if (!rows.length) {
+    const domains = [...new Set(addrs.filter((a) => !PUBLIC_MAIL.test(a)).map((a) => a.split('@')[1]))];
+    for (const d of domains) if (rows.length < 2) rows.push(...sentRows(userId, 'lower(m.to_json) LIKE ?', [`%@${d}"%`], 2 - rows.length));
+  }
+  return rows.map((r) => P.stripQuoted(r.body_text).slice(0, 700)).filter((t) => t.length > 20).map((t, i) => `--- example ${i + 1} ---\n${t}`).join('\n');
+}
+
+/** Background job: a short description of how the user writes, from ~25 recent sent emails (refreshed weekly). */
+export async function learnStyleJob(userId) {
+  const rows = sentRows(userId, '1', [], 40).map((r) => ({ to: json(r.to_json, []).map((a) => a.address.split('@')[1]).join(', '), text: P.stripQuoted(r.body_text).slice(0, 600) }))
+    .filter((r) => r.text.length > 40).slice(0, 25);
+  if (rows.length < 5) throw skip('not enough sent mail yet');
+  const res = await chat(userId, 'background', { ...P.stylePrompt({ samples: rows }), temperature: 0.2, maxTokens: 500 });
+  saveSettings(userId, { ai: { learnedStyle: res.text.trim().slice(0, 1500), learnedStyleAt: now() } });
+}
+registerHandler('style', learnStyleJob);
 
 export async function rewrite(userId, { text, mode, instruction, language }, onToken) {
   const res = await chat(userId, 'compose', { ...P.rewritePrompt({ text, mode, instruction, language: language || 'English' }), temperature: 0.3, maxTokens: 1500, onToken });

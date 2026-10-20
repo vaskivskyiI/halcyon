@@ -2,9 +2,9 @@ import { get, all, run, json, now, update } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { ids, httpError } from './util.js';
 import { serializeMessage, readRaw, parseRaw, messageRow } from '../mail/store.js';
-import { sanitizeEmailHtml } from '../mail/sanitize.js';
+import { sanitizeEmailHtml, htmlToText } from '../mail/sanitize.js';
 import * as actions from '../mail/actions.js';
-import { queueSend, cancelSend, buildMime } from '../mail/send.js';
+import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft } from '../mail/send.js';
 import { queueOp, syncManager } from '../mail/sync.js';
 import { serializeInsight } from '../ai/tasks.js';
 import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits } from '../search.js';
@@ -23,12 +23,14 @@ const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.threa
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
   i.topic AS ai_topic, i.expires_at AS ai_expires_at,
+  EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
 
 function listItem(r) {
   return serializeMessage(r, {
     ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
       topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()) } : null,
+    hasDraft: !!r.has_user_draft,
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
 }
@@ -182,10 +184,36 @@ export default async function mailRoutes(app) {
     });
   }
 
+  // Tasks, events and draft replies that belong to these messages (shown at the top of the reader).
+  function relatedTo(userId, msgIds) {
+    if (!msgIds.length) return { tasks: [], events: [], drafts: [] };
+    const inList = msgIds.map(Number).join(',');
+    return {
+      tasks: all(`SELECT id, title, due, done, source_message_id AS messageId FROM tasks WHERE user_id = ? AND source_message_id IN (${inList}) ORDER BY done, due`, userId),
+      events: all(`SELECT e.id, e.title, e.start, e.end, e.all_day AS allDay, e.location, e.source_message_id AS messageId FROM events e JOIN calendars c ON c.id = e.calendar_id
+        WHERE c.user_id = ? AND e.deleted = 0 AND e.source_message_id IN (${inList}) ORDER BY e.start`, userId).map((e) => ({ ...e, allDay: !!e.allDay })),
+      drafts: all(`SELECT * FROM drafts WHERE user_id = ? AND in_reply_to IN (${inList}) ORDER BY updated_at DESC`, userId)
+        .map((d) => { const p = json(d.payload_json, {}); return { id: d.id, inReplyToId: d.in_reply_to, updatedAt: d.updated_at, onServer: !!d.server_msgid, to: p.to || [], subject: p.subject, snippet: htmlToText(String(p.html || '').split('data-quote')[0]).slice(0, 160) }; }),
+    };
+  }
+
   app.get('/api/messages/:id', async (req, reply) => {
     const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!m) return httpError(reply, 404, 'Not found');
-    return fullMessage(req.user.id, m, req.query.images === '1');
+    return { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) };
+  });
+
+  // "Needs reply" set or cleared by the user, for one or many messages; it survives re-analysis.
+  app.post('/api/messages/needs-reply', async (req) => {
+    const value = req.body?.value ? 1 : 0;
+    const own = ids(req.body?.ids).filter((id) => get('SELECT 1 AS x FROM messages WHERE id = ? AND user_id = ?', id, req.user.id));
+    for (const id of own) {
+      if (get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', id)) run('UPDATE ai_insights SET needs_reply = ?, needs_reply_user = ?, dismissed_at = CASE WHEN ? = 1 THEN NULL ELSE dismissed_at END WHERE message_id = ?', value, value, value, id);
+      else run("INSERT INTO ai_insights (message_id, priority, needs_reply, needs_reply_user, category, model, created_at) VALUES (?, 50, ?, ?, 'other', 'user', ?)", id, value, value, Date.now());
+      const m = get('SELECT thread_id FROM messages WHERE id = ?', id);
+      notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', id)) });
+    }
+    return { ok: true, count: own.length };
   });
 
   app.get('/api/threads/:threadId', async (req) => {
@@ -194,7 +222,7 @@ export default async function mailRoutes(app) {
     const seen = new Set();
     const msgs = rows.filter((m) => (seen.has(m.message_id) ? false : seen.add(m.message_id)));
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
-    return { messages: msgs.map((m) => fullMessage(req.user.id, m, req.query.images === '1')), summary: summary?.summary || null };
+    return { messages: msgs.map((m) => fullMessage(req.user.id, m, req.query.images === '1')), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
   });
 
   app.get('/api/messages/:id/raw', async (req, reply) => {
@@ -346,27 +374,16 @@ export default async function mailRoutes(app) {
   });
 
   // ---- drafts (stored locally, optionally saved to the IMAP Drafts folder)
-  app.get('/api/drafts', async (req) => all('SELECT * FROM drafts WHERE user_id = ? ORDER BY updated_at DESC', req.user.id).map((d) => ({ id: d.id, accountId: d.account_id, updatedAt: d.updated_at, ...json(d.payload_json, {}) })));
-  app.post('/api/drafts', async (req) => {
-    const b = req.body || {};
-    if (b.id && get('SELECT id FROM drafts WHERE id = ? AND user_id = ?', b.id, req.user.id)) {
-      run('UPDATE drafts SET account_id = ?, payload_json = ?, updated_at = ? WHERE id = ?', b.accountId || null, JSON.stringify(b), now(), b.id);
-      return { id: b.id };
-    }
-    const r = run('INSERT INTO drafts (user_id, account_id, payload_json, updated_at) VALUES (?, ?, ?, ?)', req.user.id, b.accountId || null, JSON.stringify(b), now());
-    return { id: r.lastInsertRowid };
+  const draftOut = (d) => ({ ...json(d.payload_json, {}), id: d.id, accountId: d.account_id, updatedAt: d.updated_at, onServer: !!d.server_msgid });
+  app.get('/api/drafts', async (req) => {
+    const replyTo = ids(req.query.inReplyTo);
+    return (replyTo.length ? all(`SELECT * FROM drafts WHERE user_id = ? AND in_reply_to IN (${replyTo.join(',')}) ORDER BY updated_at DESC`, req.user.id)
+      : all('SELECT * FROM drafts WHERE user_id = ? ORDER BY updated_at DESC', req.user.id)).map(draftOut);
   });
-  app.delete('/api/drafts/:id', async (req) => { run('DELETE FROM drafts WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+  app.post('/api/drafts', async (req) => saveDraft(req.user.id, req.body || {}));
+  app.delete('/api/drafts/:id', async (req) => { deleteDraft(req.user.id, Number(req.params.id)); return { ok: true }; });
   app.post('/api/drafts/:id/save-to-server', async (req, reply) => {
-    const d = get('SELECT * FROM drafts WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
-    const p = d && json(d.payload_json, {});
-    const account = p && get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', p.accountId, req.user.id);
-    if (!account) return httpError(reply, 400, 'Draft needs an account');
-    const folder = actions.findSpecialFolder(account.id, '\\Drafts', 'Drafts');
-    if (!folder) return httpError(reply, 400, 'No Drafts folder');
-    const raw = await buildMime(account, p);
-    queueOp(account.id, 'append', { folder: folder.path, raw: raw.toString('base64'), flags: ['\\Draft', '\\Seen'] });
-    return { ok: true };
+    try { return await saveDraftToServer(req.user.id, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
   // ---- labels

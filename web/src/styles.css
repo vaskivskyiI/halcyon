@@ -324,3 +324,14 @@ pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); p
 .rail button .offline-dot { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 2px var(--panel-2); }
 .acct-status { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
 .acct-test { margin-top: 4px; padding: 6px 8px; border-radius: 8px; background: var(--panel-2); display: flex; flex-direction: column; gap: 3px; }
+
+/* Items linked to the open message: drafts, tasks, events */
+.related-bar { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.related-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); font-size: 13px; }
+.related-item.draft { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.related-item.done .grow { text-decoration: line-through; opacity: .6; }
+.chip.draft { background: #fee2e2; color: #991b1b; } :root[data-theme="dark"] .chip.draft { background: #3f1010; color: #fca5a5; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+.seg button { border: 0; background: none; padding: 3px 9px; font-size: 12px; color: var(--text-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.seg button:disabled { opacity: .45; cursor: default; }

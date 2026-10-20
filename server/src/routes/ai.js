@@ -119,7 +119,8 @@ export default async function aiRoutes(app) {
   // days: number or 'all'; mode: 'missing' (only mail without analysis) | 'all' (re-analyse everything in the range).
   // Older mail gets lower priority than new mail, which keeps being analysed first.
   app.post('/api/ai/reprocess', async (req) => {
-    const { what = 'analyze', days = 14, mode = 'all' } = req.body || {};
+    // quiet: old mail was most likely handled — analyse it for memory/search without creating "needs reply" etc.
+    const { what = 'analyze', days = 14, mode = 'all', quiet = false } = req.body || {};
     const since = days === 'all' ? 0 : now() - Number(days) * 864e5;
     const sc = scope(req.user.id, reqSpace(req));
     const folders = what === 'analyze'
@@ -131,10 +132,13 @@ export default async function aiRoutes(app) {
     if (what === 'embed') { run('DELETE FROM memory WHERE user_id = ? AND kind = ?', req.user.id, 'message'); invalidate(req.user.id); }
     for (const m of rows) {
       const ageDays = (now() - m.date) / 864e5;
-      enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : ageDays > 30 ? 3 : Math.max(10, 80 - Math.round(ageDays)), { force: true });
+      enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : ageDays > 30 ? 3 : Math.max(10, 80 - Math.round(ageDays)), { force: true, options: quiet ? { quiet: true } : null });
     }
     return { queued: rows.length };
   });
+
+  // Learn the writing style from sent mail now (normally weekly).
+  app.post('/api/ai/style/refresh', async (req) => { enqueue(req.user.id, 'style', 'style', 60, { force: true }); return { ok: true }; });
 
   // Stop bulk work: drops queued (not yet started) analysis / indexing jobs; new mail is still handled.
   app.post('/api/ai/cancel', async (req) => {

@@ -2,6 +2,9 @@ import { get, all, run, now, json } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { notify as notifyRaw } from '../util/events.js';
+import { getSettings } from '../settings.js';
+import { parseDue, mentionsTime } from '../util/dates.js';
+import { aiParseTask } from '../ai/tasks.js';
 import { scheduleBriefRefresh } from '../ai/tasks.js';
 
 // Task changes also refresh the AI overview of the daily brief (debounced there).
@@ -17,8 +20,22 @@ export default async function taskRoutes(app) {
     return all(`SELECT * FROM tasks WHERE user_id = ? ${showDone ? '' : 'AND (done = 0 OR completed_at > ?)'} ORDER BY done, due IS NULL, due, priority DESC, id DESC`, req.user.id, ...(showDone ? [] : [now() - 864e5])).map(out);
   });
 
+  // Preview while typing: what the rules understand ("tomorrow at 10", "v petek") — instant, no AI.
+  app.post('/api/tasks/parse', async (req) => {
+    const r = parseDue(req.body?.text, getSettings(req.user.id).calendar.timezone);
+    return { title: r.title, due: r.due, source: r.due ? 'rules' : null };
+  });
+
+  // b.text: plain-language task ("send the report to Ana on Tuesday"): title and due date are extracted by rules,
+  // with the AI as fallback when the text seems to mention a time the rules did not understand.
   app.post('/api/tasks', async (req, reply) => {
     const b = req.body || {};
+    if (b.text && !b.title) {
+      const tz = getSettings(req.user.id).calendar.timezone;
+      let parsed = parseDue(b.text, tz);
+      if (!parsed.due && b.due == null && mentionsTime(b.text)) parsed = await aiParseTask(req.user.id, b.text, tz).catch(() => parsed);
+      b.title = parsed.title; if (b.due == null) b.due = parsed.due;
+    }
     if (!b.title?.trim()) return httpError(reply, 400, 'Title required');
     const r = run('INSERT INTO tasks (user_id, title, notes, due, priority, list, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       req.user.id, b.title.trim(), b.notes || '', b.due || null, b.priority || 0, b.list || 'Tasks', b.sourceMessageId || null, now(), now());

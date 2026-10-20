@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS = {
     briefTime: '07:00',
     replyLanguage: 'auto',
     writingStyle: '',             // free text about the user's tone, used in compose
+    learnStyle: true,             // learn how the user writes from sent mail (weekly)
+    learnedStyle: '',             // generated description (see ai/tasks.js learnStyleJob)
+    learnedStyleAt: 0,
     aboutMe: '',                  // context given to the assistant (role, company, ...)
     maxConcurrency: 2,
     privacyMode: false,           // when true, only local providers (ollama / custom base URLs on LAN) are used

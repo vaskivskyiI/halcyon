@@ -54,6 +54,17 @@ function checkReminders() {
   }
 }
 
+// Writing style learned from sent mail: refreshed weekly.
+function scheduleStyle() {
+  for (const u of all('SELECT id FROM users')) {
+    const s = getSettings(u.id).ai;
+    if (!s.enabled || !s.learnStyle || now() - (s.learnedStyleAt || 0) < 7 * 864e5) continue;
+    // At most one attempt a day (e.g. while there is too little sent mail to learn from).
+    if (get("SELECT 1 AS x FROM ai_jobs WHERE user_id = ? AND type = 'style' AND (status IN ('queued', 'running') OR updated_at > ?)", u.id, now() - 864e5)) continue;
+    enqueue(u.id, 'style', 'style', 4, { force: true });
+  }
+}
+
 function scheduleBriefs() {
   const d = new Date();
   const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -83,6 +94,8 @@ export function startScheduler() {
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(() => { try { purgeMemory(); } catch (e) { log.error(e); } }, 3600e3).unref();
   setInterval(() => { try { expireInsights(); } catch (e) { log.error(e); } }, 2 * 60e3).unref();
+  setTimeout(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 60e3).unref();
+  setInterval(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
   // Clean up old reminder markers.
   setInterval(() => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000), 3600e3).unref();

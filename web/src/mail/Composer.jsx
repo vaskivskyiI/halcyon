@@ -128,6 +128,8 @@ function Composer({ id, init, minimized }) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [draftId, setDraftId] = useState(init.draftId || null);
   const [dirty, setDirty] = useState(false);
+  const [onServer, setOnServer] = useState(!!init.onServer);
+  const [closing, setClosing] = useState(false);
   const [templates, setTemplates] = useState([]);
   const editor = useRef();
   const abort = useRef();
@@ -239,18 +241,44 @@ function Composer({ id, init, minimized }) {
     draftId,
   });
 
-  // Autosave
+  // Saves the draft in Halcyon now; returns its id.
+  const saveNow = async () => {
+    const p = payload();
+    const r = await api.post('/api/drafts', { ...p, id: draftId, quoteHtml: undefined, attachments: p.attachments.filter((a) => a.fromMessageId != null || (a.contentBase64?.length || 0) < 2e6) });
+    setDraftId(r.id); setDirty(false);
+    return r.id;
+  };
+
+  // Autosave (in Halcyon); the copy in the account's Drafts folder is written when the user saves/closes.
   useEffect(() => {
-    if (!dirty) return;
-    const t = setTimeout(async () => {
-      try {
-        const p = payload();
-        const r = await api.post('/api/drafts', { ...p, id: draftId, quoteHtml: undefined, attachments: p.attachments.filter((a) => a.fromMessageId != null || (a.contentBase64?.length || 0) < 2e6) });
-        setDraftId(r.id); setDirty(false);
-      } catch { /* offline */ }
-    }, 2500);
+    if (!dirty) return undefined;
+    const t = setTimeout(() => { saveNow().catch(() => { /* offline: retried on next change */ }); }, 2500);
     return () => clearTimeout(t);
   }, [dirty, to, cc, bcc, subject, attachments]);
+
+  // Closing the browser tab with unsaved changes asks first.
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const h = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [dirty]);
+
+  const hasContent = () => to.length || cc.length || bcc.length || subject.trim() || userText().trim() || attachments.length;
+
+  // Close (×): nothing written → just close; otherwise ask whether to keep the draft.
+  const requestClose = () => {
+    abort.current?.abort();
+    if (!editor.current || !hasContent()) { if (draftId) api.del(`/api/drafts/${draftId}`).catch(() => {}); closeComposer(id); return; }
+    setClosing(true);
+  };
+  const saveAndClose = async () => {
+    try {
+      const did = await saveNow();
+      try { const r = await api.post(`/api/drafts/${did}/save-to-server`); toast(`Draft saved (also in ${r.folder})`); } catch (e) { toast(`Draft saved in Halcyon — not in the Drafts folder: ${e.message}`); }
+      closeComposer(id);
+    } catch (e) { toastError(e); }
+  };
 
   const send = async (sendAt) => {
     if (!to.length && !cc.length && !bcc.length) return toast('Add at least one recipient', { kind: 'error' });
@@ -273,10 +301,14 @@ function Composer({ id, init, minimized }) {
     } catch (e) { toastError(e); }
   };
 
+  // Deleting a draft is explicit: from the close dialog or the trash button (which asks).
   const discard = async () => {
     abort.current?.abort();
     if (draftId) await api.del(`/api/drafts/${draftId}`).catch(() => {});
     closeComposer(id);
+  };
+  const saveToServer = async () => {
+    try { const did = await saveNow(); const r = await api.post(`/api/drafts/${did}/save-to-server`); setOnServer(true); toast(`Draft saved in ${r.folder}`); } catch (e) { toastError(e); }
   };
 
   const addFiles = async (files) => {
@@ -304,7 +336,7 @@ function Composer({ id, init, minimized }) {
   };
 
   if (minimized) {
-    return <div className="composer min"><div className="composer-head" onClick={() => patchComposer(id, { minimized: false })}><span className="grow truncate">{subject || 'New message'}</span><button className="icon-btn" onClick={(e) => { e.stopPropagation(); discard(); }}><X size={16} /></button></div></div>;
+    return <div className="composer min"><div className="composer-head" onClick={() => patchComposer(id, { minimized: false })}><span className="grow truncate">{subject || 'New message'}</span><button className="icon-btn" title="Close" onClick={(e) => { e.stopPropagation(); patchComposer(id, { minimized: false }); setTimeout(requestClose, 0); }}><X size={16} /></button></div></div>;
   }
 
   return (
@@ -312,10 +344,10 @@ function Composer({ id, init, minimized }) {
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } if (e.key === 'Escape') patchComposer(id, { minimized: true }); }}>
       <div className="composer-head" onClick={() => patchComposer(id, { minimized: true })}>
         <span className="grow truncate">{subject || (isReply ? 'Reply' : 'New message')}</span>
-        {dirty ? <span className="small faint">Saving…</span> : draftId ? <span className="small faint">Draft saved</span> : null}
+        {dirty ? <span className="small faint">Unsaved changes…</span> : draftId ? <span className="small faint" title={onServer ? 'Saved in Halcyon and in the Drafts folder of the mail server' : 'Saved in Halcyon; closing with “Save draft” also puts it into the Drafts folder'}>{onServer ? 'Draft saved · Drafts folder' : 'Draft saved'}</span> : null}
         <button className="icon-btn" onClick={(e) => { e.stopPropagation(); patchComposer(id, { minimized: true }); }} title="Minimize"><Minus size={16} /></button>
         <button className="icon-btn" onClick={(e) => { e.stopPropagation(); setMax(!max); }} title="Maximize">{max ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
-        <button className="icon-btn" onClick={(e) => { e.stopPropagation(); discard(); }} title="Discard"><X size={16} /></button>
+        <button className="icon-btn" onClick={(e) => { e.stopPropagation(); requestClose(); }} title="Close"><X size={16} /></button>
       </div>
       <div className="composer-fields">
         {accounts.length > 1 && <div><label>From</label><select className="bare" value={account?.id} onChange={(e) => onAccountChange(e.target.value)}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.displayName ? `${a.displayName} <${a.email}>` : a.email}</option>)}</select></div>}
@@ -372,9 +404,16 @@ function Composer({ id, init, minimized }) {
         <button className="icon-btn" title="Attach files" onClick={() => fileInput.current.click()}><Paperclip size={17} /></button>
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles([...e.target.files]); e.target.value = ''; }} />
         <span className="grow" />
-        <button className="icon-btn" title="Discard draft" onClick={discard}><Trash2 size={17} /></button>
+        <button className="btn sm ghost" title="Save the draft (also in the Drafts folder of your mail server)" onClick={saveToServer}>Save draft</button>
+        <button className="icon-btn" title="Delete draft" onClick={() => { if (!hasContent() || confirm('Delete this draft?')) discard(); }}><Trash2 size={17} /></button>
       </div>
       {menuNode}
+      {closing && <Modal title="Keep this draft?" onClose={() => setClosing(false)} footer={<>
+        <button className="btn danger" onClick={discard}>Delete draft</button><span className="grow" />
+        <button className="btn" onClick={() => setClosing(false)}>Cancel</button>
+        <button className="btn primary" autoFocus onClick={saveAndClose}>Save draft</button></>}>
+        <div>Save it to continue later? It is kept in Halcyon and in the Drafts folder of your mail account.</div>
+      </Modal>}
       {scheduleOpen && <ScheduleModal onClose={() => setScheduleOpen(false)} onPick={(t) => { setScheduleOpen(false); send(t); }} />}
     </div>
   );
