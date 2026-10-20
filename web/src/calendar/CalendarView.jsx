@@ -18,11 +18,15 @@ function rangeFor(view, date, weekStart) {
   return [s, addDays(s, 42)];
 }
 
+let shownDate = Date.now();
+
 export default function CalendarView() {
   const settings = store.use((s) => s.settings);
   const weekStart = settings.ui.weekStart ?? 1;
   const [view, setView] = useState(() => localStorage.getItem('cal.view') || (innerWidth < 860 ? 'agenda' : 'week'));
-  const [date, setDate] = useState(new Date());
+  // The shown date survives switching to Mail and back (module state, per page load).
+  const [date, setDateState] = useState(() => new Date(shownDate));
+  const setDate = (d) => { shownDate = new Date(typeof d === 'function' ? d(new Date(shownDate)) : d).getTime(); setDateState(new Date(shownDate)); };
   const [events, setEvents] = useState([]);
   const [calendars, setCalendars] = useState([]);
   const [editing, setEditing] = useState(null);

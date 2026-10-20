@@ -6,6 +6,10 @@ import { db, get, run, all, json, now } from '../db/index.js';
 import { config } from '../config.js';
 import { sha1 } from '../util/crypto.js';
 import { htmlToText } from './sanitize.js';
+import { subjectKey, isReplySubject } from '../util/subject.js';
+import { logger } from '../util/log.js';
+
+const log = logger('store');
 
 const addrList = (a) => (a ? (Array.isArray(a) ? a : [a]).flatMap((x) => x.value || []).map((v) => ({ name: v.name || '', address: (v.address || '').toLowerCase() })).filter((v) => v.address) : []);
 const cleanId = (s) => (s || '').trim().replace(/^<|>$/g, '');
@@ -21,7 +25,7 @@ export function readRaw(message) {
   return fs.readFileSync(message.raw_path);
 }
 
-function resolveThreadId(userId, messageId, refs) {
+function resolveThreadId(userId, messageId, refs, bySubject) {
   const candidates = [...refs].reverse();
   if (candidates.length) {
     const placeholders = candidates.map(() => '?').join(',');
@@ -32,7 +36,32 @@ function resolveThreadId(userId, messageId, refs) {
     const child = get('SELECT thread_id FROM messages WHERE user_id = ? AND in_reply_to = ? LIMIT 1', userId, messageId);
     if (child) return child.thread_id;
   }
+  // Reply headers missing or pointing to mail we do not have: same subject (prefixes in any language stripped),
+  // a shared participant and close in time.
+  const hit = bySubject && subjectThread(userId, bySubject);
+  if (hit) return hit;
   return sha1(refs[0] || messageId || String(Math.random())).slice(0, 20);
+}
+
+const SUBJECT_WINDOW = 45 * 864e5;
+export const ownAddresses = (userId) => new Set(all('SELECT email, aliases_json FROM accounts WHERE user_id = ?', userId)
+  .flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => (typeof x === 'string' ? x : x?.address))]).filter(Boolean).map((x) => x.toLowerCase()));
+const people = (m) => [m.from_addr, ...json(m.to_json, []).map((a) => a.address), ...json(m.cc_json, []).map((a) => a.address)]
+  .filter(Boolean).map((a) => String(a).toLowerCase());
+
+/** m: { id?, key, reply, date, from_addr, to_json, cc_json, own: Set of the user's addresses } → thread_id or null. */
+export function subjectThread(userId, m) {
+  if (!m.key) return null;
+  const mine = people(m).filter((a) => !m.own.has(a));
+  if (!mine.length) return null;
+  const rows = all(`SELECT id, thread_id, subject, from_addr, to_json, cc_json FROM messages WHERE user_id = ? AND subject_key = ? AND date BETWEEN ? AND ?
+    AND id != ? ORDER BY abs(date - ?) LIMIT 20`, userId, m.key, m.date - SUBJECT_WINDOW, m.date + SUBJECT_WINDOW, m.id || 0, m.date);
+  for (const r of rows) {
+    // A reply joins anything; an original only joins replies (two separate mails titled "Report" stay apart).
+    if (!m.reply && !isReplySubject(r.subject)) continue;
+    if (people(r).some((a) => mine.includes(a))) return r.thread_id;
+  }
+  return null;
 }
 
 export function flagsToCols(flags) {
@@ -83,15 +112,18 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   const unsub = parsed.headers.get('list-unsubscribe');
   const unsubStr = unsub ? (typeof unsub === 'string' ? unsub : JSON.stringify(unsub)) : null;
   const date = (parsed.date || internalDate || new Date()).getTime();
-  const threadId = resolveThreadId(account.user_id, messageId, refs);
+  const key = subjectKey(parsed.subject);
+  const threadId = resolveThreadId(account.user_id, messageId, refs, {
+    key, reply: !!refs.length || isReplySubject(parsed.subject), date, from_addr: from.address, to_json: JSON.stringify(to), cc_json: JSON.stringify(cc), own: ownAddresses(account.user_id),
+  });
   const f = flagsToCols(flags);
 
   const id = db.transaction(() => {
-    const r = run(`INSERT INTO messages (user_id, account_id, folder_id, uid, message_id, in_reply_to, references_json, thread_id,
+    const r = run(`INSERT INTO messages (user_id, account_id, folder_id, uid, message_id, in_reply_to, references_json, thread_id, subject_key,
       subject, from_name, from_addr, to_json, cc_json, bcc_json, reply_to_json, date, snippet, body_text, body_html,
       has_attachments, attachments_json, size, is_read, is_flagged, is_answered, is_draft, is_forwarded, raw_path, list_unsubscribe, calendar_ics, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      account.user_id, account.id, folder.id, uid, messageId, inReplyTo || null, JSON.stringify(refs), threadId,
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      account.user_id, account.id, folder.id, uid, messageId, inReplyTo || null, JSON.stringify(refs), threadId, key,
       parsed.subject || '', from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), JSON.stringify(replyTo),
       date, snippet, text, html, realAttachments.length ? 1 : 0, JSON.stringify(attachments), raw.length,
       f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics, now());
@@ -100,13 +132,34 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
       `${from.name} ${from.address}`, [...to, ...cc].map((a) => `${a.name} ${a.address}`).join(' '), text.slice(0, 30000));
     return mid;
   })();
+  restoreInsight(account.user_id, id, messageId);
   return { id, isNew: true };
 }
 
-export function deleteMessages(ids) {
+/** keepAnalysis: removed by sync, not by the user — the AI analysis is kept a week in case the mail comes back. */
+/** Puts back the archived analysis of a message that came back (see deleteMessages); true when restored. */
+export function restoreInsight(userId, id, msgid) {
+  const a = msgid && get('SELECT data_json FROM insight_archive WHERE user_id = ? AND msgid = ?', userId, msgid);
+  if (!a) return false;
+  const data = json(a.data_json, {});
+  const cols = Object.keys(data).filter((k) => /^[a-z_]+$/.test(k));
+  run(`INSERT OR REPLACE INTO ai_insights (message_id, ${cols.join(', ')}) VALUES (?, ${cols.map(() => '?').join(', ')})`, id, ...cols.map((k) => data[k]));
+  run("UPDATE messages SET ai_status = 'done' WHERE id = ?", id);
+  run('DELETE FROM insight_archive WHERE user_id = ? AND msgid = ?', userId, msgid);
+  return true;
+}
+
+export function deleteMessages(ids, { keepAnalysis = false } = {}) {
   if (!ids.length) return;
   db.transaction(() => {
     for (const id of ids) {
+      if (keepAnalysis) {
+        const i = get('SELECT i.*, m.user_id AS uid, m.message_id AS msgid FROM ai_insights i JOIN messages m ON m.id = i.message_id WHERE i.message_id = ?', id);
+        if (i?.msgid) {
+          const { message_id: _m, uid: u, msgid, ...data } = i;
+          run('INSERT OR REPLACE INTO insight_archive (user_id, msgid, data_json, created_at) VALUES (?, ?, ?, ?)', u, msgid, JSON.stringify(data), now());
+        }
+      }
       // The AI memory must not keep text of deleted mail (facts derived from it stay until the user removes them).
       const uid = get('SELECT user_id FROM messages WHERE id = ?', id)?.user_id;
       if (uid) run("DELETE FROM memory WHERE user_id = ? AND kind = 'message' AND ref_id = ?", uid, String(id));
@@ -139,4 +192,40 @@ export function serializeMessage(m, extra = {}) {
 
 export function allFoldersOf(accountId) {
   return all('SELECT * FROM folders WHERE account_id = ? ORDER BY path', accountId);
+}
+
+/**
+ * One-time pass over mail stored before subject grouping existed: fills subject_key, then lets single-message
+ * conversations join the conversation they belong to by subject. Runs in small chunks (never blocks the server).
+ */
+export async function regroupConversations() {
+  if (get("SELECT value FROM app_state WHERE key = 'regroup:v1'")) return;
+  const pause = () => new Promise((r) => setImmediate(r));
+  for (;;) {
+    const rows = all('SELECT id, subject FROM messages WHERE subject_key IS NULL LIMIT 2000');
+    if (!rows.length) break;
+    // '' marks "no usable key" so the row is not picked up again.
+    db.transaction(() => { for (const r of rows) run('UPDATE messages SET subject_key = ? WHERE id = ?', subjectKey(r.subject) || '', r.id); })();
+    await pause();
+  }
+  let joined = 0;
+  for (const { user_id: userId } of all('SELECT DISTINCT user_id FROM messages')) {
+    const own = ownAddresses(userId);
+    const size = new Map(all('SELECT thread_id, COUNT(*) AS n FROM messages WHERE user_id = ? GROUP BY thread_id', userId).map((r) => [r.thread_id, r.n]));
+    const singles = all(`SELECT id, thread_id, subject, subject_key AS key, date, from_addr, to_json, cc_json, references_json FROM messages
+      WHERE user_id = ? AND subject_key != '' ORDER BY date`, userId).filter((m) => size.get(m.thread_id) === 1);
+    for (let i = 0; i < singles.length; i++) {
+      const m = singles[i];
+      if (size.get(m.thread_id) !== 1) continue;
+      const target = subjectThread(userId, { ...m, own, reply: json(m.references_json, []).length > 0 || isReplySubject(m.subject) });
+      if (target && target !== m.thread_id) {
+        run('UPDATE messages SET thread_id = ? WHERE id = ?', target, m.id);
+        size.set(m.thread_id, 0); size.set(target, (size.get(target) || 0) + 1);
+        joined++;
+      }
+      if (i % 300 === 299) await pause();
+    }
+  }
+  run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('regroup:v1', ?)", String(Date.now()));
+  if (joined) log.info(`conversations: ${joined} messages joined their conversation by subject`);
 }

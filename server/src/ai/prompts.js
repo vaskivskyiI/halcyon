@@ -52,7 +52,7 @@ ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "act
 - "needs_action": true if the user must DO something other than (or besides) replying: pay, sign, approve, register, submit, review a document, book, attend, fill in a form. false for information only.
 - "action_summary": if needs_action, the action as a short imperative with its deadline if any (max 10 words, ${language}), e.g. "Pay invoice 2026-0412 by 30 Oct"; else "".
 - "action_items": array of {"text": string, "due": "YYYY-MM-DD" or null} the user must do (empty if none).
-- "events": array of {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "all_day": boolean, "location": string or null} for meetings/appointments/deadlines explicitly mentioned. Copy times exactly as written in the email (24-hour clock, the user's time zone ${timezone}; convert only if the email names a different time zone). Resolve relative dates ("tomorrow", "next Tuesday") from the email's date. Empty if none.
+- "events": array of {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "tz": string or null, "all_day": boolean, "location": string or null} for meetings/appointments/deadlines explicitly mentioned. Copy times exactly as written in the email (24-hour clock), never convert them; add "tz": the time zone the email states for them (e.g. "UTC", "CET", "GMT+1", "Europe/London"), or null when none is stated (the user's zone ${timezone} is then assumed). Resolve relative dates ("tomorrow", "next Tuesday") from the email's date. Empty if none.
 - "suggested_replies": if needs_reply, 3 very short distinct reply options (max 8 words each, in the email's language); else [].
 - "sentiment": one of positive, neutral, negative, urgent.
 - "language": ISO 639-1 code of the email.
@@ -154,8 +154,8 @@ ${context}`,
 export function extractEventPrompt({ ctx, message, timezone }) {
   return {
     system: `Extract a calendar event from the email. ${ctx}
-Return JSON: {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "all_day": boolean, "location": string|null, "description": short string, "attendees": [emails]}.
-Copy times exactly as written in the email (24-hour clock, time zone ${timezone}; convert only if the email names a different zone). Resolve relative dates from the email's date. If no date is mentioned, propose the next reasonable working-day slot.`,
+Return JSON: {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "tz": string|null, "all_day": boolean, "location": string|null, "description": short string, "attendees": [emails]}.
+Copy times exactly as written in the email (24-hour clock), never convert them; "tz" is the time zone the email states for them (e.g. "UTC", "CET", "GMT+1"), or null when none is stated (the user's zone ${timezone} is then assumed). Resolve relative dates from the email's date. If no date is mentioned, propose the next reasonable working-day slot.`,
     messages: [{ role: 'user', content: message }],
   };
 }

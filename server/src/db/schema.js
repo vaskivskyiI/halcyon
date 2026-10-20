@@ -229,4 +229,21 @@ export const migrations = [
   `
   ALTER TABLE messages ADD COLUMN is_forwarded INTEGER DEFAULT 0;
   `,
+  // 10: conversation grouping by subject when reply headers are missing (util/subject.js), indexes for the lookups
+  //     done on every incoming message and for list views, and a small key/value table for one-time jobs.
+  `
+  ALTER TABLE messages ADD COLUMN subject_key TEXT;
+  CREATE INDEX idx_messages_subject ON messages(user_id, subject_key);
+  CREATE INDEX idx_messages_user_msgid ON messages(user_id, message_id);
+  CREATE INDEX idx_messages_user_reply ON messages(user_id, in_reply_to);
+  CREATE INDEX idx_messages_user_thread ON messages(user_id, thread_id, date DESC);
+  CREATE INDEX idx_messages_folder_unread ON messages(folder_id, is_read, snoozed_until, thread_id, user_id, account_id);
+  -- Lists walk this index without touching the rows (bodies are stored inline, so row reads are expensive).
+  CREATE INDEX idx_messages_list ON messages(user_id, date DESC, thread_id, folder_id, account_id, is_read, is_flagged,
+    has_attachments, snoozed_until, is_answered);
+  CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT);
+  -- Analyses of messages removed by sync (not by the user), kept a week by Message-ID: mail that comes back (folder
+  -- re-created, UIDVALIDITY reset, moved by another client) gets its analysis back instead of a new AI run.
+  CREATE TABLE insight_archive (user_id INTEGER NOT NULL, msgid TEXT NOT NULL, data_json TEXT, created_at INTEGER, PRIMARY KEY (user_id, msgid));
+  `,
 ];

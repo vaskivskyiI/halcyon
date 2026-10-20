@@ -7,7 +7,18 @@ function registerTimezones(comp) {
   }
 }
 
-const toMs = (t) => (t ? t.toJSDate().getTime() : null);
+import { localToEpoch } from '../util/time.js';
+
+// Floating times (no zone in the invitation) are wall-clock times of the reader: use the user's zone, not the server's.
+let floatingTz = null;
+const toMs = (t) => {
+  if (!t) return null;
+  if (floatingTz && !t.isDate && (!t.zone || t.zone.tzid === 'floating')) {
+    const p2 = (n) => String(n).padStart(2, '0');
+    return localToEpoch(`${t.year}-${p2(t.month)}-${p2(t.day)}`, `${p2(t.hour)}:${p2(t.minute)}`, floatingTz);
+  }
+  return t.toJSDate().getTime();
+};
 
 function parseAttendee(prop) {
   const v = String(prop.getFirstValue() || '').replace(/^mailto:/i, '');
@@ -17,7 +28,12 @@ function parseAttendee(prop) {
   };
 }
 
-export function parseIcs(text) {
+export function parseIcs(text, defaultTz = null) {
+  floatingTz = defaultTz;
+  try { return parseIcsInner(text); } finally { floatingTz = null; }
+}
+
+function parseIcsInner(text) {
   const jcal = ICAL.parse(text);
   const comp = new ICAL.Component(jcal);
   registerTimezones(comp);

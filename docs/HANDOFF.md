@@ -175,6 +175,31 @@ Derived requirements / design decisions:
 - Calmer list: one accent for unread/important, neutral outlined chips, category/"Draft ready" chips removed from rows,
   Outlook-style replied/forwarded icons before the subject.
 
+### Round after: new mail, threading, speed, time zones (migration 10)
+- New mail: `syncFolder` always searches `last_uid+1:*`. It used to trust `mailbox.uidNext`, which is only refreshed on
+  SELECT — the Inbox stays selected for IDLE, so new mail was skipped until something re-selected it.
+- History download: a folder that fails 3× is marked done (it kept "downloading older mail…" forever); the status
+  names the folders still pending.
+- `append` (sent copy / draft): on any failure the real server folder list is checked; a missing folder → the server's
+  own `\Sent` / `\Drafts`, else it is created; errors without server text say so. Failed appends get one more try per
+  restart.
+- Threading: `subject_key` (util/subject.js: reply/forward prefixes in many languages stripped, [tags] kept). When
+  reply headers do not connect a message, it joins a conversation with the same key, a shared participant (not the user)
+  and within 45 days; originals only join replies. `regroupConversations()` regroups existing mail once
+  (`app_state` 'regroup:v1').
+- Speed: lists newest-first walk `idx_messages_list` (index only: bodies are stored inline, so row reads are
+  expensive), then load 50 rows; counts use `idx_messages_folder_unread`; `PRAGMA optimize` at start and every 6 h;
+  lookups at ingest got `(user_id, message_id)` / `(user_id, in_reply_to)` indexes. Web: last list per view/tab shown
+  instantly with its scroll position, opened conversations cached, tab per view remembered, each section reopens
+  where the user left it (`lastRoute` in App.jsx), calendar keeps its date.
+- Tab counts: `GET /api/messages/tab-counts` (unread conversations for Focused / Other / All).
+- No accidental re-analysis: messages removed by sync (expunge, UIDVALIDITY, folder gone, stale moves) keep their
+  analysis a week in `insight_archive` by Message-ID and get it back when they reappear; mail deleted by the user keeps
+  nothing. A folder must be missing from two listings before it is dropped locally.
+- Time zones: the container runs in the host's zone (`TZ`, podman-pod.sh / compose). Models no longer convert times:
+  they return `tz` as stated in the mail and `zoneOf()` maps it ("CET" → Europe/Paris with DST, "GMT+1", IANA).
+  Invitations use their own times (`extractEvent` reads the ICS); floating ICS times use the user's zone.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

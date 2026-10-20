@@ -15,6 +15,8 @@ for (let v = current; v < migrations.length; v++) {
     db.pragma(`user_version = ${v + 1}`);
   })();
 }
+// Table statistics let SQLite pick the list/count indexes; cheap, and only redone when the data changed a lot.
+db.pragma('optimize = 0x10002');
 
 // Statement cache helpers.
 const cache = new Map();

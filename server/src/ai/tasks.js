@@ -7,6 +7,7 @@ import { registerHandler, enqueue, notifyAI, queueMemory } from './queue.js';
 import * as P from './prompts.js';
 import { storeMemory, removeMemory, searchMemory, chunkText } from './memory.js';
 import { applyRules } from '../rules.js';
+import { parseIcs } from '../calendar/ics.js';
 import { listRange } from '../calendar/repo.js';
 import { userAccounts } from '../accounts.js';
 import { contactByEmail } from '../contacts/service.js';
@@ -486,6 +487,16 @@ export async function threadSummary(userId, threadId) {
 export async function extractEvent(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw new Error('Message not found');
+  // An invitation carries exact times (with its zone): no need to ask the AI.
+  if (m.calendar_ics) {
+    try {
+      const ev = parseIcs(m.calendar_ics, getSettings(userId).calendar.timezone).events.find((e) => e.start);
+      if (ev) {
+        return { title: ev.title || m.subject, start: ev.start, end: ev.end, allDay: ev.allDay, location: ev.location || '', description: ev.description || '',
+          attendees: ev.attendees.map((a) => ({ email: a.email, name: a.name, status: 'needs-action' })), sourceMessageId: m.id };
+      }
+    } catch { /* malformed invitation: fall back to reading the text */ }
+  }
   const { ctx } = ctxFor(userId);
   const tz = getSettings(userId).calendar.timezone;
   const { data } = await chatJSON(userId, 'compose', { ...P.extractEventPrompt({ ctx, message: P.messageForPrompt(m, 4000, tz), timezone: tz }), temperature: 0.1, maxTokens: 500 });

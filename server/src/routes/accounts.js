@@ -43,6 +43,7 @@ export default async function accountRoutes(app) {
       (SELECT COUNT(*) FROM messages m JOIN folders f2 ON f2.id = m.folder_id WHERE f2.account_id = ? AND f2.sync_enabled = 1) AS downloaded
       FROM folders WHERE account_id = ? AND sync_enabled = 1`, a.id, a.id),
     history: a.sync_history || '90',
+    historyFolders: all("SELECT name FROM folders WHERE account_id = ? AND sync_enabled = 1 AND history_done = 0 AND last_synced_at IS NOT NULL AND COALESCE(special_use, '') NOT IN ('\\Trash', '\\Junk') LIMIT 5", a.id).map((f) => f.name),
   })));
 
   // A server change that keeps failing: try it again now, or drop it (only the queued change; local mail stays as it is).

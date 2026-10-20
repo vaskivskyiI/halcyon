@@ -1,6 +1,7 @@
 // Periodic housekeeping: outbox delivery, snooze wake-ups, event reminders, daily brief precomputation, DAV sync.
-import { all, get, run, json, now } from './db/index.js';
+import { db, all, get, run, json, now } from './db/index.js';
 import { processOutbox } from './mail/send.js';
+import { regroupConversations } from './mail/store.js';
 import { wakeSnoozed } from './mail/actions.js';
 import { listRange } from './calendar/repo.js';
 import { syncCalDav } from './calendar/caldav.js';
@@ -91,8 +92,10 @@ export function startScheduler() {
   // Catch up on mail that was never queued for AI (e.g. arrived while AI was off); cheap when nothing is missing.
   const backfillAll = () => { for (const u of all('SELECT id FROM users')) { try { backfillAnalysis(u.id); } catch (e) { log.error(e); } } };
   setTimeout(backfillAll, 15e3).unref();
+  setTimeout(() => regroupConversations().catch((e) => log.error(e)), 20e3).unref();
+  setInterval(() => { try { db.pragma('optimize'); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
-  setInterval(() => { try { purgeMemory(); } catch (e) { log.error(e); } }, 3600e3).unref();
+  setInterval(() => { try { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); } catch (e) { log.error(e); } }, 3600e3).unref();
   setInterval(() => { try { expireInsights(); } catch (e) { log.error(e); } }, 2 * 60e3).unref();
   setTimeout(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 60e3).unref();
   setInterval(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();

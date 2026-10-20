@@ -24,6 +24,11 @@ const SMART = [
 ];
 const SORTS = [['date', 'Date', 'desc'], ['from', 'From', 'asc'], ['subject', 'Subject', 'asc'], ['size', 'Size', 'desc'], ['unread', 'Unread first', 'asc'], ['flagged', 'Flagged first', 'desc']];
 const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
+// Per page load: last list per view/tab/sort (shown instantly when coming back) and the tab chosen per view.
+const listCache = new Map();
+const tabByView = new Map();
+const TabCount = ({ n }) => (n > 0 ? <span className="tab-count">{n > 999 ? '999+' : n}</span> : null);
+
 const COUNT_TITLES = { unified: 'Unread conversations', needsreply: 'Conversations waiting for your reply', needsaction: 'Open action items', snoozed: 'Snoozed conversations', scheduled: 'Messages waiting to be sent' };
 const FOLDER_ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Archive': Archive, '\\Trash': Trash2, '\\Junk': AlertOctagon, '\\Flagged': Star };
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
@@ -47,7 +52,7 @@ export default function MailView({ route }) {
   return (
     <div className={`main ${openId ? 'mail-reading' : 'mail-list-only'}`}>
       <FolderNav view={view} open={sidebarOpen} onNavigate={() => setSidebarOpen(false)} />
-      {view === 'scheduled' ? <OutboxList onMenu={() => setSidebarOpen(true)} /> : <MessageList view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
+      {view === 'scheduled' ? <OutboxList onMenu={() => setSidebarOpen(true)} /> : <MessageList key={view} view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
       {view !== 'scheduled' && <Reader id={openId} view={view} />}
     </div>
   );
@@ -165,7 +170,8 @@ function MessageList({ view, openId, onMenu }) {
   const [items, setItems] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState(() => (view === 'unified' && settings.mail.focusedInbox ? 'focused' : 'all'));
+  const [tab, setTabState] = useState(() => tabByView.get(view) || null);
+  const setTab = (t) => { tabByView.set(view, t); setTabState(t); };
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -184,17 +190,21 @@ function MessageList({ view, openId, onMenu }) {
   const byDate = sort.key === 'date' && sort.dir === 'desc';
 
   const isInboxView = view === 'unified' || (view.startsWith('f') && folders.accounts.some((a) => a.folders.some((f) => `f${f.id}` === view && f.specialUse === '\\Inbox')));
-  useEffect(() => { setTab(isInboxView && settings.mail.focusedInbox ? 'focused' : 'all'); setSelected(new Set()); setActiveQuery(''); setQuery(''); }, [view]);
+  // The list is mounted per view (key): the tab chosen last time in this view is kept; until folders are known, wait.
+  const effectiveTab = tab || (isInboxView && settings.mail.focusedInbox ? 'focused' : 'all');
+  const cacheKey = `${view}|${effectiveTab}|${threaded}|${sort.key}|${sort.dir}|${store.get().space || ''}`;
+  const [tabCounts, setTabCounts] = useState(null);
+  const loadTabCounts = () => { if (!activeQuery) api.get(`/api/messages/tab-counts?${new URLSearchParams(viewQuery(view))}`).then(setTabCounts).catch(() => {}); };
 
   const params = useCallback((before, offset) => {
     const p = new URLSearchParams({ ...viewQuery(view), limit: 50 });
     if (!byDate) { p.set('sort', sort.key); p.set('dir', sort.dir); if (offset) p.set('offset', offset); }
     if (activeQuery) { p.set('q', activeQuery); p.set('semantic', '0'); }
-    if (tab !== 'all') p.set('filter', tab);
+    if (effectiveTab !== 'all') p.set('filter', effectiveTab);
     if (before) p.set('before', before);
     if (!threaded) p.set('threads', '0');
     return p;
-  }, [view, tab, activeQuery, threaded, sort]);
+  }, [view, effectiveTab, activeQuery, threaded, sort]);
 
   // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one.
   const openRef = useRef(openId);
@@ -211,7 +221,7 @@ function MessageList({ view, openId, onMenu }) {
     const prev = openRef.current;
     openRef.current = openId;
     // Leaving a message: let filtered views drop it now if it no longer matches.
-    if (prev && prev !== openId && ['unread', 'focused', 'other'].includes(tab)) {
+    if (prev && prev !== openId && ['unread', 'focused', 'other'].includes(effectiveTab)) {
       api.get(`/api/messages?${params(null)}`).then((r) => setItems((cur) => keepOpen(r.items, cur))).catch(() => {});
     }
   }, [openId]);
@@ -221,8 +231,13 @@ function MessageList({ view, openId, onMenu }) {
     try {
       const before = append && items.length && byDate ? items[items.length - 1].date : null;
       const r = await api.get(`/api/messages?${params(before, append ? items.length : 0)}`);
-      setItems((cur) => (append ? [...cur, ...r.items] : keepOpen(r.items, cur)));
+      setItems((cur) => {
+        const next = append ? [...cur, ...r.items] : keepOpen(r.items, cur);
+        if (!activeQuery) listCache.set(cacheKey, { items: next, hasMore: r.hasMore, scroll: listCache.get(cacheKey)?.scroll || 0 });
+        return next;
+      });
       setHasMore(r.hasMore);
+      if (!append) loadTabCounts();
       // Keyword results are shown at once; matches by meaning follow when the AI answers.
       if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
         const q = activeQuery;
@@ -235,7 +250,16 @@ function MessageList({ view, openId, onMenu }) {
     } catch (e) { toastError(e); } finally { setLoading(false); }
   }, [params, items]);
 
-  useEffect(() => { load(false); }, [params]);
+  useEffect(() => {
+    // Last loaded state of this list is shown at once (and its scroll position), then refreshed.
+    const c = !activeQuery && listCache.get(cacheKey);
+    if (c) {
+      setItems(c.items); setHasMore(c.hasMore);
+      requestAnimationFrame(() => { if (listRef.current) listRef.current.scrollTop = c.scroll || 0; });
+    }
+    load(false);
+    loadTabCounts();
+  }, [params]);
 
   // Live updates.
   const reloadTimer = useRef();
@@ -248,7 +272,7 @@ function MessageList({ view, openId, onMenu }) {
 
   useEffect(() => onEvent((e) => {
     // A finished analysis can move a message between Focused and Other: re-query those tabs.
-    if (e.type === 'ai:insight' && (tab === 'focused' || tab === 'other')) {
+    if (e.type === 'ai:insight' && (effectiveTab === 'focused' || effectiveTab === 'other')) {
       clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(async () => { const r = await api.get(`/api/messages?${params(null)}`).catch(() => null); if (r) setItems((cur) => keepOpen(r.items, cur)); }, 800);
     }
@@ -374,6 +398,8 @@ function MessageList({ view, openId, onMenu }) {
 
   const onScroll = (e) => {
     const el = e.currentTarget;
+    const c = listCache.get(cacheKey);
+    if (c) c.scroll = el.scrollTop;
     if (hasMore && !loading && el.scrollTop + el.clientHeight > el.scrollHeight - 300) load(true);
   };
 
@@ -405,10 +431,10 @@ function MessageList({ view, openId, onMenu }) {
         </form>
         {(filtersOpen || activeQuery) && <SearchFilters query={query} onChange={(q) => { setQuery(q); setActiveQuery(q.trim()); }} />}
         {!activeQuery && <div className="tabs">
-          {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${tab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused</button><button className={`tab ${tab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other</button></>}
-          <button className={`tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All</button>
-          <button className={`tab ${tab === 'unread' ? 'active' : ''}`} onClick={() => setTab('unread')}>Unread</button>
-          <button className={`tab ${tab === 'attachments' ? 'active' : ''}`} onClick={() => setTab('attachments')} title="With attachments"><Paperclip size={14} /></button>
+          {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${effectiveTab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused<TabCount n={tabCounts?.focused} /></button><button className={`tab ${effectiveTab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other<TabCount n={tabCounts?.other} /></button></>}
+          <button className={`tab ${effectiveTab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All<TabCount n={tabCounts?.all} /></button>
+          <button className={`tab ${effectiveTab === 'unread' ? 'active' : ''}`} onClick={() => setTab('unread')}>Unread</button>
+          <button className={`tab ${effectiveTab === 'attachments' ? 'active' : ''}`} onClick={() => setTab('attachments')} title="With attachments"><Paperclip size={14} /></button>
           <button className="tab sort-btn" title={`Sort: ${SORTS.find((x) => x[0] === sort.key)?.[1]}, ${sortDirLabel(sort.key, sort.dir).toLowerCase()}`} onClick={(e) => openMenu(e, [
             { section: 'Sort by' },
             ...SORTS.map(([key, label, dir]) => ({ label, icon: sort.key === key ? Check : undefined, onClick: () => setSort({ key, dir }) })),
@@ -444,7 +470,7 @@ function MessageList({ view, openId, onMenu }) {
           {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
           {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
         </div>}
-        {!items.length && !loading && !aiResults?.items.length && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : tab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
+        {!items.length && !loading && !aiResults?.items.length && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
         {loading && items.length === 0 && <div className="empty"><Spinner size={22} /></div>}
         {hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
       </div>

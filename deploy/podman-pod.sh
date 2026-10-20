@@ -88,9 +88,12 @@ up() {
     podman run -d --pod "$POD" --name "$POD-ollama" --restart unless-stopped "${gpu[@]}" \
       -v ollama-models:/root/.ollama -e OLLAMA_KEEP_ALIVE=30m "$OLLAMA_IMAGE"
   fi
+  # The container runs in the host's time zone (else UTC): server-side defaults, reminders and the daily brief use it.
+  local tz="${TZ:-$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || readlink /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')}"
+  echo "==> Time zone: ${tz:-UTC}"
   # :U chowns the volume to the container user (node, uid 1000) under rootless user namespaces.
   podman run -d --pod "$POD" --name "$POD-app" --restart unless-stopped \
-    --env-file "$ENVFILE" -v halcyon-data:/data:U,Z \
+    --env-file "$ENVFILE" -e TZ="${tz:-UTC}" -v halcyon-data:/data:U,Z \
     --health-cmd "node -e \"fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"" \
     --health-interval 30s "$IMAGE"
   if [[ $WITH_OLLAMA -eq 1 && -n "$MODELS" ]]; then

@@ -44,7 +44,9 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
   // Sent mail is analysed too: it holds the user's own commitments and the other half of every conversation.
   const analyzeHere = isInbox || isSent || (settings.ai.analyzeFolders === 'all' && !NEVER_ANALYZE.includes(folder.special_use));
   for (const m of messages) {
-    if (settings.ai.enabled && settings.ai.autoAnalyze && analyzeHere && m.date >= cutoff) enqueue(account.user_id, 'analyze', m.id, analyzePriority(m.date));
+    // Already analysed (analysis restored for mail that came back, or a copy in another folder): no new AI run.
+    if (get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', m.id)) { /* keep it */ }
+    else if (settings.ai.enabled && settings.ai.autoAnalyze && analyzeHere && m.date >= cutoff) enqueue(account.user_id, 'analyze', m.id, analyzePriority(m.date));
     else run("UPDATE messages SET ai_status = 'none' WHERE id = ? AND ai_status = 'pending'", m.id);
     if (folder.special_use !== '\\Trash' && folder.special_use !== '\\Junk') queueMemory(account.user_id, 'message', m.id);
   }

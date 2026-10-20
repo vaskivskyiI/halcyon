@@ -167,7 +167,7 @@ function Shell() {
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (
-          <button key={id} className={`${section === id ? 'active' : ''} ${dropNav === id ? 'drop' : ''}`} title={DROP_HINT[id] ? `${label} — ${DROP_HINT[id]}` : label} aria-label={label} onClick={() => navigate(`#/${id}`)}
+          <button key={id} className={`${section === id ? 'active' : ''} ${dropNav === id ? 'drop' : ''}`} title={DROP_HINT[id] ? `${label} — ${DROP_HINT[id]}` : label} aria-label={label} onClick={() => navigate(section === id ? `#/${id}` : lastRoute.get(id) || `#/${id}`)}
             {...(DROP_HINT[id] ? dropProps(id) : {})}>
             <Icon size={21} />{badge > 0 && <span className="badge">{badge > 99 ? '99+' : badge}</span>}
           </button>
@@ -211,6 +211,12 @@ function SpaceSwitcher() {
     {menuNode}
   </>;
 }
+
+// Where the user was in each section (open message, calendar view, settings page): going back restores it.
+const lastRoute = new Map();
+const remember = () => { const sec = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]; if (sec && !sec.startsWith('compose')) lastRoute.set(sec, location.hash); };
+window.addEventListener('hashchange', remember);
+remember();
 
 const DROP_HINT = { calendar: 'drop an email here to create an event', tasks: 'drop emails here to create tasks' };
 

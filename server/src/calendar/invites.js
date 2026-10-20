@@ -1,5 +1,6 @@
 // iMIP: incoming invitations (REQUEST / CANCEL / REPLY) and sending invitations & RSVPs.
 import { get, all, json, run } from '../db/index.js';
+import { getSettings } from '../settings.js';
 import { parseIcs, buildIcs } from './ics.js';
 import { createEvent, updateEvent, serializeEvent, defaultCalendar } from './repo.js';
 import { queueSend } from '../mail/send.js';
@@ -10,7 +11,7 @@ export function invitationFor(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m?.calendar_ics) return null;
   let parsed;
-  try { parsed = parseIcs(m.calendar_ics); } catch { return null; }
+  try { parsed = parseIcs(m.calendar_ics, getSettings(userId).calendar.timezone); } catch { return null; }
   const ev = parsed.events[0];
   if (!ev) return null;
   const mine = userAccounts(userId).map((a) => a.email.toLowerCase());

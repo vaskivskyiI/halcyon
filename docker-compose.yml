@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     ports: ["8080:8080"]
     environment:
+      TZ: ${TZ:-UTC}   # your time zone, e.g. Europe/Ljubljana (server default for users, reminders, daily brief)
       HALCYON_SECRET: ${HALCYON_SECRET:?set HALCYON_SECRET in .env (openssl rand -base64 32)}
       HALCYON_PUBLIC_URL: ${HALCYON_PUBLIC_URL:-}
       HALCYON_TRUST_PROXY: ${HALCYON_TRUST_PROXY:-}

@@ -15,6 +15,9 @@ import { loadFolders } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 import { topicView, categoryView } from './MailView.jsx';
 
+// Recently opened conversations (per page load), shown instantly when reopened.
+const threadCache = new Map();
+
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -39,13 +42,22 @@ export default function Reader({ id, view }) {
         const t = await api.get(`/api/threads/${encodeURIComponent(m.threadId)}${images ? '?images=1' : ''}`);
         if (t.messages.length) data = t;
       }
-      setThread({ ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m });
+      const t = { ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m };
+      setThread(t);
       const last = data.messages[data.messages.length - 1];
-      setExpanded(new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]));
+      const ex = new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]);
+      setExpanded(ex);
+      if (!images) { threadCache.delete(id); threadCache.set(id, { thread: t, expanded: ex }); if (threadCache.size > 40) threadCache.delete(threadCache.keys().next().value); }
     } catch (e) { toastError(e); setThread(null); } finally { setLoading(false); }
   }, [id, conv, allowImages]);
 
-  useEffect(() => { setAllowImages(false); setShowAll(false); load(false); }, [id, conv]);
+  useEffect(() => {
+    setAllowImages(false); setShowAll(false);
+    // A conversation opened before shows at once; the fresh copy replaces it when it arrives.
+    const c = conv && threadCache.get(id);
+    if (c) { setThread(c.thread); setExpanded(c.expanded); }
+    load(false);
+  }, [id, conv]);
 
   useEffect(() => onEvent((e) => {
     if (!thread) return;

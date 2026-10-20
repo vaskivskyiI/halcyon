@@ -47,6 +47,8 @@ export class AccountSync {
 
   async start() {
     this.running = true;
+    // Copies of sent mail / drafts that failed before: one more try after each restart (an update may have fixed it).
+    run("UPDATE pending_ops SET attempts = 4 WHERE account_id = ? AND op = 'append' AND attempts >= 5", this.accountId);
     while (!this.stopped) {
       const account = this.account;
       if (!account || !account.sync_enabled) break;
@@ -161,7 +163,7 @@ export class AccountSync {
     if (get('SELECT 1 AS x FROM pending_ops WHERE account_id = ? AND attempts < 5', this.accountId)) return;
     const orphans = all(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id
       WHERE m.account_id = ? AND m.uid IS NULL AND f.sync_enabled = 1 AND m.created_at < ?`, this.accountId, now() - 10 * 60e3).map((r) => r.id);
-    if (orphans.length) { deleteMessages(orphans); log.info(`account ${this.accountId}: removed ${orphans.length} stale local copies`); }
+    if (orphans.length) { deleteMessages(orphans, { keepAnalysis: true }); log.info(`account ${this.accountId}: removed ${orphans.length} stale local copies`); }
     run('DELETE FROM pending_ops WHERE account_id = ? AND attempts >= 5 AND created_at < ?', this.accountId, now() - 7 * 864e5);
   }
 
@@ -185,8 +187,14 @@ export class AccountSync {
             account.id, box.path, box.name, box.delimiter, special, box.parentPath || null, box.subscribed ? 1 : 0, syncEnabled);
         }
       }
+      // A folder missing from one listing may be a server hiccup: only drop it (and its local mail) the second time.
+      const missing = (this.missingFolders ||= new Map());
       for (const f of all('SELECT id, path FROM folders WHERE account_id = ?', account.id)) {
-        if (!seen.has(f.path)) run('DELETE FROM folders WHERE id = ?', f.id);
+        if (seen.has(f.path)) { missing.delete(f.id); continue; }
+        if ((missing.get(f.id) || 0) < 1) { missing.set(f.id, 1); continue; }
+        deleteMessages(all('SELECT id FROM messages WHERE folder_id = ?', f.id).map((r) => r.id), { keepAnalysis: true });
+        run('DELETE FROM folders WHERE id = ?', f.id);
+        missing.delete(f.id);
       }
     });
     notify(account.user_id, 'folders:changed', { accountId: account.id });
@@ -202,7 +210,7 @@ export class AccountSync {
       const uidValidity = String(box.uidValidity);
       if (folder.uidvalidity && folder.uidvalidity !== uidValidity) {
         log.info(`UIDVALIDITY changed for ${folder.path}, resetting`);
-        deleteMessages(all('SELECT id FROM messages WHERE folder_id = ?', folder.id).map((r) => r.id));
+        deleteMessages(all('SELECT id FROM messages WHERE folder_id = ?', folder.id).map((r) => r.id), { keepAnalysis: true });
         folder.last_uid = 0;
         folder.highest_modseq = null;
         run('UPDATE folders SET oldest_uid = NULL, history_done = 0 WHERE id = ?', folder.id);
@@ -215,7 +223,9 @@ export class AccountSync {
           const since = new Date(now() - config.initialSyncDays * 864e5);
           uids = (await client.search({ since }, { uid: true })) || [];
           uids = uids.sort((a, b) => a - b).slice(-config.maxMessagesPerFolderInitial);
-        } else if (!box.uidNext || box.uidNext > folder.last_uid + 1) {
+        } else {
+          // Always ask: UIDNEXT is only reported on SELECT, and the Inbox stays selected for IDLE, so the cached
+          // value goes stale and new mail would be skipped until the folder happened to be re-selected.
           uids = ((await client.search({ uid: `${folder.last_uid + 1}:*` }, { uid: true })) || []).filter((u) => u > folder.last_uid);
         }
       }
@@ -254,7 +264,7 @@ export class AccountSync {
         // 3) Expunged messages.
         const serverUids = new Set((await client.search({ all: true }, { uid: true })) || []);
         const gone = all('SELECT id, uid FROM messages WHERE folder_id = ? AND uid IS NOT NULL', folder.id).filter((m) => !serverUids.has(m.uid)).map((m) => m.id);
-        if (gone.length) deleteMessages(gone);
+        if (gone.length) deleteMessages(gone, { keepAnalysis: true });
       }
 
       const fetchedMin = uids.length ? Math.min(...uids) : null;
@@ -288,7 +298,15 @@ export class AccountSync {
     for (const folder of folders) {
       if (this.stopped || !this.client || this.hasPendingWork) return;
       const client = this.client;
-      const lock = await client.getMailboxLock(folder.path);
+      // A folder that cannot be opened must not keep "downloading older mail…" (and the 3 s loop) going forever.
+      let lock;
+      try { lock = await client.getMailboxLock(folder.path); } catch (e) {
+        if (!client.usable) throw e;
+        const fails = (this.historyFails ||= new Map()).set(folder.id, (this.historyFails.get(folder.id) || 0) + 1).get(folder.id);
+        log.warn(`history ${folder.path}: ${e.responseText || e.message}${fails >= 3 ? ' (giving up)' : ''}`);
+        if (fails >= 3) run('UPDATE folders SET history_done = 1 WHERE id = ?', folder.id);
+        continue;
+      }
       const newIds = [];
       let oldest = folder.oldest_uid, newest = 0, done = 0;
       try {
@@ -321,6 +339,11 @@ export class AccountSync {
         // last_uid only grows (a folder with no recent mail gets its first last_uid here, so new-mail checks start above it).
         if (done) this.historyCache?.delete(folder.id);
         run('UPDATE folders SET oldest_uid = ?, history_done = ?, last_uid = MAX(COALESCE(last_uid, 0), ?) WHERE id = ?', oldest ?? null, done, newest, folder.id);
+      } catch (e) {
+        if (!client.usable) throw e;
+        const fails = (this.historyFails ||= new Map()).set(folder.id, (this.historyFails.get(folder.id) || 0) + 1).get(folder.id);
+        log.warn(`history ${folder.path}: ${e.responseText || e.message}${fails >= 3 ? ' (giving up)' : ''}`);
+        if (fails >= 3) run('UPDATE folders SET history_done = 1 WHERE id = ?', folder.id);
       } finally { lock.release(); }
       recountFolder(folder.id);
       // Old mail: indexed for search/memory; analysed only within the analysis window (as on first sync).
@@ -344,7 +367,7 @@ export class AccountSync {
         run('DELETE FROM pending_ops WHERE id = ?', op.id);
       } catch (e) {
         // The server's own words ("[TRYCREATE] Mailbox doesn't exist") are what the user needs, not "Command failed".
-        const why = `${e.responseText || e.message}${p.folder ? ` (${p.folder})` : ''}`.slice(0, 300);
+        const why = `${e.responseText || (e.responseStatus ? `${e.responseStatus} without a reason from the server` : e.message)}${p.folder ? ` (folder “${p.folder}”)` : ''}`.slice(0, 300);
         log.warn(`op ${op.op} failed: ${why}`);
         run('UPDATE pending_ops SET attempts = attempts + 1, error = ? WHERE id = ?', why, op.id);
         if (!this.client?.usable) throw e;
@@ -384,15 +407,22 @@ export class AccountSync {
       }
       case 'append': {
         const raw = Buffer.from(p.raw, 'base64');
-        try { await c.append(p.folder, raw, p.flags || ['\\Seen']); } catch (e) {
-          // A folder created locally (e.g. "Sent") that the server does not have yet: create it, then retry once.
+        let target = p.folder;
+        try { await c.append(target, raw, p.flags || ['\\Seen']); } catch (e) {
+          // The folder is not on the server (a "Sent" made up locally, a renamed folder, a namespace prefix the
+          // server needs). Servers do not always say so, so check the real folder list: use the server's own
+          // Sent / Drafts folder, else create the folder, then retry once. A folder that exists → a real failure.
           const code = e.response?.attributes?.[0]?.section?.[0]?.value;
-          if (code !== 'TRYCREATE' && !/exist|unknown mailbox|not found/i.test(e.responseText || '')) throw e;
-          await c.mailboxCreate(p.folder).catch(() => {});
-          await c.append(p.folder, raw, p.flags || ['\\Seen']);
+          const said = code === 'TRYCREATE' || /exist|unknown mailbox|not found/i.test(e.responseText || '');
+          const boxes = await Promise.resolve().then(() => c.list()).catch(() => null);
+          if (!said && (!boxes || boxes.some((b) => b.path === p.folder))) throw e;
+          const want = (p.flags || []).includes('\\Draft') ? '\\Drafts' : '\\Sent';
+          const own = boxes?.find((b) => b.specialUse === want && b.path !== p.folder);
+          if (own) target = own.path; else await c.mailboxCreate(p.folder).catch(() => {});
+          await c.append(target, raw, p.flags || ['\\Seen']);
           await this.syncFolderList();
         }
-        this.dirtyFolders.add(p.folder);
+        this.dirtyFolders.add(target);
         break;
       }
       case 'deleteByMessageId': {

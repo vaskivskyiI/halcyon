@@ -69,7 +69,7 @@ function AccountStatus({ st, test, account, reload }) {
           : <Line warn={st.state !== 'error'}>IMAP: {st.state === 'connecting' ? 'connecting…' : 'not connected'}{imap?.lastError ? ` · last error ${ago(imap.lastErrorAt)}: ${imap.lastError}` : ''}</Line>}
       {st.mailbox && <Line ok={!st.mailbox.foldersPending} warn>
         Mail: {st.mailbox.downloaded.toLocaleString()} of {st.mailbox.onServer.toLocaleString()} messages on the server downloaded
-        {st.mailbox.foldersPending ? ' · downloading older mail…' : st.history === 'all' ? ' · complete' : ` · older than ${st.history === '365' ? 'a year' : '90 days'} not downloaded`}</Line>}
+        {st.mailbox.foldersPending ? ` · downloading older mail${st.historyFolders?.length ? ` (${st.historyFolders.join(', ')})` : ''}…` : st.history === 'all' ? ' · complete' : ` · older than ${st.history === '365' ? 'a year' : '90 days'} not downloaded`}</Line>}
       {imap && Object.entries(imap.folderErrors || {}).map(([f, e]) => <Line key={f}>Folder “{f}”: {e}</Line>)}
       {st.pendingOps > 0 && <Line warn>{st.pendingOps} change{st.pendingOps > 1 ? 's' : ''} (move, flag, delete…) waiting to be applied on the server</Line>}
       {st.failedOps.map((o) => <Line key={o.id}>Server change “{OP_NAMES[o.op] || o.op}” failed {o.attempts}×: {o.error}{' '}
