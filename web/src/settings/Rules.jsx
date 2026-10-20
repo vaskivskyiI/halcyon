@@ -27,7 +27,13 @@ export default function Rules() {
           <input type="checkbox" checked={r.enabled} onChange={async (e) => { await api.patch(`/api/rules/${r.id}`, { enabled: e.target.checked }); load(); }} />
           <div className="grow"><div style={{ fontWeight: 600 }}>{r.name || 'Untitled rule'}</div>
             <div className="small muted">If {r.conditions.map((c) => `${FIELDS.find((f) => f[0] === c.field)?.[1]} ${c.op.replace('_', ' ')} ${c.value ?? ''}`).join(r.matchAll ? ' and ' : ' or ')} → {r.actions.map((a) => ACTIONS.find((x) => x[0] === a.type)?.[1]).join(', ')}</div></div>
-          <button className="icon-btn" title="Run on inbox now" onClick={async () => { const x = await api.post(`/api/rules/${r.id}/run`); toast(`Applied to ${x.matched} messages`); }}><Play size={16} /></button>
+          <button className="icon-btn" title="Run on inbox now" onClick={async () => {
+            const risky = r.actions.filter((a) => ['trash', 'spam', 'forward', 'move', 'archive'].includes(a.type)).map((a) => ACTIONS.find((x) => x[0] === a.type)?.[1]);
+            if (!confirm(`Run “${r.name || 'this rule'}” on all messages in your inbox now?${risky.length ? `
+
+It will: ${risky.join(', ')} every matching message.` : ''}`)) return;
+            const x = await api.post(`/api/rules/${r.id}/run`); toast(`Applied to ${x.matched} messages`);
+          }}><Play size={16} /></button>
           <button className="icon-btn" onClick={() => setEditing(r)}><Pencil size={16} /></button>
           <button className="icon-btn" onClick={async () => { if (confirm('Delete rule?')) { await api.del(`/api/rules/${r.id}`); load(); } }}><Trash2 size={16} /></button>
         </div>

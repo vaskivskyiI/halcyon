@@ -42,7 +42,7 @@ export function userContext(user, settings, accounts) {
   return lines.join('\n');
 }
 
-export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '' }) {
+export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '', topics = [] }) {
   return {
     system: `You are an email triage assistant. ${ctx}
 ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}Analyze the email and return a JSON object with exactly these keys:
@@ -59,6 +59,7 @@ ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "act
 - "is_phishing": true only if the email shows clear signs of phishing/scam.
 - "expires": "YYYY-MM-DD HH:MM" (time zone ${timezone}) after which the email is no longer useful, else null. Set it for one-time/login/verification codes and sign-in or confirmation links (usually 10-30 minutes after the email's date unless a validity is stated), offers or notices valid only until a stated time, and reminders of events that are then over. Normal mail: null.
 - "requested_items": if the sender asks the user to send or forward an earlier email, document or attachment, an array of {"description": short description in English, "keywords": 3-6 search words in the email's language and in English}; else [].
+- "topic": short name (1-4 words) of the ongoing project, event, case or activity this email belongs to, e.g. "Helios grant", "NQW 2026 conference", "Order 4471", "Flat renovation"; null for one-off mail, newsletters and notifications.${topics.length ? ` Reuse one of these existing topics when it fits: ${topics.map((t) => `"${t}"`).join(', ')}.` : ''}
 - "facts": 0-3 short, self-contained facts worth remembering for months (who someone is and their role, agreements, commitments, deadlines, project names), written in ${language} with full names, e.g. "Ana Novak is the user's PhD student". Use [] for newsletters, notifications, promotions and routine mail — usually [].
 ${preferences ? `\nThe user's own past corrections (follow them for similar mail):\n${preferences}\n` : ''}Output JSON only.`,
     messages: [{ role: 'user', content: `${senderInfo}\n\n${message}` }],
@@ -117,13 +118,12 @@ export function rewritePrompt({ text, mode, instruction, language }) {
 export function briefPrompt({ ctx, language, data }) {
   return {
     system: `You are an executive assistant preparing the user's daily briefing. ${ctx}
-Write in ${language}, in Markdown. Structure:
-1. One-sentence overview of the day.
-2. "## Needs your attention" — most important emails (max 7). Each line: "- **Sender** — what they need [open](msg:ID)".
-3. "## Today's schedule" — events with times; flag conflicts.
-4. "## Tasks" — due/overdue tasks.
-5. "## FYI" — noteworthy low-priority items in one or two lines.
-Omit empty sections. Be concise; no filler.`,
+The app already shows the full lists of important emails, events and tasks next to your text, so do NOT repeat them item by item.
+Write in ${language}, in Markdown:
+1. A 2-4 sentence overview of the day: what matters most and why.
+2. "## Heads-up" — at most 5 bullets about things that need judgement: conflicts, deadlines, follow-ups, risks. Link emails as [open](msg:ID).
+3. Optionally "## FYI" — one or two lines on noteworthy low-priority items.
+Be concise; no filler.`,
     messages: [{ role: 'user', content: JSON.stringify(data) }],
   };
 }

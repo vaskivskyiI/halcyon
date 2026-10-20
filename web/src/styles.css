@@ -289,3 +289,34 @@ table.simple th, table.simple td { text-align: left; padding: 6px 8px; border-bo
   .msg-card-head > .row { display: none; }
   .reader-scroll { padding: 12px 10px 40px; }
 }
+
+/* Attachment chips in the message header */
+.att-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.att-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 240px; padding: 3px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); font-size: 12px; text-decoration: none; }
+.att-chip:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Folded quoted history in messages */
+.quote-toggle { display: inline-block; margin: 6px 0 2px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text-2); font-size: 12px; cursor: pointer; }
+.quote-toggle:hover { color: var(--accent); border-color: var(--accent); }
+pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); padding-left: 10px; }
+.thread-fold { display: block; width: 100%; margin: 4px 0 10px; padding: 6px; border: 1px dashed var(--border); border-radius: 10px; background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
+.thread-fold:hover { color: var(--accent); border-color: var(--accent); }
+
+/* List clarity: unread = bold + blue bar + dot; read = muted; important = red bar + flame; expired = faded */
+.msg-row.read .from, .msg-row.read .subject { color: var(--text-2); font-weight: 400; }
+.msg-row.read .ai-line { opacity: .8; }
+.msg-row.unread { background: color-mix(in srgb, var(--unread) 5%, transparent); }
+.msg-row.important::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--danger); }
+.msg-row.expired { opacity: .55; }
+.msg-row .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--unread); flex: none; }
+.msg-row .imp-icon { color: var(--danger); flex: none; }
+.chip.topic { color: var(--accent); background: var(--accent-soft); gap: 2px; }
+.chip.faint { opacity: .8; }
+
+/* Live daily brief */
+.brief-h { margin: 22px 0 8px; font-size: 15px; }
+.brief-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+.brief-row:last-child { border-bottom: 0; }
+.brief-row.unread b { color: var(--unread); }
+.brief-empty { padding: 12px 14px; color: var(--text-2); font-size: 13px; }
+.rail button.drop { background: var(--accent-soft); color: var(--accent); outline: 2px dashed var(--accent); outline-offset: -3px; }

@@ -3,7 +3,7 @@ import { Sparkles, Send, Sun, MessageSquare, Plus, Trash2, RefreshCw, Mail } fro
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { Markdown, Spinner } from '../components/common.jsx';
-import { navigate, toastError, fmtListDate } from '../util.js';
+import { navigate, toast, toastError, fmtListDate } from '../util.js';
 
 const SUGGESTIONS = [
   'What needs my attention today?',
@@ -52,24 +52,97 @@ function Brief() {
   const [brief, setBrief] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [newTask, setNewTask] = useState('');
   const user = store.use((s) => s.user);
   const space = store.use((s) => s.space);
   const load = async (refresh) => {
-    setBusy(true); setErr(null);
-    try { setBrief(await api.get(`/api/ai/brief${refresh ? '?refresh=1' : ''}`)); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+    if (refresh) setBusy(true);
+    setErr(null);
+    try { const b = await api.get(`/api/ai/brief${refresh ? '?refresh=1' : ''}`); setBrief(b); if (b.error) setErr(b.error); } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
-  useEffect(() => { load(false); return onEvent((e) => e.type === 'ai:brief' && (e.payload.space || '') === space && load(false)); }, []);
+  // The lists are live: reload (debounced) whenever mail, AI results or tasks change.
+  const timer = useRef();
+  useEffect(() => {
+    load(false);
+    return onEvent((e) => {
+      if (!['ai:brief', 'ai:insight', 'tasks:changed', 'mail:new', 'mail:changed', 'calendar:changed'].includes(e.type)) return;
+      if (e.type === 'ai:brief' && (e.payload.space || '') !== space) return;
+      clearTimeout(timer.current); timer.current = setTimeout(() => load(false), 600);
+    });
+  }, []);
+  const dismiss = async (id) => {
+    setBrief((b) => ({ ...b, live: { ...b.live, attention: b.live.attention.filter((m) => m.id !== id), awaiting: b.live.awaiting.filter((m) => m.id !== id) } }));
+    try {
+      await api.post(`/api/messages/${id}/dismiss`, {});
+      toast('Removed from the brief', { action: { label: 'Undo', onClick: () => api.post(`/api/messages/${id}/dismiss`, { dismissed: false }).then(() => load(false)) } });
+    } catch (e) { toastError(e); load(false); }
+  };
+  const taskDone = async (t) => {
+    setBrief((b) => ({ ...b, live: { ...b.live, tasks: b.live.tasks.filter((x) => x.id !== t.id) } }));
+    try {
+      await api.patch(`/api/tasks/${t.id}`, { done: true });
+      toast(`Done: ${t.title}`, { action: { label: 'Undo', onClick: () => api.patch(`/api/tasks/${t.id}`, { done: false }).then(() => load(false)) } });
+    } catch (e) { toastError(e); load(false); }
+  };
+  const addTask = async (e) => {
+    e.preventDefault();
+    if (!newTask.trim()) return;
+    try { await api.post('/api/tasks', { title: newTask.trim() }); setNewTask(''); load(false); } catch (err2) { toastError(err2); }
+  };
   const hour = new Date().getHours();
+  const live = brief?.live;
+  const time = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const MailRow = ({ m }) => (
+    <div className={`brief-row ${m.isRead ? '' : 'unread'}`}>
+      <div className="grow" style={{ minWidth: 0, cursor: 'pointer' }} onClick={() => navigate(`#/mail/unified/${m.id}`)}>
+        <div className="truncate"><b>{m.from}</b> — {m.subject || '(no subject)'}{m.topic && <span className="chip topic" style={{ marginLeft: 6 }}>#{m.topic}</span>}</div>
+        {m.summary && <div className="small muted truncate">{m.summary}</div>}
+      </div>
+      <button className="btn sm" title="Handled — remove from the brief (the email stays in your mailbox)" onClick={() => dismiss(m.id)}>✓ Done</button>
+    </div>
+  );
   return (
     <div className="chat"><div className="chat-scroll"><div className="brief" style={{ width: '100%' }}>
       <div className="row"><h2 className="grow" style={{ margin: 0 }}>{hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'}, {user.name?.split(' ')[0]}{space && <span className="chip" style={{ marginLeft: 10, verticalAlign: 'middle' }}>{space}</span>}</h2>
-        <button className="btn" onClick={() => load(true)} disabled={busy}>{busy ? <Spinner size={14} /> : <RefreshCw size={15} />} Refresh</button></div>
-      <div className="small faint" style={{ marginBottom: 16 }}>{brief ? `Prepared ${fmtListDate(brief.createdAt)} · ${brief.model || ''}` : 'Your daily brief is prepared in the background before your day starts.'}</div>
-      {err && <div className="notice warn" style={{ margin: 0 }}>{err}</div>}
-      {busy && !brief && <div className="empty"><Spinner size={22} /> Preparing your brief…</div>}
-      {brief && <div className="card" style={{ padding: '16px 20px' }}><Markdown text={brief.content} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} /></div>}
+        <button className="btn" onClick={() => load(true)} disabled={busy} title="Re-write the AI overview now">{busy ? <Spinner size={14} /> : <RefreshCw size={15} />} Refresh</button></div>
+      <div className="small faint" style={{ marginBottom: 16 }}>{brief?.content ? `Overview written ${fmtListDate(brief.createdAt)} · ${brief.model || ''} · lists below are live` : 'The overview is prepared in the background; the lists below are always current.'}</div>
+      {err && <div className="notice warn" style={{ margin: '0 0 12px' }}>AI overview unavailable: {err}</div>}
+      {brief?.content && <div className="card" style={{ padding: '14px 18px' }}><Markdown text={brief.content} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} /></div>}
+      {!brief && <div className="empty"><Spinner size={22} /> Loading…</div>}
+
+      {live && <>
+        <h3 className="brief-h">Needs your attention <span className="faint small">· {live.attention.length}</span></h3>
+        <div className="card">{live.attention.length ? live.attention.map((m) => <MailRow key={m.id} m={m} />) : <div className="brief-empty">Nothing urgent.</div>}</div>
+        {live.awaiting.length > 0 && <>
+          <h3 className="brief-h">Waiting for your reply <span className="faint small">· {live.awaiting.length}</span></h3>
+          <div className="card">{live.awaiting.map((m) => <MailRow key={m.id} m={m} />)}</div>
+        </>}
+        <h3 className="brief-h">Today</h3>
+        <div className="card">{live.events.length ? live.events.map((e) => (
+          <div key={e.id + String(e.start)} className="brief-row" style={{ cursor: 'pointer' }} onClick={() => navigate('#/calendar')}>
+            <span className="dot" style={{ background: e.color || 'var(--accent)' }} />
+            <span style={{ width: 96, flex: 'none' }} className="small">{e.allDay ? 'All day' : `${time(e.start)}–${time(e.end)}`}</span>
+            <span className="grow truncate">{e.title}{e.location ? <span className="faint"> · {e.location}</span> : ''}</span>
+          </div>)) : <div className="brief-empty">No events today.</div>}</div>
+        <h3 className="brief-h">Tasks <span className="faint small">· {live.tasks.length}</span></h3>
+        <div className="card">
+          {live.tasks.map((t) => (
+            <div key={t.id} className="brief-row">
+              <input type="checkbox" title="Mark as done" onChange={() => taskDone(t)} />
+              <span className="grow truncate" style={{ color: t.overdue ? 'var(--danger)' : undefined }}>{t.title}
+                {t.due && <span className="small faint"> · {t.overdue ? 'overdue, ' : ''}due {new Date(t.due).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+                {t.sourceMessageId && <a href={`#/mail/unified/${t.sourceMessageId}`} className="small" style={{ marginLeft: 6 }}><Mail size={11} /> email</a>}</span>
+            </div>))}
+          <form className="brief-row" onSubmit={addTask}>
+            <Plus size={15} className="faint" />
+            <input className="input grow" style={{ border: 0, background: 'transparent' }} placeholder="Add a task…" value={newTask} onChange={(e) => setNewTask(e.target.value)} />
+            {newTask.trim() && <button className="btn sm primary">Add</button>}
+          </form>
+        </div>
+      </>}
+
       <h3 style={{ marginTop: 28 }}>Ask about your mail and schedule</h3>
-      <div className="suggestions">{SUGGESTIONS.map((s) => <button key={s} className="btn" onClick={() => { sessionStorage.setItem('halcyon.ask', s); navigate('#/assistant/chat'); }}>{s}</button>)}</div>
+      <div className="suggestions">{SUGGESTIONS.map((q) => <button key={q} className="btn" onClick={() => { sessionStorage.setItem('halcyon.ask', q); navigate('#/assistant/chat'); }}>{q}</button>)}</div>
     </div></div></div>
   );
 }

@@ -17,6 +17,7 @@ export function mock() {
           events: [], suggested_replies: question ? ['Sounds good, thanks!', 'Let me check and get back to you.', 'Can we discuss this tomorrow?'] : [],
           sentiment: urgent ? 'urgent' : 'neutral', language: 'en', is_phishing: false,
           facts: (last.match(/[^.\n]* is the [^.\n]+/g) || []).slice(0, 3).map((x) => x.trim()),
+          topic: (subject.match(/order \d+/i) || [null])[0],
           // "Please forward me the email with …" → long words of the email body as search keywords.
           requested_items: /forward|posreduj|send me|pošlji/i.test(last)
             ? [{ description: 'requested email', keywords: [...new Set((last.split(/\n\n/).pop().match(/\p{L}{7,}/gu) || []).map((w) => w.toLowerCase()))].slice(0, 6) }] : [],

@@ -98,6 +98,23 @@ Derived requirements / design decisions:
 - Not verified against the real model (Ollama was unresponsive): prompt changes (events/expires/requested_items) need a
   check with qwen2.5:7b-instruct on real mail.
 
+### 2026-10-20 (night): safety and workflow round (user runs the server version with real mail)
+- No accidental destruction: archive/delete/spam/move return an undo snapshot; "restore" moves mail back and cancels a
+  move the IMAP server has not seen yet (`restoreMessages`, `runningOps` in sync.js). "Delete" on mail in Trash/Junk
+  never deletes implicitly (server no longer does it in `trashMessages`); permanent deletion is only the explicit,
+  confirmed `delete`. Confirmations added for event deletion, "run rule now", unsubscribe, task deletion.
+- Composer marks the quoted/forwarded part (`data-quote`); AI rewrite and drafting only touch the user's text.
+- Reader: attachment chips under the header; quoted history folded (HTML: Gmail/Outlook incl. Slovenian headers/
+  Apple/Thunderbird; plain: "On … wrote:", ">" lines); long threads fold middle messages.
+- Brief: live lists (`briefLive`) with ✓ Done (`ai_insights.dismissed_at`, migration 5), task checkboxes, quick add;
+  the AI overview is short and refreshed in the background after important mail / task changes (≤ every 15 min);
+  opening the brief never waits for the AI.
+- Dynamic AI views: `ai_insights.topic` (prompt reuses existing topics; `normalizeTopic`), sidebar Topics + AI
+  categories with counts; list rows distinguish unread / read / important / expired, show topic and "replied".
+- Drag a message onto the Calendar icon → prefilled event (AI extraction, manual fallback), onto Tasks → tasks.
+- Queue bug fixed: a delayed job (back-off, brief refresh) could make new jobs wait up to 60 s (`kick()`).
+- podman-pod.sh: `update` does `git pull --ff-only`, re-executes the new script, reuses options saved by `up`.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

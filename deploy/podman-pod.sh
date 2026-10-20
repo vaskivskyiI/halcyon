@@ -5,7 +5,8 @@
 #
 #   ./deploy/podman-pod.sh up        [--port 8080] [--bind 127.0.0.1] [--with-ollama] [--gpu] [--models "qwen2.5:7b-instruct nomic-embed-text"]
 #   ./deploy/podman-pod.sh build     rebuild the image from this checkout
-#   ./deploy/podman-pod.sh update    [same options as up] rebuild and recreate the pod (data volumes are kept)
+#   ./deploy/podman-pod.sh update    git pull, rebuild and recreate the pod with the options of the last 'up'
+#                                    (data volumes are kept; --no-pull skips git pull; options given here override)
 #   ./deploy/podman-pod.sh down      stop and remove the pod (data volumes are kept)
 #   ./deploy/podman-pod.sh logs      follow Halcyon's log
 #   ./deploy/podman-pod.sh status    show pod, containers and health
@@ -26,8 +27,13 @@ OLLAMA_IMAGE=docker.io/ollama/ollama:0.40.6
 PORT=8080 ; BIND=127.0.0.1 ; WITH_OLLAMA=0 ; GPU=0 ; MODELS="qwen2.5:7b-instruct nomic-embed-text"
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 ENVFILE="$SRC/deploy/halcyon.env"
+OPTFILE="$SRC/deploy/pod.options"   # options of the last 'up', reused by 'update' (git-ignored)
+PULL=1
 
 cmd="${1:-help}"; shift || true
+ARGS=("$@")
+# shellcheck disable=SC1090
+[[ "$cmd" == update && -f "$OPTFILE" ]] && source "$OPTFILE"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -35,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     --with-ollama) WITH_OLLAMA=1; shift ;;
     --gpu) GPU=1; shift ;;
     --models) MODELS="$2"; shift 2 ;;
+    --no-pull) PULL=0; shift ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
 done
@@ -72,6 +79,7 @@ up() {
   if podman pod exists "$POD"; then echo "Pod $POD already exists — use '$0 update' or '$0 down' first."; exit 1; fi
   podman volume exists halcyon-data || podman volume create halcyon-data >/dev/null
   echo "==> Creating pod $POD on $BIND:$PORT"
+  printf 'PORT=%q\nBIND=%q\nWITH_OLLAMA=%q\nGPU=%q\n' "$PORT" "$BIND" "$WITH_OLLAMA" "$GPU" > "$OPTFILE"
   podman pod create --name "$POD" -p "$BIND:$PORT:8080"
   if [[ $WITH_OLLAMA -eq 1 ]]; then
     podman volume exists ollama-models || podman volume create ollama-models >/dev/null
@@ -124,7 +132,17 @@ case "$cmd" in
   up) up ;;
   build) build ;;
   update)
-    with_ollama_flag   # pass the same --port/--bind/--gpu options as for 'up'
+    if [[ $PULL -eq 1 ]]; then
+      if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "==> git pull"
+        git -C "$SRC" pull --ff-only || { echo "git pull failed (local changes or diverged branch?) — fix it, or run '$0 update --no-pull'."; exit 1; }
+        # The pull may have changed this script; continue with the new version.
+        exec "$SRC/deploy/podman-pod.sh" update --no-pull "${ARGS[@]}"
+      else
+        echo "Not a git checkout — skipping git pull."
+      fi
+    fi
+    with_ollama_flag
     build; down; up ;;
   down) down ;;
   logs) podman logs -f "$POD-app" ;;

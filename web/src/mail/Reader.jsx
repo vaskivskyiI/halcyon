@@ -9,7 +9,7 @@ import { store } from '../store.js';
 import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, textToHtml, escapeHtml, CATEGORY_COLORS } from '../util.js';
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { openComposer, replyPayload } from './Composer.jsx';
-import { mailAction, snoozeOptions } from './mailActions.js';
+import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 import { EventEditor } from '../calendar/CalendarView.jsx';
 import { loadFolders } from '../data.js';
 
@@ -20,6 +20,7 @@ export default function Reader({ id, view }) {
   const [expanded, setExpanded] = useState(new Set());
   const [eventDraft, setEventDraft] = useState(null);
   const [aiWorking, setAiWorking] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [openMenu, menuNode] = useMenu();
   const settings = store.use((s) => s.settings);
   const folders = store.use((s) => s.folders);
@@ -42,7 +43,7 @@ export default function Reader({ id, view }) {
     } catch (e) { toastError(e); setThread(null); } finally { setLoading(false); }
   }, [id, conv, allowImages]);
 
-  useEffect(() => { setAllowImages(false); load(false); }, [id, conv]);
+  useEffect(() => { setAllowImages(false); setShowAll(false); load(false); }, [id, conv]);
 
   useEffect(() => onEvent((e) => {
     if (!thread) return;
@@ -68,8 +69,10 @@ export default function Reader({ id, view }) {
   const target = thread.current;
   const ins = latest.insight || target.insight;
   const ids = conv ? msgs.filter((m) => m.folder?.specialUse !== '\\Sent').map((m) => m.id) : [target.id];
-  const act = (action, extra) => {
-    mailAction(action, ids.length ? ids : [target.id], extra, { onDone: () => { if (['archive', 'trash', 'spam', 'move', 'snooze', 'delete'].includes(action)) navigate(`#/mail/${view}`); else load(); } });
+  const act = (requested, extra) => {
+    const action = confirmDelete(requested, target.folder?.specialUse, 1);
+    if (!action) return;
+    mailAction(action, ids.length ? ids : [target.id], extra, { onDone: (undone) => { if (undone) load(); else if (['archive', 'trash', 'spam', 'move', 'snooze', 'delete'].includes(action)) navigate(`#/mail/${view}`); else load(); } });
   };
   function reply(mode, msg = latest, extra = {}) { openComposer(replyPayload(mode, msg, store.get().accounts, extra)); }
 
@@ -116,6 +119,7 @@ export default function Reader({ id, view }) {
   };
 
   const unsubscribe = async () => {
+    if (!confirm(`Unsubscribe from ${target.from.name || target.from.address}? Halcyon contacts the sender's unsubscribe address for you.`)) return;
     try {
       const r = await api.post(`/api/messages/${target.id}/unsubscribe`);
       if (r.method === 'browser') window.open(r.url, '_blank', 'noopener');
@@ -175,10 +179,18 @@ export default function Reader({ id, view }) {
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
 
-        {msgs.map((m) => (
-          <MessageCard key={m.id} m={m} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const n = new Set(s); n.has(m.id) ? n.delete(m.id) : n.add(m.id); return n; })}
-            onReply={(mode) => reply(mode, m)} onShowImages={() => { setAllowImages(true); load(true); }} translation={thread.translations?.[m.id]} onInviteChanged={load} />
-        ))}
+        {msgs.map((m, i) => {
+          // Long conversations: collapsed messages between the first and the last two fold into one row.
+          const foldable = !showAll && msgs.length > 4 && i > 0 && i < msgs.length - 2 && !expanded.has(m.id);
+          if (foldable) {
+            const prev = i > 1 && !expanded.has(msgs[i - 1].id);
+            if (prev) return null;
+            let n = 0; while (i + n < msgs.length - 2 && !expanded.has(msgs[i + n].id)) n++;
+            return <button key={`fold${m.id}`} className="thread-fold" onClick={() => setShowAll(true)}>{n} earlier message{n > 1 ? 's' : ''}</button>;
+          }
+          return <MessageCard key={m.id} m={m} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const x = new Set(s); x.has(m.id) ? x.delete(m.id) : x.add(m.id); return x; })}
+            onReply={(mode) => reply(mode, m)} onShowImages={() => { setAllowImages(true); load(true); }} translation={thread.translations?.[m.id]} onInviteChanged={load} />;
+        })}
 
         <QuickReply latest={latest} onSent={() => load()} hasDraft={!!ins?.draftReply} />
       </div>
@@ -251,6 +263,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
 
 function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged }) {
   const recipients = [...m.to, ...m.cc];
+  const realAtts = (m.attachments || []).filter((a) => !a.inline);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`}>
       <div className="msg-card-head" onClick={toggle}>
@@ -258,7 +271,12 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
         <div className="grow" style={{ minWidth: 0 }}>
           <div className="row"><span className="who truncate">{m.from.name || m.from.address}</span>{expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
           {expanded ? <div className="small muted truncate" title={recipients.map(addrFull).join(', ')}>to {recipients.map(addrLabel).join(', ') || 'undisclosed recipients'}{m.bcc?.length ? `, bcc ${m.bcc.map(addrLabel).join(', ')}` : ''}</div>
-            : <div className="small muted truncate">{m.snippet}</div>}
+            : <div className="small muted truncate">{realAtts.length > 0 && <><Paperclip size={11} /> {realAtts.length} · </>}{m.snippet}</div>}
+          {/* Attachments right under the header, so they are not missed below a long message. */}
+          {expanded && realAtts.length > 0 && <div className="att-chips" onClick={(e) => e.stopPropagation()}>
+            {realAtts.map((a) => <a key={a.index} className="att-chip" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title={`${a.filename} · ${fmtSize(a.size || 0)}`}>
+              <Paperclip size={11} /><span className="truncate">{a.filename}</span></a>)}
+          </div>}
         </div>
         {expanded && <div className="row" onClick={(e) => e.stopPropagation()}>
           <button className="icon-btn" title="Reply" onClick={() => onReply('reply')}><Reply size={16} /></button>
@@ -270,7 +288,7 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
         {m.hasInvite && <Invitation messageId={m.id} onChanged={onInviteChanged} />}
         {m.blockedRemote > 0 && <div className="notice"><ImageIcon size={15} /> Remote images were blocked to protect your privacy.<span className="grow" /><button className="btn sm" onClick={onShowImages}>Show images</button></div>}
         {translation && <div className="notice" style={{ display: 'block' }}><div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Languages size={13} /> Translation</div><div style={{ whiteSpace: 'pre-wrap' }}>{translation}</div></div>}
-        <div className="msg-body">{m.html ? <HtmlFrame html={m.html} /> : <pre className="plain">{linkify(m.text)}</pre>}</div>
+        <div className="msg-body">{m.html ? <HtmlFrame html={m.html} /> : <PlainBody text={m.text} />}</div>
         {m.attachments?.length > 0 && <div className="attachments">{m.attachments.map((a) => (
           <a key={a.index} className="attachment" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer">
             <Paperclip size={15} /><span className="truncate grow">{a.filename}</span><span className="faint small">{fmtSize(a.size || 0)}</span>
@@ -287,9 +305,35 @@ function linkify(text = '') {
 }
 
 /** Email HTML rendered in a sandboxed iframe (no scripts) with auto height. */
+// Where quoted history starts in an HTML email (Gmail, Outlook incl. Slovenian headers, Apple/Thunderbird, Halcyon).
+const QUOTE_SELECTORS = ['[data-quote]', '.gmail_quote', '.gmail_extra', 'blockquote[type="cite"]', '#divRplyFwdMsg', '#appendonsend', '.moz-cite-prefix', '.yahoo_quoted', 'div[style*="border-top:solid #E1E1E1"]', 'div[style*="border-top: solid #E1E1E1"]', 'div[style*="border-top:solid #B5C4DF"]'];
+const QUOTE_LINE = /^\s*(On .{5,200} wrote:|Am .{5,120} schrieb|Le .{5,120} a écrit|-{2,}\s*(Original Message|Izvirno sporočilo|Forwarded message|Posredovano sporočilo)\s*-{2,}|(From|Od):\s.+\s(Sent|Poslano|Date|Datum):\s)/i;
+
+function findQuoteStart(doc) {
+  const body = doc.body;
+  let el = null;
+  for (const sel of QUOTE_SELECTORS) { el = body.querySelector(sel); if (el) break; }
+  if (!el) el = [...body.querySelectorAll('div, p, span, hr')].find((n) => n.children.length < 12 && QUOTE_LINE.test(n.textContent || '')) || body.querySelector(':scope > blockquote, :scope > div > blockquote');
+  if (!el) return null;
+  // Only fold when the user-visible part before the quote has content (not for pure forwards).
+  const range = doc.createRange();
+  range.setStart(body, 0); range.setEndBefore(el);
+  return range.toString().trim().length > 0 ? el : null;
+}
+
+/** Hides (or shows) the quote element and everything after it, at every level up to <body>. */
+function setQuoteHidden(doc, start, hidden) {
+  const nodes = [];
+  for (let n = start; n && n !== doc.body; n = n.parentElement) {
+    for (let s = n === start ? n : n.nextElementSibling; s; s = s.nextElementSibling) nodes.push(s);
+  }
+  for (const n of nodes) n.style.display = hidden ? 'none' : '';
+}
+
 function HtmlFrame({ html }) {
   const ref = useRef();
   const [h, setH] = useState(120);
+  const [quote, setQuote] = useState(null); // { el, hidden }
   const doc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
     html,body{margin:0;padding:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;color:#1d2433;word-wrap:break-word;overflow-wrap:anywhere}
     body{padding:4px 2px} img{max-width:100%;height:auto} img[data-remote-src]{display:none} table{max-width:100%} pre{white-space:pre-wrap}
@@ -306,7 +350,37 @@ function HtmlFrame({ html }) {
     const t = setTimeout(() => d.body && ro.observe(d.body), 50);
     return () => { clearTimeout(t); ro.disconnect(); };
   }, [html]);
-  return <iframe ref={ref} title="Message" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcDoc={doc} style={{ height: h }} onLoad={() => { measure(); setTimeout(measure, 300); }} />;
+  const onLoad = () => {
+    const d = ref.current?.contentDocument;
+    const el = d?.body && findQuoteStart(d);
+    if (el) { setQuoteHidden(d, el, true); setQuote({ el, hidden: true }); } else setQuote(null);
+    measure(); setTimeout(measure, 300);
+  };
+  const toggle = () => {
+    const d = ref.current?.contentDocument;
+    if (!d || !quote) return;
+    setQuoteHidden(d, quote.el, !quote.hidden);
+    setQuote({ ...quote, hidden: !quote.hidden });
+    setTimeout(measure, 30);
+  };
+  return <>
+    <iframe ref={ref} title="Message" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcDoc={doc} style={{ height: h }} onLoad={onLoad} />
+    {quote && <button className="quote-toggle" onClick={toggle} title={quote.hidden ? 'Show the quoted earlier messages' : 'Hide quoted text'}>{quote.hidden ? '··· Show quoted text' : 'Hide quoted text'}</button>}
+  </>;
+}
+
+/** Plain-text body with the quoted history ("On … wrote:", "> …") folded. */
+function PlainBody({ text }) {
+  const [open, setOpen] = useState(false);
+  const lines = String(text || '').split(/\r?\n/);
+  let cut = lines.findIndex((l, i) => QUOTE_LINE.test(l) || (/^\s*>/.test(l) && lines.slice(i).every((x) => !x.trim() || /^\s*>/.test(x))));
+  if (cut > 0 && !lines.slice(0, cut).join('').trim()) cut = -1;
+  if (cut <= 0) return <pre className="plain">{linkify(text)}</pre>;
+  return <>
+    <pre className="plain">{linkify(lines.slice(0, cut).join('\n').trimEnd())}</pre>
+    <button className="quote-toggle" onClick={() => setOpen(!open)}>{open ? 'Hide quoted text' : `··· Show quoted text (${lines.length - cut} lines)`}</button>
+    {open && <pre className="plain quoted">{linkify(lines.slice(cut).join('\n'))}</pre>}
+  </>;
 }
 
 function Invitation({ messageId, onChanged }) {

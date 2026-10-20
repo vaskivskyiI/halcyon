@@ -8,7 +8,7 @@ import { notify } from '../util/events.js';
 const log = logger('ai-queue');
 const handlers = {};
 let running = 0;
-let timer = null;
+let timer = null, timerDue = 0;
 const perUser = new Map();
 const MAX_GLOBAL = Number(process.env.HALCYON_AI_CONCURRENCY || 4);
 
@@ -40,7 +40,13 @@ export function queueMemory(userId, kind, ref, priority = 5) {
   else enqueue(userId, 'memory', `${kind}:${ref}`, kind === 'fact' ? Math.max(priority, 20) : priority, { force: true });
 }
 
-export function kick() { if (!timer) timer = setTimeout(tick, 50); }
+// A new job must not wait behind a long sleep that was scheduled for a delayed job (retry back-off, brief refresh).
+export function kick() {
+  if (timer && timerDue <= Date.now() + 100) return;
+  clearTimeout(timer);
+  timerDue = Date.now() + 50;
+  timer = setTimeout(tick, 50);
+}
 
 async function runJob(job) {
   // Atomic claim: an embed batch may already have taken this job since the tick's SELECT.
@@ -86,7 +92,11 @@ function tick() {
     runJob(job);
   }
   const next = get("SELECT MIN(run_after) AS t FROM ai_jobs WHERE status = 'queued'")?.t;
-  if (next && !timer) timer = setTimeout(tick, Math.max(500, Math.min(60e3, next - now())));
+  if (next && !timer) {
+    const delay = Math.max(500, Math.min(60e3, next - now()));
+    timerDue = now() + delay;
+    timer = setTimeout(tick, delay);
+  }
 }
 
 export function resumeWaiting(userId) {

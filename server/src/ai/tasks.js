@@ -35,6 +35,7 @@ export function serializeInsight(r) {
     actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []),
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
+    topic: r.topic || null, dismissed: !!r.dismissed_at,
   };
 }
 
@@ -55,16 +56,72 @@ function saveInsight(m, d, model, tz) {
   let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply ? 1 : 0;
   if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; } // analysed after it expired
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
-    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?)`,
+    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,(SELECT dismissed_at FROM ai_insights WHERE message_id = ?))`,
     messageId, String(d.summary || '').slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
     priority, String(d.priority_reason || '').slice(0, 200), needsReply,
     JSON.stringify((Array.isArray(d.action_items) ? d.action_items : []).slice(0, 10).map((a) => (typeof a === 'string' ? { text: a, due: null } : { text: String(a.text || ''), due: a.due || null })).filter((a) => a.text)),
     JSON.stringify((Array.isArray(d.suggested_replies) ? d.suggested_replies : []).slice(0, 3).map(String)),
     JSON.stringify(events),
     ['positive', 'neutral', 'negative', 'urgent'].includes(d.sentiment) ? d.sentiment : 'neutral',
-    String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null);
+    String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null,
+    d.topic || null, messageId);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
+}
+
+/**
+ * The live part of the daily brief, always computed fresh (so done tasks and dismissed or expired items disappear at
+ * once and new mail shows up immediately). Scoped to the space.
+ */
+export function briefLive(userId, space = '') {
+  const sc = scope(userId, space);
+  const accIn = inIds('m.account_id', sc?.accountIds);
+  const live = `i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${now()})`;
+  const row = (m) => ({ id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, date: m.date, priority: m.priority, isRead: !!m.is_read, needsReply: !!m.needs_reply, category: m.category, topic: m.topic });
+  const attention = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic
+    FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
+    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL AND i.priority >= 60 AND ${live}
+    ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 48 * 3600e3).map(row);
+  const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic
+    FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
+    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND i.needs_reply = 1 AND m.is_answered = 0 AND m.date >= ? AND ${live}
+    ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 7 * 864e5).map(row).filter((m) => !attention.some((a) => a.id === m.id));
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const events = sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), start.getTime() + 864e5, sc?.calendarIds)
+    .map((e) => ({ id: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location, onlineMeeting: e.onlineMeeting, color: e.color }));
+  const tasks = all(`SELECT id, title, due, priority, source_message_id FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
+    AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn}))
+    ORDER BY due IS NULL, due, priority DESC LIMIT 30`, userId, start.getTime() + 2 * 864e5, userId)
+    .map((t) => ({ id: t.id, title: t.title, due: t.due, priority: t.priority, sourceMessageId: t.source_message_id, overdue: !!(t.due && t.due < now()) }));
+  return { attention, awaiting, events, tasks };
+}
+
+/**
+ * Re-writes today's brief overview in the background after something relevant changed (important new mail, task
+ * changes): at most every 15 minutes, a few minutes after the last change, and only once today's brief exists.
+ */
+export function scheduleBriefRefresh(userId) {
+  const s = getSettings(userId);
+  if (!s.ai.enabled || !s.ai.dailyBrief) return;
+  const day = new Date().toISOString().slice(0, 10);
+  for (const b of all("SELECT day, created_at FROM briefs WHERE user_id = ? AND (day = ? OR day LIKE ?)", userId, day, `${day}@%`)) {
+    if (get("SELECT 1 AS x FROM ai_jobs WHERE user_id = ? AND type = 'brief' AND ref_id = ? AND status IN ('queued', 'running')", userId, b.day)) continue;
+    enqueue(userId, 'brief', b.day, 40, { delayMs: Math.max(3 * 60e3, b.created_at + 15 * 60e3 - now()), force: true });
+  }
+}
+
+/** Topics used in the last 90 days, most frequent first (the model is asked to reuse them for consistency). */
+export function recentTopics(userId, limit = 30) {
+  return all(`SELECT i.topic, COUNT(*) AS n FROM ai_insights i JOIN messages m ON m.id = i.message_id
+    WHERE m.user_id = ? AND i.topic IS NOT NULL AND m.date > ? GROUP BY lower(i.topic) ORDER BY n DESC LIMIT ?`, userId, now() - 90 * 864e5, limit).map((r) => r.topic);
+}
+
+/** Cleans a model-proposed topic and maps it onto an existing one when only the spelling differs. */
+export function normalizeTopic(topic, existing = []) {
+  const t = String(topic || '').replace(/["'`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!t || /^(null|none|n\/a|other|general|misc)$/i.test(t)) return null;
+  const key = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  return existing.find((e) => key(e) === key(t)) || t;
 }
 
 /** Expired insights (login codes, past deadlines…) drop out of priority views and "needs reply". */
@@ -107,9 +164,9 @@ export async function analyzeMessage(userId, messageId, { interactive = false } 
   let model;
   if (dup) {
     run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json)
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at)
       SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
@@ -120,12 +177,14 @@ export async function analyzeMessage(userId, messageId, { interactive = false } 
       : 'Sender is not in the user\'s contacts.';
     const tz = settings.calendar.timezone;
     const pref = fromMe ? { importance: null, category: null } : senderPreference(userId, m.from_addr);
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo, timezone: tz, fromMe, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    const topics = recentTopics(userId);
+    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo, timezone: tz, fromMe, topics, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
       language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
     if (contact?.favorite && res.data.priority < 70) res.data.priority = 70;
     applyPreference(res.data, pref);
+    res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
     if (Array.isArray(res.data.requested_items) && res.data.requested_items.length) {
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
@@ -138,6 +197,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false } 
   const settings = getSettings(userId);
   if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
   if (ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
+  if (ins.priority >= 60 && now() - m.date < 36 * 3600e3) scheduleBriefRefresh(userId);
   const count = get('SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND thread_id = ?', userId, m.thread_id).n;
   if (settings.ai.threadSummaries && count >= 3) enqueue(userId, 'thread', m.thread_id, 30, { force: true });
   await applyRules(userId, [m.id], 'ai');
@@ -357,21 +417,24 @@ export async function extractEvent(userId, messageId) {
   };
 }
 
-export async function dailyBrief(userId, { day, force = false, space = '', interactive = false } = {}) {
+/** cacheOnly: return the stored overview or queue it for the background (never makes the caller wait for the AI). */
+export async function dailyBrief(userId, { day, force = false, space = '', interactive = false, cacheOnly = false } = {}) {
   const today = day || new Date().toISOString().slice(0, 10);
   const sc = scope(userId, space);
   const key = sc ? `${today}@${sc.space}` : today; // one brief per day and space
   const cached = get('SELECT * FROM briefs WHERE user_id = ? AND day = ?', userId, key);
   if (cached && !force) return { day: today, space: sc?.space || '', content: cached.content_json, createdAt: cached.created_at, model: cached.model };
+  if (cacheOnly) { enqueue(userId, 'brief', key, 60); return { day: today, space: sc?.space || '', content: null, pending: true }; }
   const { ctx, uiLanguage } = ctxFor(userId);
   const accIn = inIds('m.account_id', sc?.accountIds);
   const since = now() - 36 * 3600e3;
   const important = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.action_items_json
     FROM messages m JOIN folders f ON f.id = m.folder_id LEFT JOIN ai_insights i ON i.message_id = m.id
     WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL
+      AND (i.message_id IS NULL OR (i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${now()})))
     ORDER BY COALESCE(i.priority, 40) DESC, m.date DESC LIMIT 25`, userId, since);
   const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, i.summary FROM messages m JOIN ai_insights i ON i.message_id = m.id
-    WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, userId, now() - 7 * 864e5);
+    WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, userId, now() - 7 * 864e5);
   const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
   const events = (sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), end.getTime(), sc?.calendarIds)).map((e) => ({ title: e.title, start: new Date(e.start).toString(), end: new Date(e.end).toString(), allDay: e.allDay, location: e.location }));
   const tasks = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)

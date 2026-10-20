@@ -26,6 +26,9 @@ export default function CalendarView() {
   const [events, setEvents] = useState([]);
   const [calendars, setCalendars] = useState([]);
   const [editing, setEditing] = useState(null);
+  // An event prepared from an email dropped on the Calendar icon: open it for review (nothing is saved yet).
+  const pendingEvent = store.use((s) => s.pendingEvent);
+  useEffect(() => { if (pendingEvent) { setEditing(pendingEvent); store.set({ pendingEvent: null }); } }, [pendingEvent]);
   const [scopeAsk, setScopeAsk] = useState(null);
   const [newCal, setNewCal] = useState(false);
   const [from, to] = rangeFor(view, date, weekStart);
@@ -387,6 +390,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
 
   const remove = async (scope) => {
     if (ev.occurrence && !scope) return setScopeFor('delete');
+    if (!confirm(`Delete “${ev.title || 'this event'}”${scope === 'this' ? ' (this occurrence)' : ''}?${calendars.find((c) => c.id === ev.calendarId)?.source === 'caldav' ? ' It is also removed from the server calendar.' : ''}`)) return;
     const notify = ev.attendees.length && confirm('Notify attendees that the event is cancelled?') ? '1' : '0';
     try { await api.del(`/api/events/${ev.id}?scope=${scope || 'all'}&occurrence=${ev.occurrence || ''}&notify=${notify}`); onSaved?.(); } catch (e) { toastError(e); }
   };

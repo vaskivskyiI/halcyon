@@ -18,13 +18,27 @@ export function snoozeOptions() {
   ].filter(Boolean);
 }
 
-/** Performs a mailbox action; shows an undo toast for reversible moves. */
+/**
+ * Performs a mailbox action; moves (archive, delete, spam, move) get an Undo button. "Delete" on mail that is already
+ * in Trash or Junk would be permanent, so it is only done after an explicit confirmation.
+ */
+/** "Delete" on mail already in Trash/Junk means permanent deletion: returns 'delete' after confirmation, null if declined. */
+export function confirmDelete(action, folderSpecial, count) {
+  if (action !== 'trash' || !['\\Trash', '\\Junk'].includes(folderSpecial)) return action;
+  return confirm(`Permanently delete ${count > 1 ? `${count} messages` : 'this message'}? This cannot be undone.`) ? 'delete' : null;
+}
+
 export async function mailAction(action, ids, extra = {}, { threads = false, onDone } = {}) {
   if (!ids.length) return;
   try {
-    await api.post('/api/messages/actions', { action, ids, threads, ...extra });
-    const labels = { archive: 'Archived', trash: 'Moved to Trash', spam: 'Marked as spam', move: 'Moved', snooze: 'Snoozed', delete: 'Deleted permanently' };
-    if (labels[action]) toast(`${labels[action]} ${ids.length > 1 ? `${ids.length} conversations` : ''}`.trim());
+    const r = await api.post('/api/messages/actions', { action, ids, threads, ...extra });
+    const labels = { archive: 'Archived', trash: 'Moved to Trash', spam: 'Marked as spam', notspam: 'Moved to Inbox', move: 'Moved', snooze: 'Snoozed', delete: 'Deleted permanently' };
+    const what = `${labels[action] || ''} ${ids.length > 1 ? `${ids.length} conversations` : ''}`.trim();
+    if (r.undo?.length) {
+      toast(what, { duration: 10000, action: { label: 'Undo', onClick: async () => {
+        try { await api.post('/api/messages/actions', { action: 'restore', items: r.undo }); toast('Restored'); onDone?.(true); loadFolders(); } catch (e) { toastError(e); }
+      } } });
+    } else if (labels[action]) toast(what);
     onDone?.();
     loadFolders();
   } catch (e) { toastError(e); }

@@ -33,9 +33,10 @@ export function replyPayload(mode, msg, accounts, extra = {}) {
   const prefix = mode === 'forward' ? 'Fwd: ' : 'Re: ';
   const subject = new RegExp(`^${prefix.trim()}`, 'i').test(msg.subject || '') ? msg.subject : `${prefix}${msg.subject || ''}`;
   const body = msg.html || textToHtml(msg.text || '');
+  // data-quote marks where the user's own text ends: AI rewrite / drafting never touch what follows.
   const quote = mode === 'forward'
-    ? `<br><div>---------- Forwarded message ----------<br>From: ${escapeHtml(addrFull(msg.from))}<br>Date: ${fmtFull(msg.date)}<br>Subject: ${escapeHtml(msg.subject)}<br>To: ${escapeHtml(msg.to.map(addrFull).join(', '))}<br><br>${body}</div>`
-    : `<br><div>On ${fmtFull(msg.date)}, ${escapeHtml(addrFull(msg.from))} wrote:</div><blockquote>${body}</blockquote>`;
+    ? `<div data-quote="1"><br>---------- Forwarded message ----------<br>From: ${escapeHtml(addrFull(msg.from))}<br>Date: ${fmtFull(msg.date)}<br>Subject: ${escapeHtml(msg.subject)}<br>To: ${escapeHtml(msg.to.map(addrFull).join(', '))}<br><br>${body}</div>`
+    : `<div data-quote="1"><br><div>On ${fmtFull(msg.date)}, ${escapeHtml(addrFull(msg.from))} wrote:</div><blockquote>${body}</blockquote></div>`;
   return {
     accountId: msg.accountId, to: mode === 'forward' ? [] : dedupe(to), cc: dedupe(cc), subject,
     quoteHtml: quote, inReplyToId: mode === 'forward' ? null : msg.id, replyToMessage: mode !== 'forward' ? msg.id : null,
@@ -152,12 +153,14 @@ function Composer({ id, init, minimized }) {
     const s = getSelection(); s.removeAllRanges(); s.addRange(r);
   };
 
-  // Body = editor content minus the quote section, so AI writes above the quote.
+  // Body = editor content up to the signature or the quoted/forwarded message, so AI only changes the user's text.
   const bodyParts = () => {
     const el = editor.current;
-    const sig = el.querySelector('.signature');
-    const quoteStart = sig || el.querySelector('blockquote')?.previousElementSibling || el.querySelector('blockquote');
-    return { el, quoteStart };
+    const top = (n) => { while (n && n.parentNode !== el) n = n.parentNode; return n; };
+    const marker = el.querySelector('.signature, [data-quote]');
+    // Drafts written before the marker existed: find the "wrote:" / "Forwarded message" line or the first blockquote.
+    const legacy = !marker && ([...el.querySelectorAll('div, p')].find((n) => /^\s*(On .{5,200} wrote:|-{5,} Forwarded message -{5,})/.test(n.textContent || '')) || el.querySelector('blockquote'));
+    return { el, quoteStart: top(marker || legacy) || null };
   };
   const setBodyText = (text, { html } = {}) => {
     const { el, quoteStart } = bodyParts();

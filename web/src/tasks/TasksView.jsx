@@ -53,7 +53,7 @@ export default function TasksView() {
                   </div>
                   <input type="datetime-local" className="input" style={{ width: 200 }} value={t.due ? toLocalInput(t.due) : ''} onChange={(e) => patch(t, { due: e.target.value ? new Date(e.target.value).getTime() : null })} />
                   <button className="icon-btn" title="Important" onClick={() => patch(t, { priority: t.priority ? 0 : 1 })}><Flag size={15} fill={t.priority ? 'var(--danger)' : 'none'} color={t.priority ? 'var(--danger)' : 'currentColor'} /></button>
-                  <button className="icon-btn" title="Delete" onClick={async () => { await api.del(`/api/tasks/${t.id}`); load(); }}><Trash2 size={15} /></button>
+                  <button className="icon-btn" title="Delete" onClick={async () => { if (!confirm(`Delete task “${t.title}”?`)) return; await api.del(`/api/tasks/${t.id}`); load(); }}><Trash2 size={15} /></button>
                 </div>
               ))}
             </div>

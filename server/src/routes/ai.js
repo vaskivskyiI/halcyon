@@ -157,7 +157,9 @@ export default async function aiRoutes(app) {
   });
 
   app.get('/api/ai/brief', async (req, reply) => {
-    try { return await T.dailyBrief(req.user.id, { force: req.query.refresh === '1', space: reqSpace(req), interactive: true }); } catch (e) { return httpError(reply, 400, e.message); }
+    // The live lists never depend on the AI; the overview text may fail (e.g. AI server busy) without hiding them.
+    const live = T.briefLive(req.user.id, reqSpace(req));
+    try { return { ...(await T.dailyBrief(req.user.id, { force: req.query.refresh === '1', cacheOnly: req.query.refresh !== '1', space: reqSpace(req), interactive: true })), live }; } catch (e) { return { live, error: e.message }; }
   });
 
   // ---- assistant chat

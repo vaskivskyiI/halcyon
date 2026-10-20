@@ -1,6 +1,6 @@
 // User-initiated mailbox operations. Applied locally first (instant UI), then replayed on the server.
 import { get, all, run, tx, now, json } from '../db/index.js';
-import { queueOp } from './sync.js';
+import { queueOp, runningOps } from './sync.js';
 import { recountFolder, deleteMessages, readRaw } from './store.js';
 import { notify } from '../util/events.js';
 
@@ -95,12 +95,47 @@ export async function notSpam(userId, ids) {
   }
 }
 
+// Moving to Trash never deletes: mail already in Trash/Junk is left alone. Permanent deletion is only the explicit
+// 'delete' action, which the UI always confirms.
 export async function trashMessages(userId, ids) {
-  const msgs = ownedMessages(userId, ids);
-  const alreadyTrash = msgs.filter((m) => m.special_use === '\\Trash' || m.special_use === '\\Junk');
-  if (alreadyTrash.length) deletePermanently(userId, alreadyTrash.map((m) => m.id));
-  const rest = msgs.filter((m) => !alreadyTrash.includes(m));
+  const rest = ownedMessages(userId, ids).filter((m) => m.special_use !== '\\Trash' && m.special_use !== '\\Junk');
   if (rest.length) await moveToSpecial(userId, rest.map((m) => m.id), '\\Trash', 'Trash');
+}
+
+/** Folder of each message, recorded before a move so it can be undone. */
+export const folderSnapshot = (userId, ids) => ownedMessages(userId, ids).map((m) => ({ id: m.id, folderId: m.folder_id }));
+
+/**
+ * Undo of archive / trash / spam / move: puts messages back into the folders they came from. A move not yet sent
+ * to the server is simply cancelled; one being sent right now is waited for and then reversed.
+ */
+export async function restoreMessages(userId, items) {
+  for (const { id, folderId } of items || []) {
+    let m = ownedMessages(userId, [id])[0];
+    const target = m && get('SELECT f.* FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.user_id = ?', Number(folderId), userId);
+    if (!m || !target || m.folder_id === target.id) continue;
+    if (m.uid == null) {
+      const ops = all("SELECT * FROM pending_ops WHERE account_id = ? AND op = 'move'", m.account_id)
+        .map((o) => ({ ...o, p: json(o.payload_json, {}) })).filter((o) => Object.values(o.p.map || {}).map(Number).includes(m.id));
+      for (let i = 0; i < 100 && ops.some((o) => runningOps.has(o.id)); i++) await new Promise((r) => setTimeout(r, 100));
+      const pending = ops.find((o) => !runningOps.has(o.id) && get('SELECT 1 AS x FROM pending_ops WHERE id = ?', o.id));
+      if (pending && pending.p.from === target.path) {
+        const oldUid = Object.entries(pending.p.map).find(([, v]) => Number(v) === m.id)[0];
+        const uids = pending.p.uids.filter((u) => String(u) !== String(oldUid));
+        delete pending.p.map[oldUid];
+        tx(() => {
+          if (uids.length) run('UPDATE pending_ops SET payload_json = ? WHERE id = ?', JSON.stringify({ ...pending.p, uids }), pending.id);
+          else run('DELETE FROM pending_ops WHERE id = ?', pending.id);
+          run('UPDATE messages SET folder_id = ?, uid = ? WHERE id = ?', target.id, Number(oldUid), m.id);
+        });
+        recountFolder(m.folder_id); recountFolder(target.id);
+        continue;
+      }
+      m = ownedMessages(userId, [id])[0];
+    }
+    await moveMessages(userId, [m.id], target.id);
+  }
+  notify(userId, 'mail:changed', { ids: (items || []).map((x) => x.id) });
 }
 
 export function deletePermanently(userId, ids) {

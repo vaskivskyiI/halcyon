@@ -22,11 +22,13 @@ const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
+  i.topic AS ai_topic, i.expires_at AS ai_expires_at,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
 
 function listItem(r) {
   return serializeMessage(r, {
-    ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft } : null,
+    ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
+      topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()) } : null,
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
 }
@@ -38,8 +40,10 @@ function scopeFor(userId, q, sc) {
   else if (view === 'unified') where.push("m.folder_id IN (SELECT f.id FROM folders f WHERE f.special_use = '\\Inbox')");
   else if (view === 'flagged') where.push("m.is_flagged = 1 AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))");
   else if (view === 'snoozed') where.push('m.snoozed_until IS NOT NULL');
-  else if (view === 'needsreply') where.push("m.is_answered = 0 AND m.id IN (SELECT message_id FROM ai_insights WHERE needs_reply = 1) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
-  else if (view === 'important') where.push("m.id IN (SELECT message_id FROM ai_insights WHERE priority >= 70) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
+  else if (view === 'needsreply') where.push("m.is_answered = 0 AND m.id IN (SELECT message_id FROM ai_insights WHERE needs_reply = 1 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
+  else if (view === 'important') where.push("m.id IN (SELECT message_id FROM ai_insights WHERE priority >= 70 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
+  else if (view === 'topic' && q.topic) { where.push('lower(i.topic) = lower(?)'); params.push(String(q.topic)); }
+  else if (view === 'category' && q.category) { where.push("i.category = ? AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))"); params.push(String(q.category)); }
   else if (view === 'label' && q.labelId) { where.push('EXISTS (SELECT 1 FROM json_each(m.labels_json) j WHERE j.value = ?)'); params.push(Number(q.labelId)); }
   else if (['sent', 'drafts', 'archive', 'trash', 'junk'].includes(view)) {
     const special = { sent: '\\Sent', drafts: '\\Drafts', archive: '\\Archive', trash: '\\Trash', junk: '\\Junk' }[view];
@@ -55,7 +59,7 @@ function scopeFor(userId, q, sc) {
     case 'other': where.push(`i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${NOISE})`); break;
     default: break;
   }
-  if (q.category) { where.push('i.category = ?'); params.push(q.category); }
+  if (q.category && view !== 'category') { where.push('i.category = ?'); params.push(q.category); }
   return { where, params };
 }
 
@@ -75,10 +79,17 @@ export default async function mailRoutes(app) {
       unified: get(`SELECT COUNT(*) AS n FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND f.special_use = '\\Inbox' AND m.is_read = 0 AND m.snoozed_until IS NULL`, req.user.id).n,
       flagged: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.is_flagged = 1`, req.user.id).n,
       snoozed: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.snoozed_until IS NOT NULL`, req.user.id).n,
-      needsreply: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_reply = 1 AND m.is_answered = 0 AND f.special_use = '\\Inbox'`, req.user.id).n,
+      needsreply: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND f.special_use = '\\Inbox'`, req.user.id).n,
       scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, req.user.id).n,
     };
-    return { accounts: out, counts };
+    // Dynamic AI views: active topics and the categories present (excluding the generic ones), with unread counts.
+    const recent = `FROM ai_insights i JOIN messages m ON m.id = i.message_id JOIN folders f ON f.id = m.folder_id
+      WHERE m.user_id = ? AND ${acc} AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk') AND m.date > ?`;
+    const topics = all(`SELECT i.topic AS name, COUNT(*) AS count, SUM(1 - m.is_read) AS unread, MAX(m.date) AS last ${recent} AND i.topic IS NOT NULL
+      GROUP BY lower(i.topic) HAVING count >= 2 ORDER BY unread > 0 DESC, last DESC LIMIT 12`, req.user.id, Date.now() - 60 * 864e5);
+    const categories = all(`SELECT i.category AS name, COUNT(*) AS count, SUM(1 - m.is_read) AS unread ${recent} AND f.special_use = '\\Inbox'
+      AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, req.user.id, Date.now() - 30 * 864e5);
+    return { accounts: out, counts, topics, categories };
   });
 
   app.post('/api/folders', async (req, reply) => {
@@ -236,6 +247,8 @@ export default async function mailRoutes(app) {
       target = [...new Set([...target, ...list])];
     }
     const u = req.user.id;
+    // Everything that moves mail can be undone: remember where it was.
+    const undo = ['archive', 'trash', 'spam', 'notspam', 'move'].includes(action) ? actions.folderSnapshot(u, target) : null;
     switch (action) {
       case 'read': actions.setFlags(u, target, { read: true }); break;
       case 'unread': actions.setFlags(u, target, { read: false }); break;
@@ -252,11 +265,21 @@ export default async function mailRoutes(app) {
       case 'move': await actions.moveMessages(u, target, Number(folderId)); break;
       case 'snooze': actions.snoozeMessages(u, target, Number(until)); break;
       case 'unsnooze': actions.snoozeMessages(u, target, null); break;
+      case 'restore': await actions.restoreMessages(u, req.body.items); break;
       case 'label': actions.setLabels(u, target, { add: [labelId] }); break;
       case 'unlabel': actions.setLabels(u, target, { remove: [labelId] }); break;
       default: return httpError(reply, 400, 'Unknown action');
     }
-    return { ok: true, count: target.length };
+    return { ok: true, count: target.length, undo };
+  });
+
+  // "Done" in the brief: the message leaves the brief, Important and Needs reply (it stays in its folder).
+  app.post('/api/messages/:id/dismiss', async (req, reply) => {
+    const m = get('SELECT id, thread_id FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!m) return httpError(reply, 404, 'Not found');
+    run('UPDATE ai_insights SET dismissed_at = ? WHERE message_id = ?', req.body?.dismissed === false ? null : Date.now(), m.id);
+    notify(req.user.id, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) });
+    return { ok: true };
   });
 
   // Corrections that teach the AI: kind = important | unimportant | category (value = category name).

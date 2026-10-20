@@ -254,9 +254,13 @@ class AccountSync {
   // Replays locally-applied operations against the server.
   async processOps() {
     if (!this.client) return;
-    const ops = all('SELECT * FROM pending_ops WHERE account_id = ? AND attempts < 5 ORDER BY id', this.accountId);
-    for (const op of ops) {
+    const ops = all('SELECT id FROM pending_ops WHERE account_id = ? AND attempts < 5 ORDER BY id', this.accountId);
+    for (const { id } of ops) {
+      // Re-read: an undo may have shrunk or cancelled the op since the list was taken.
+      const op = get('SELECT * FROM pending_ops WHERE id = ?', id);
+      if (!op) continue;
       const p = json(op.payload_json, {});
+      runningOps.add(op.id);
       try {
         await this.applyOp(op.op, p);
         run('DELETE FROM pending_ops WHERE id = ?', op.id);
@@ -264,7 +268,7 @@ class AccountSync {
         log.warn(`op ${op.op} failed: ${e.responseText || e.message}`);
         run('UPDATE pending_ops SET attempts = attempts + 1, error = ? WHERE id = ?', e.message, op.id);
         if (!this.client?.usable) throw e;
-      }
+      } finally { runningOps.delete(op.id); }
     }
   }
 
@@ -358,6 +362,9 @@ class SyncManager {
 export const syncManager = new SyncManager();
 
 // Queue a server-side operation and wake the account's worker.
+/** Ids of pending_ops currently being executed against the server (an undo must not edit those). */
+export const runningOps = new Set();
+
 export function queueOp(accountId, op, payload) {
   run('INSERT INTO pending_ops (account_id, op, payload_json, created_at) VALUES (?, ?, ?, ?)', accountId, op, JSON.stringify(payload), now());
   syncManager.trigger(accountId);

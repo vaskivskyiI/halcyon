@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, Send, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
-  ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon,
+  ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon,
 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -10,7 +10,7 @@ import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
 import Reader from './Reader.jsx';
-import { mailAction, snoozeOptions } from './mailActions.js';
+import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 
 const SMART = [
   ['unified', Inbox, 'All inboxes', 'unified'],
@@ -23,7 +23,13 @@ const SMART = [
 const FOLDER_ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Archive': Archive, '\\Trash': Trash2, '\\Junk': AlertOctagon, '\\Flagged': Star };
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
 
+// Dynamic AI views: "tp~<topic>" (ongoing project/case) and "ct~<category>".
+export const topicView = (name) => `tp~${encodeURIComponent(name)}`;
+export const categoryView = (name) => `ct~${encodeURIComponent(name)}`;
+
 function viewQuery(view) {
+  if (view.startsWith('tp~')) return { view: 'topic', topic: decodeURIComponent(view.slice(3)) };
+  if (view.startsWith('ct~')) return { view: 'category', category: decodeURIComponent(view.slice(3)) };
   if (view.startsWith('f')) return { view: 'folder', folderId: view.slice(1) };
   if (view.startsWith('l')) return { view: 'label', labelId: view.slice(1) };
   return { view };
@@ -81,6 +87,20 @@ function FolderNav({ view, open, onNavigate }) {
             <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && <span className="count">{folders.counts[countKey]}</span>}
           </div>
         ))}
+        {folders.topics?.length > 0 && <>
+          <div className="nav-section" style={{ cursor: 'default' }} title="Ongoing projects, events and cases recognised by the AI">Topics</div>
+          {folders.topics.map((t) => (
+            <div key={t.name} className={`nav-item ${view === topicView(t.name) ? 'active' : ''}`} onClick={() => go(topicView(t.name))} title={`${t.count} messages in the last 60 days`}>
+              <Hash size={15} /><span className="truncate">{t.name}</span>{t.unread > 0 && <span className="count">{t.unread}</span>}
+            </div>))}
+        </>}
+        {folders.categories?.length > 0 && <>
+          <div className="nav-section" style={{ cursor: 'default' }}>AI categories</div>
+          {folders.categories.map((c) => (
+            <div key={c.name} className={`nav-item ${view === categoryView(c.name) ? 'active' : ''}`} onClick={() => go(categoryView(c.name))}>
+              <Tag size={15} color={CATEGORY_COLORS[c.name]} /><span className="truncate" style={{ textTransform: 'capitalize' }}>{c.name}</span>{c.unread > 0 && <span className="count">{c.unread}</span>}
+            </div>))}
+        </>}
         {folders.accounts.map((acc) => {
           const sorted = [...acc.folders].sort((a, b) => {
             const ia = SPECIAL_ORDER.indexOf(a.specialUse), ib = SPECIAL_ORDER.indexOf(b.specialUse);
@@ -199,7 +219,7 @@ function MessageList({ view, openId, onMenu }) {
     }
     if (e.type === 'ai:insight') {
       const i = e.payload.insight;
-      setItems((cur) => cur.map((m) => (m.id === e.payload.messageId ? { ...m, ai: { summary: i.summary, category: i.category, priority: i.priority, needsReply: i.needsReply, isPhishing: i.isPhishing, hasDraft: !!i.draftReply } } : m)));
+      setItems((cur) => cur.map((m) => (m.id === e.payload.messageId ? { ...m, ai: { summary: i.summary, category: i.category, priority: i.priority, needsReply: i.needsReply, isPhishing: i.isPhishing, hasDraft: !!i.draftReply, topic: i.topic, expired: i.expired } } : m)));
     }
     if (e.type === 'ai:draft') setItems((cur) => cur.map((m) => (m.id === e.payload.messageId && m.ai ? { ...m, ai: { ...m.ai, hasDraft: true } } : m)));
   }), [params]);
@@ -217,7 +237,9 @@ function MessageList({ view, openId, onMenu }) {
   };
 
   const selIds = selected.size ? [...selected] : openId ? [openId] : [];
-  const act = (action, extra = {}, ids = selIds) => {
+  const act = (requested, extra = {}, ids = selIds) => {
+    const action = confirmDelete(requested, items.find((m) => ids.includes(m.id))?.folder?.specialUse, ids.length);
+    if (!action) return;
     const removing = ['archive', 'trash', 'spam', 'move', 'snooze', 'delete', 'notspam'].includes(action) || (action === 'unsnooze' && view === 'snoozed');
     if (removing) {
       const idx = items.findIndex((m) => ids.includes(m.id));
@@ -302,6 +324,8 @@ function MessageList({ view, openId, onMenu }) {
   const title = useMemo(() => {
     const smart = SMART.find((s) => s[0] === view);
     if (smart) return smart[2];
+    if (view.startsWith('tp~')) return `Topic: ${decodeURIComponent(view.slice(3))}`;
+    if (view.startsWith('ct~')) { const c = decodeURIComponent(view.slice(3)); return c[0].toUpperCase() + c.slice(1); }
     if (view.startsWith('l')) return store.get().labels.find((l) => `l${l.id}` === view)?.name || 'Label';
     for (const a of folders.accounts) { const f = a.folders.find((x) => `f${x.id}` === view); if (f) return f.name; }
     return 'Mail';
@@ -366,16 +390,20 @@ function MessageList({ view, openId, onMenu }) {
 function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, onAct, dragIds, showAi }) {
   const unread = threaded ? m.threadUnread > 0 || !m.isRead : !m.isRead;
   const ai = m.ai;
-  const prioColor = ai?.priority >= 80 ? 'var(--danger)' : ai?.priority >= 60 ? 'var(--warning)' : null;
+  const expired = !!ai?.expired;
+  const important = !expired && ai?.priority >= 70;
+  const prioColor = expired ? null : ai?.priority >= 80 ? 'var(--danger)' : ai?.priority >= 60 ? 'var(--warning)' : null;
   return (
-    <div className={`msg-row ${unread ? 'unread' : ''} ${selected ? 'selected' : ''}`} onClick={onClick} onContextMenu={onContextMenu} draggable
-      onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'move'; }}>
+    <div className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={onClick} onContextMenu={onContextMenu} draggable
+      onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'copyMove'; }}>
       <div onClick={(e) => { e.stopPropagation(); onCheck(); }} style={{ cursor: 'pointer' }}>
         {checked ? <div className="avatar" style={{ background: 'var(--accent)' }}><CheckSquare size={18} /></div> : <Avatar name={m.from.name} email={m.from.address} />}
       </div>
       <div className="body">
         <div className="from">
-          {prioColor && <span className="prio-dot" style={{ background: prioColor }} title={`Priority ${ai.priority}`} />}
+          {unread && <span className="unread-dot" title="Unread" />}
+          {important && <Flame size={13} className="imp-icon" title={`Important (priority ${ai.priority})`} />}
+          {!important && prioColor && <span className="prio-dot" style={{ background: prioColor }} title={`Priority ${ai.priority}`} />}
           <span className="truncate">{m.folder?.specialUse === '\\Sent' ? `To: ${m.to.map((a) => a.name || a.address).join(', ')}` : m.from.name || m.from.address}</span>
           {threaded && m.threadCount > 1 && <span className="faint small">{m.threadCount}</span>}
           <span className="date">{m.snoozedUntil ? <span title="Snoozed until"><Clock size={11} /> {fmtListDate(m.snoozedUntil)}</span> : fmtListDate(m.date)}</span>
@@ -385,7 +413,10 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
           : <div className="snippet truncate">{m.snippet}</div>}
         <div className="meta">
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
-          {ai?.needsReply && !m.isAnswered && <span className="chip ai"><CornerUpLeft size={11} /> Reply needed</span>}
+          {expired && <span className="chip faint" title="Time-sensitive content that is no longer valid"><Hourglass size={11} /> expired</span>}
+          {m.isAnswered && <span className="chip faint" title="You replied"><ReplyIcon size={11} /> replied</span>}
+          {ai?.topic && <span className="chip topic" title="Topic (AI)"><Hash size={10} />{ai.topic}</span>}
+          {ai?.needsReply && !m.isAnswered && !expired && <span className="chip ai"><CornerUpLeft size={11} /> Reply needed</span>}
           {ai?.hasDraft && !m.isAnswered && <span className="chip ai"><Sparkles size={11} /> Draft ready</span>}
           {ai?.category && !['work', 'personal', 'other'].includes(ai.category) && <span className="chip" style={{ color: CATEGORY_COLORS[ai.category] }}>{ai.category}</span>}
           {m.hasInvite && <span className="chip"><CalendarPlus size={11} /> Invitation</span>}

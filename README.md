@@ -72,7 +72,7 @@ docker compose up -d        # Halcyon on :8080 + Ollama (add provider URL http:/
 ```bash
 ./deploy/podman-pod.sh up --with-ollama          # builds the image, creates pod "halcyon" on 127.0.0.1:8080
 ./deploy/podman-pod.sh systemd                   # optional: start at boot (rootless: loginctl enable-linger $USER)
-./deploy/podman-pod.sh update --with-ollama      # after git pull; volumes halcyon-data / ollama-models are kept
+./deploy/podman-pod.sh update                    # git pull + rebuild + recreate with the options of the last 'up'; data volumes are kept
 ```
 
 The first run writes `deploy/halcyon.env` (mode 600, git-ignored) with the generated `HALCYON_SECRET` — back it up

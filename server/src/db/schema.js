@@ -195,4 +195,10 @@ export const migrations = [
   CREATE INDEX idx_ai_feedback_sender ON ai_feedback(user_id, from_addr);
   CREATE INDEX idx_ai_feedback_domain ON ai_feedback(user_id, domain);
   `,
+  // 5: dynamic AI topics (ongoing projects / cases) and items the user dismissed from the brief / priority views.
+  `
+  ALTER TABLE ai_insights ADD COLUMN topic TEXT;
+  ALTER TABLE ai_insights ADD COLUMN dismissed_at INTEGER;
+  CREATE INDEX idx_ai_insights_topic ON ai_insights(topic);
+  `,
 ];

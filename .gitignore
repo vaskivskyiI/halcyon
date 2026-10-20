@@ -10,3 +10,4 @@ deploy/halcyon.env
 # Build outputs kept next to the checkout
 /Halcyon-Setup-*.exe
 /halcyon-source.zip
+deploy/pod.options

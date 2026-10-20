@@ -106,12 +106,25 @@ function Shell() {
   ];
   const dark = document.documentElement.dataset.theme === 'dark';
   const space = store.use((s) => s.space);
+
+  // Drag a message from the list onto Calendar (create an event from it) or Tasks (create tasks from it).
+  const [dropNav, setDropNav] = useState(null);
+  const dropProps = (id) => ({
+    onDragOver: (e) => { if (e.dataTransfer.types.includes('application/x-halcyon')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDropNav(id); } },
+    onDragLeave: () => setDropNav(null),
+    onDrop: (e) => {
+      e.preventDefault(); setDropNav(null);
+      const data = JSON.parse(e.dataTransfer.getData('application/x-halcyon') || '{}');
+      if (data.ids?.length) (id === 'calendar' ? eventFromMessage(data.ids[0]) : tasksFromMessages(data.ids));
+    },
+  });
   return (
     <div className="app">
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (
-          <button key={id} className={section === id ? 'active' : ''} title={label} aria-label={label} onClick={() => navigate(`#/${id}`)}>
+          <button key={id} className={`${section === id ? 'active' : ''} ${dropNav === id ? 'drop' : ''}`} title={DROP_HINT[id] ? `${label} — ${DROP_HINT[id]}` : label} aria-label={label} onClick={() => navigate(`#/${id}`)}
+            {...(DROP_HINT[id] ? dropProps(id) : {})}>
             <Icon size={21} />{badge > 0 && <span className="badge">{badge > 99 ? '99+' : badge}</span>}
           </button>
         ))}
@@ -151,6 +164,30 @@ function SpaceSwitcher() {
     </button>
     {menuNode}
   </>;
+}
+
+const DROP_HINT = { calendar: 'drop an email here to create an event', tasks: 'drop emails here to create tasks' };
+
+async function eventFromMessage(messageId) {
+  toast('Reading the date and time from the email…');
+  let draft;
+  try { draft = await api.post('/api/ai/extract-event', { messageId }); } catch { draft = null; }
+  if (!draft?.start) {
+    // No AI (or no date found): prefill from the message and let the user pick the time.
+    const m = await api.get(`/api/messages/${messageId}`).catch(() => null);
+    const start = new Date(); start.setMinutes(0, 0, 0); start.setHours(start.getHours() + 1);
+    draft = { title: m?.subject || 'New event', start: start.getTime(), end: start.getTime() + 3600e3, allDay: false, description: m ? `From email: ${m.subject}` : '', sourceMessageId: messageId, attendees: [] };
+  }
+  store.set({ pendingEvent: draft });
+  navigate('#/calendar');
+}
+
+async function tasksFromMessages(ids) {
+  try {
+    let n = 0;
+    for (const id of ids) n += (await api.post(`/api/tasks/from-message/${id}`, {})).length;
+    toast(`${n} task${n === 1 ? '' : 's'} added`, { action: { label: 'View', onClick: () => navigate('#/tasks') } });
+  } catch (e) { toast(e.message, { kind: 'error' }); }
 }
 
 export function parseMailto(url) {

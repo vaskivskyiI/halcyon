@@ -1,7 +1,11 @@
 import { get, all, run, now, json } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
-import { notify } from '../util/events.js';
+import { notify as notifyRaw } from '../util/events.js';
+import { scheduleBriefRefresh } from '../ai/tasks.js';
+
+// Task changes also refresh the AI overview of the daily brief (debounced there).
+const notify = (userId, type, payload) => { notifyRaw(userId, type, payload); if (type === 'tasks:changed') scheduleBriefRefresh(userId); };
 
 const out = (t) => ({ id: t.id, title: t.title, notes: t.notes, due: t.due, priority: t.priority, done: !!t.done, completedAt: t.completed_at, list: t.list, sourceMessageId: t.source_message_id, createdAt: t.created_at });
 
