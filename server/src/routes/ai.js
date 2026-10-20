@@ -6,6 +6,7 @@ import { PROVIDER_TYPES, makeProvider, isLocalEndpoint } from '../ai/providers/i
 import { enqueue, resumeWaiting, queueStats } from '../ai/queue.js';
 import { memoryStats, invalidate, removeMemory } from '../ai/memory.js';
 import { scope, reqSpace, spaceMap, ownerSpace, cleanSpace } from '../spaces.js';
+import { listPreferences, forgetSender } from '../ai/learning.js';
 import * as T from '../ai/tasks.js';
 import { ask } from '../ai/assistant.js';
 import { getSettings } from '../settings.js';
@@ -156,14 +157,14 @@ export default async function aiRoutes(app) {
   });
 
   app.get('/api/ai/brief', async (req, reply) => {
-    try { return await T.dailyBrief(req.user.id, { force: req.query.refresh === '1', space: reqSpace(req) }); } catch (e) { return httpError(reply, 400, e.message); }
+    try { return await T.dailyBrief(req.user.id, { force: req.query.refresh === '1', space: reqSpace(req), interactive: true }); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
   // ---- assistant chat
   app.post('/api/ai/ask', async (req, reply) => {
     const { chatId, question } = req.body || {};
     if (!question?.trim()) return httpError(reply, 400, 'Question required');
-    return streamNdjson(req, reply, (onToken) => ask(req.user.id, { chatId, question: question.trim(), space: reqSpace(req) }, onToken));
+    return streamNdjson(req, reply, (onToken, signal, onStatus) => ask(req.user.id, { chatId, question: question.trim(), space: reqSpace(req) }, onToken, { signal, onStatus }));
   });
   // In a space only that space's chats are listed; "all spaces" lists every chat.
   app.get('/api/ai/chats', async (req) => {
@@ -176,6 +177,10 @@ export default async function aiRoutes(app) {
     return { id: c.id, title: c.title, messages: all('SELECT role, content, sources_json, created_at FROM chat_messages WHERE chat_id = ? ORDER BY id', c.id).map((m) => ({ role: m.role, content: m.content, sources: json(m.sources_json, []), createdAt: m.created_at })) };
   });
   app.delete('/api/ai/chats/:id', async (req) => { run('DELETE FROM chats WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+
+  // ---- what the AI learned from the user's corrections, per sender
+  app.get('/api/ai/preferences', async (req) => listPreferences(req.user.id));
+  app.delete('/api/ai/preferences', async (req) => { forgetSender(req.user.id, req.query.from); return { ok: true }; });
 
   // ---- memory: what the AI has indexed and the facts it remembers (visible, editable, deletable by the user)
   app.get('/api/ai/memory', async (req) => {

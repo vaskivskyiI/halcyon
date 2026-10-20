@@ -65,9 +65,12 @@ export function keywordSearch(userId, q, { limit = 50, offset = 0, sc = null } =
   return all(sql, ...params, limit, offset).map((r) => r.id);
 }
 
-/** Embeds a query once; null when no embedding provider is available. */
-export async function embedQuery(userId, text) {
-  try { const { vectors, model } = await embed(userId, [text]); return { vector: vectors[0], model }; } catch { return null; }
+/** Embeds a query once; null when no embedding provider is available or it does not answer in time. */
+export async function embedQuery(userId, text, { interactive = true, timeoutMs = 20e3 } = {}) {
+  try {
+    const { vectors, model } = await embed(userId, [text], { interactive, signal: AbortSignal.timeout(timeoutMs) });
+    return { vector: vectors[0], model };
+  } catch { return null; }
 }
 
 /** Messages ranked by their best-matching chunk: [{ id, score, chunkId }]. */

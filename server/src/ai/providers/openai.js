@@ -1,4 +1,4 @@
-import { request, sseData, trimSlash } from './http.js';
+import { request, sseData, trimSlash, stripThink, thinkFilter } from './http.js';
 
 // Works for OpenAI and any OpenAI-compatible endpoint (LM Studio, vLLM, LocalAI, llama.cpp server, Groq,
 // Mistral, OpenRouter, DeepSeek, Together, Azure OpenAI v1 endpoints, ...).
@@ -32,18 +32,20 @@ export function openai({ baseUrl, apiKey, type }) {
       }
       if (!onToken) {
         const d = await r.json();
-        return { text: d.choices?.[0]?.message?.content || '', usage: { input: d.usage?.prompt_tokens || 0, output: d.usage?.completion_tokens || 0 } };
+        return { text: stripThink(d.choices?.[0]?.message?.content), usage: { input: d.usage?.prompt_tokens || 0, output: d.usage?.completion_tokens || 0 } };
       }
       let text = '', usage = { input: 0, output: 0 };
+      const emit = thinkFilter(onToken);
       for await (const d of sseData(r)) {
         const t = d.choices?.[0]?.delta?.content || '';
-        if (t) { text += t; onToken(t); }
+        if (t) { text += t; emit(t); }
         if (d.usage) usage = { input: d.usage.prompt_tokens || 0, output: d.usage.completion_tokens || 0 };
       }
-      return { text, usage };
+      emit.flush();
+      return { text: stripThink(text), usage };
     },
-    async embed({ model, input }) {
-      const r = await request(`${base}/embeddings`, { headers, body: { model, input } });
+    async embed({ model, input, signal }) {
+      const r = await request(`${base}/embeddings`, { headers, body: { model, input }, signal });
       const d = await r.json();
       return d.data.sort((a, b) => a.index - b.index).map((x) => x.embedding);
     },

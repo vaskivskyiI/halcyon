@@ -60,3 +60,33 @@ export async function* sseData(response) {
 }
 
 export const trimSlash = (s) => String(s || '').replace(/\/+$/, '');
+
+// Reasoning models served by OpenAI-compatible servers put their chain of thought in <think>…</think>.
+export const stripThink = (s) => String(s || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trimStart();
+
+/** Wraps onToken so streamed <think>…</think> sections are not shown to the user. */
+export function thinkFilter(onToken) {
+  let buf = '', inThink = false, started = false;
+  const filter = (t) => {
+    buf += t;
+    for (;;) {
+      if (inThink) {
+        const e = buf.indexOf('</think>');
+        if (e < 0) { buf = buf.slice(-8); return; }
+        buf = buf.slice(e + 8); inThink = false;
+      } else {
+        const s = buf.indexOf('<think>');
+        if (s >= 0) { if (s) emit(buf.slice(0, s)); buf = buf.slice(s + 7); inThink = true; continue; }
+        // Hold back a tail that could be the start of "<think>" until the next token decides.
+        const keep = buf.lastIndexOf('<');
+        const out = keep >= 0 && '<think>'.startsWith(buf.slice(keep)) ? buf.slice(0, keep) : buf;
+        buf = buf.slice(out.length);
+        if (out) emit(out);
+        return;
+      }
+    }
+  };
+  filter.flush = () => { if (!inThink && buf) emit(buf); buf = ''; };
+  return filter;
+  function emit(s) { if (!started) { s = s.trimStart(); if (!s) return; started = true; } onToken(s); }
+}

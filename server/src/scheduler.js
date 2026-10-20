@@ -8,6 +8,7 @@ import { syncCardDav } from './contacts/carddav.js';
 import { enqueue } from './ai/queue.js';
 import { backfillAnalysis, purgeMemory } from './mail/pipeline.js';
 import { listSpaces } from './spaces.js';
+import { expireInsights } from './ai/tasks.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
@@ -81,6 +82,7 @@ export function startScheduler() {
   setTimeout(backfillAll, 15e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(() => { try { purgeMemory(); } catch (e) { log.error(e); } }, 3600e3).unref();
+  setInterval(() => { try { expireInsights(); } catch (e) { log.error(e); } }, 2 * 60e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
   // Clean up old reminder markers.
   setInterval(() => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000), 3600e3).unref();

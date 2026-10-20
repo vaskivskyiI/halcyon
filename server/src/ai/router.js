@@ -32,13 +32,34 @@ export function resolve(userId, task) {
   return { row, model, provider: makeProvider({ type: row.type, baseUrl: row.base_url, apiKey: decrypt(row.api_key_enc) }) };
 }
 
+// Per-provider lanes. The user's own requests (chat, search, writing, "analyze now") go first: background work
+// (analysis, indexing) waits while any of them is pending and keeps at most a few requests in flight per provider.
+// A self-hosted model server works through requests one by one, so without this an interactive request would queue
+// behind the whole backlog.
+const lanes = new Map();
+const laneOf = (id) => { let l = lanes.get(id); if (!l) lanes.set(id, (l = { interactive: 0, bg: 0, waiters: [] })); return l; };
+const wake = (l) => l.waiters.splice(0).forEach((f) => f());
+const bgLimit = (row) => (row.type === 'ollama' || isLocalEndpoint(row.type, row.base_url) ? 1 : 3);
+
+async function enterLane(row, interactive) {
+  const l = laneOf(row.id);
+  if (interactive) { l.interactive++; return () => { l.interactive--; wake(l); }; }
+  while (l.interactive > 0 || l.bg >= bgLimit(row)) await new Promise((r) => l.waiters.push(r));
+  l.bg++;
+  return () => { l.bg--; wake(l); };
+}
+
+export const laneStats = () => Object.fromEntries([...lanes].map(([id, l]) => [id, { interactive: l.interactive, background: l.bg, waiting: l.waiters.length }]));
+
 function logUsage(userId, row, model, task, usage, ms, ok) {
   run('INSERT INTO ai_usage (user_id, provider_id, model, task, input_tokens, output_tokens, ms, ok, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
     userId, row.id, model, task, usage?.input || 0, usage?.output || 0, ms, ok ? 1 : 0, now());
 }
 
-export async function chat(userId, task, opts) {
+/** opts.interactive overrides the lane (e.g. "analyze now" uses the background model but the user is waiting). */
+export async function chat(userId, task, { interactive = task !== 'background', ...opts } = {}) {
   const { row, model, provider } = resolve(userId, task);
+  const leave = await enterLane(row, interactive);
   const t0 = Date.now();
   try {
     const res = await provider.chat({ model, ...opts });
@@ -47,7 +68,7 @@ export async function chat(userId, task, opts) {
   } catch (e) {
     logUsage(userId, row, model, task, null, Date.now() - t0, false);
     throw e;
-  }
+  } finally { leave(); }
 }
 
 export async function chatJSON(userId, task, opts) {
@@ -55,12 +76,16 @@ export async function chatJSON(userId, task, opts) {
   return { data: parseJSON(res.text), model: res.model };
 }
 
-export async function embed(userId, texts) {
+/** interactive: a search query the user is waiting for (vs. background indexing). */
+export async function embed(userId, texts, { interactive = false, signal } = {}) {
   const { row, model, provider } = resolve(userId, 'embeddings');
+  const leave = await enterLane(row, interactive);
   const t0 = Date.now();
-  const vectors = await provider.embed({ model, input: texts });
-  logUsage(userId, row, model, 'embeddings', { input: texts.join(' ').length / 4 }, Date.now() - t0, true);
-  return { vectors, model: `${row.type}:${model}` };
+  try {
+    const vectors = await provider.embed({ model, input: texts, signal });
+    logUsage(userId, row, model, 'embeddings', { input: texts.join(' ').length / 4 }, Date.now() - t0, true);
+    return { vectors, model: `${row.type}:${model}` };
+  } finally { leave(); }
 }
 
 export function parseJSON(text) {

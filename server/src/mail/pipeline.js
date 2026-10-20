@@ -7,6 +7,8 @@ import { resolve } from '../ai/router.js';
 import { invalidateAll } from '../ai/memory.js';
 import { collectAddresses } from '../contacts/service.js';
 import { processIncomingIcs } from '../calendar/invites.js';
+import { senderPreference } from '../ai/learning.js';
+import { spamMessages } from './actions.js';
 import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
 
@@ -33,10 +35,14 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
       if (m.calendar_ics) try { processIncomingIcs(account.user_id, m.id); } catch (e) { log.warn(`ics ${m.id}: ${e.message}`); }
     }
     applyRules(account.user_id, ids, 'ingest');
+    // Senders the user marked as spam (their own decision, not an AI one) go straight to Junk.
+    const spam = messages.filter((m) => senderPreference(account.user_id, m.from_addr).spam).map((m) => m.id);
+    if (spam.length) spamMessages(account.user_id, spam).catch((e) => log.warn(`spam filing: ${e.message}`));
   }
 
   const cutoff = Date.now() - settings.ai.analyzeDays * 864e5;
-  const analyzeHere = isInbox || (settings.ai.analyzeFolders === 'all' && !NEVER_ANALYZE.includes(folder.special_use));
+  // Sent mail is analysed too: it holds the user's own commitments and the other half of every conversation.
+  const analyzeHere = isInbox || isSent || (settings.ai.analyzeFolders === 'all' && !NEVER_ANALYZE.includes(folder.special_use));
   for (const m of messages) {
     if (settings.ai.enabled && settings.ai.autoAnalyze && analyzeHere && m.date >= cutoff) enqueue(account.user_id, 'analyze', m.id, analyzePriority(m.date));
     else run("UPDATE messages SET ai_status = 'none' WHERE id = ? AND ai_status = 'pending'", m.id);
@@ -64,7 +70,7 @@ export function backfillAnalysis(userId) {
   if (!s.ai.enabled) return 0;
   let n = 0;
   if (s.ai.autoAnalyze) {
-    const folderCond = s.ai.analyzeFolders === 'all' ? "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')" : "f.special_use = '\\Inbox'";
+    const folderCond = s.ai.analyzeFolders === 'all' ? "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')" : "f.special_use IN ('\\Inbox', '\\Sent')";
     const rows = all(`SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id
       WHERE m.user_id = ? AND m.date >= ? AND ${folderCond}
         AND NOT EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id)

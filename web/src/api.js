@@ -34,7 +34,7 @@ export const api = {
 };
 
 /** Streams an NDJSON AI endpoint. onToken receives text deltas; resolves with the final result. */
-export async function stream(url, body, { onToken, signal } = {}) {
+export async function stream(url, body, { onToken, onStatus, signal } = {}) {
   const r = await fetch(base + url, { method: 'POST', credentials: 'include', headers: { ...spaceHeader(), 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!r.ok) {
     let msg = r.statusText;
@@ -54,6 +54,7 @@ export async function stream(url, body, { onToken, signal } = {}) {
       if (!line.trim()) continue;
       const m = JSON.parse(line);
       if (m.t) onToken?.(m.t);
+      if (m.s) onStatus?.(m.s);
       if (m.error) throw new ApiError(m.error, 500, m.code);
       if (m.done) return m.result;
     }

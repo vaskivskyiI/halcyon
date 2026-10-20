@@ -7,7 +7,7 @@ import * as actions from '../mail/actions.js';
 import { queueSend, cancelSend, buildMime } from '../mail/send.js';
 import { queueOp, syncManager } from '../mail/sync.js';
 import { serializeInsight } from '../ai/tasks.js';
-import { hybridSearch, parseQuery, buildWhere } from '../search.js';
+import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits } from '../search.js';
 import { invitationFor } from '../calendar/invites.js';
 import { getSettings } from '../settings.js';
 import { userAccounts } from '../accounts.js';
@@ -15,6 +15,8 @@ import { runRule } from '../rules.js';
 import { contactByEmail } from '../contacts/service.js';
 import { notify } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
+import { recordFeedback, correctInsight } from '../ai/learning.js';
+import { CATEGORIES } from '../ai/prompts.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
@@ -242,8 +244,11 @@ export default async function mailRoutes(app) {
       case 'archive': await actions.archiveMessages(u, target); break;
       case 'trash': await actions.trashMessages(u, target); break;
       case 'delete': actions.deletePermanently(u, target); break;
-      case 'spam': await actions.spamMessages(u, target); break;
-      case 'notspam': await actions.notSpam(u, target); break;
+      case 'spam': case 'notspam':
+        // The user's verdict is remembered per sender (see ai/learning.js); the latest one wins.
+        for (const id of list) recordFeedback(u, get('SELECT * FROM messages WHERE id = ? AND user_id = ?', id, u), action);
+        await (action === 'spam' ? actions.spamMessages(u, target) : actions.notSpam(u, target));
+        break;
       case 'move': await actions.moveMessages(u, target, Number(folderId)); break;
       case 'snooze': actions.snoozeMessages(u, target, Number(until)); break;
       case 'unsnooze': actions.snoozeMessages(u, target, null); break;
@@ -252,6 +257,19 @@ export default async function mailRoutes(app) {
       default: return httpError(reply, 400, 'Unknown action');
     }
     return { ok: true, count: target.length };
+  });
+
+  // Corrections that teach the AI: kind = important | unimportant | category (value = category name).
+  app.post('/api/messages/:id/feedback', async (req, reply) => {
+    const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!m) return httpError(reply, 404, 'Not found');
+    const { kind, value } = req.body || {};
+    if (!['important', 'unimportant', 'category'].includes(kind) || (kind === 'category' && !CATEGORIES.includes(value))) return httpError(reply, 400, 'Invalid feedback');
+    recordFeedback(req.user.id, m, kind, kind === 'category' ? value : null);
+    correctInsight(m.id, kind, value);
+    const insight = serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id));
+    notify(req.user.id, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight });
+    return { insight, sender: m.from_addr };
   });
 
   app.post('/api/messages/:id/unsubscribe', async (req, reply) => {
@@ -369,6 +387,23 @@ export default async function mailRoutes(app) {
   app.delete('/api/templates/:id', async (req) => { run('DELETE FROM templates WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
 
   app.get('/api/search/parse', async (req) => parseQuery(req.query.q));
+
+  // Second phase of search: messages found by meaning (embeddings) that keyword search did not return. The client
+  // shows keyword results instantly and adds these when the AI answers; a busy AI server only delays this part.
+  app.get('/api/search/semantic', async (req) => {
+    const sc = scope(req.user.id, reqSpace(req));
+    const f = parseQuery(req.query.q);
+    if (!f.terms.length) return { items: [] };
+    const query = await embedQuery(req.user.id, f.terms.join(' '));
+    if (!query) return { items: [], unavailable: true };
+    const exclude = new Set(ids(req.query.exclude));
+    const hits = messageHits(req.user.id, query, 40, sc).filter((h) => !exclude.has(h.id) && h.score > 0.3);
+    if (!hits.length) return { items: [] };
+    const { where, params } = buildWhere(req.user.id, { ...f, terms: [] }, sc);
+    const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map(listItem) };
+  });
 }
 
 export { buildWhere };

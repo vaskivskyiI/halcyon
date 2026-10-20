@@ -69,21 +69,23 @@ after(async () => {
   setTimeout(() => process.exit(0), 100).unref();
 });
 
-test('mail ingested before a provider exists is analysed once one is added; sent mail is not "pending"', async () => {
+test('mail ingested before a provider exists is analysed once one is added; sent mail is analysed, old mail is not', async () => {
   const early = addMessage(inbox, { subject: 'Before provider', body: 'Can you check this?' });
   const own = addMessage(sent, { subject: 'My sent mail' });
   const old = addMessage(inbox, { subject: 'Ancient', ageDays: 400 });
   await afterIngest(account, inbox, [early, old]);
   await afterIngest(account, sent, [own]);
-  await waitFor(() => msg(early).ai_status === 'waiting');
-  assert.equal(msg(own).ai_status, 'none');
+  await waitFor(() => msg(early).ai_status === 'waiting' && msg(own).ai_status === 'waiting');
   assert.equal(msg(old).ai_status, 'none');
 
   await api('POST', '/api/ai/providers', { type: 'mock', name: 'Mock' });
-  await waitFor(() => msg(early).ai_status === 'done');
-  assert.equal(msg(own).ai_status, 'none');
+  await waitFor(() => msg(early).ai_status === 'done' && msg(own).ai_status === 'done');
+  assert.equal(msg(old).ai_status, 'none');
+  const sentInsight = db.prepare('SELECT * FROM ai_insights WHERE message_id = ?').get(own);
+  assert.equal(sentInsight.needs_reply, 0, 'own mail never needs a reply');
+  assert.ok(sentInsight.priority <= 40);
   const st = await api('GET', '/api/ai/status');
-  assert.equal(st.analyzed, 1);
+  assert.equal(st.analyzed, 2);
 });
 
 test('backfill picks up mail that arrived while AI was disabled, without re-analysing done mail', async () => {

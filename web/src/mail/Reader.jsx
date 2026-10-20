@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
+  ThumbsUp, ThumbsDown, Hourglass,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -77,6 +78,21 @@ export default function Reader({ id, view }) {
     openComposer(replyPayload('reply', latest, store.get().accounts, { aiIntent: intent ?? '' }));
   };
 
+  // Corrections teach the AI (per sender) and fix this message right away.
+  const feedback = async (kind, value) => {
+    try {
+      const r = await api.post(`/api/messages/${latest.id}/feedback`, { kind, value });
+      setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: r.insight } : m)), current: t.current.id === latest.id ? { ...t.current, insight: r.insight } : t.current }));
+      toast(`Noted — future mail from ${r.sender} will be treated the same way`);
+    } catch (e) { toastError(e); }
+  };
+  const forwardTo = async (messageId) => {
+    try {
+      const full = await api.get(`/api/messages/${messageId}`);
+      openComposer({ ...replyPayload('forward', full, store.get().accounts), to: [latest.from] });
+    } catch (e) { toastError(e); }
+  };
+
   const addEvent = async (ev) => {
     if (ev) {
       const start = Date.parse(ev.start);
@@ -114,6 +130,8 @@ export default function Reader({ id, view }) {
     target.listUnsubscribe && { label: 'Unsubscribe', icon: BellOff, onClick: unsubscribe },
     'sep',
     { label: target.isRead ? 'Mark as unread' : 'Mark as read', icon: target.isRead ? MailIcon : MailOpen, onClick: () => act(target.isRead ? 'unread' : 'read') },
+    settings.ai.enabled && { label: 'Mark as important', icon: ThumbsUp, hint: 'AI learns', onClick: () => feedback('important') },
+    settings.ai.enabled && { label: 'Mark as not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => feedback('unimportant') },
     { label: 'Print', icon: Printer, onClick: () => printThread(msgs) },
     { label: 'Download .eml', icon: FileCode, onClick: () => window.open(api.url(`/api/messages/${target.id}/raw`)) },
     target.folder?.specialUse === '\\Junk' ? { label: 'Not spam', icon: AlertOctagon, onClick: () => act('notspam') } : { label: 'Report spam', icon: AlertOctagon, onClick: () => act('spam') },
@@ -152,7 +170,7 @@ export default function Reader({ id, view }) {
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
         {settings.ai.enabled && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
-          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onAnalyze={async () => {
+          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
             setAiWorking(true);
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
@@ -177,17 +195,37 @@ const AI_STATUS_TEXT = {
   none: 'Not analyzed automatically (only recent mail in analysed folders is).',
 };
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking }) {
+const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
+
+function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester }) {
+  const [openMenu, menuNode] = useMenu();
   if (!ins && !summary) {
     return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
       <button className="btn sm ai" onClick={onAnalyze} disabled={aiWorking}>{aiWorking ? <Spinner size={13} /> : <Sparkles size={13} />} Analyze now</button></div></div>;
   }
   return (
     <div className="card ai-card">
-      <div className="title"><Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}
-        {ins?.priority != null && <span className="chip" style={{ marginLeft: 'auto', background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
+      <div className="title" style={{ flexWrap: 'wrap' }}><Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}
+        <span className="row" style={{ marginLeft: 'auto', gap: 4, flexWrap: 'wrap' }}>
+          {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
+          {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Change category (the AI learns from it)"
+            onClick={(e) => openMenu(e, [{ section: 'Category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => onFeedback('category', c) }))])}>{ins.category} ▾</button>}
+          {ins?.priority != null && <span className="chip" style={{ background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
+          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Important — the AI learns from this" onClick={() => onFeedback('important')}><ThumbsUp size={14} /></button>}
+          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Not important — the AI learns from this" onClick={() => onFeedback('unimportant')}><ThumbsDown size={14} /></button>}
+        </span>
       </div>
+      {menuNode}
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
+      {ins?.requests?.map((rq, i) => (
+        <div key={i} className="notice" style={{ display: 'block', margin: '8px 0 0' }}>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Forward size={13} /> {requester?.name || requester?.address} asks for an earlier email{rq.description && rq.description !== 'requested email' ? `: ${rq.description}` : ''}</div>
+          {rq.candidates.length ? rq.candidates.map((c) => (
+            <div key={c.id} className="row small" style={{ padding: '3px 0' }}>
+              <a href={`#/mail/unified/${c.id}`} className="grow truncate">{c.hasAttachments && <Paperclip size={11} />} {c.subject || '(no subject)'} <span className="faint">· {c.from} · {new Date(c.date).toLocaleDateString()}</span></a>
+              <button className="btn sm" onClick={() => onForward(c.id)}><Forward size={12} /> Forward to {requester?.name?.split(' ')[0] || requester?.address}</button>
+            </div>)) : <div className="small faint">No matching email found — try search.</div>}
+        </div>))}
       {ins?.actionItems?.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <div className="small muted" style={{ fontWeight: 600 }}>Action items</div>

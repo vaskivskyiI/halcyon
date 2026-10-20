@@ -183,4 +183,16 @@ export const migrations = [
   DROP TABLE embeddings;
   DELETE FROM ai_jobs WHERE type = 'embed';
   `,
+  // 4: insights can expire (login codes etc.) and list emails the sender asks the user to forward; the user's
+  //    corrections (important / not important / spam / category) are kept to personalise future analysis.
+  `
+  ALTER TABLE ai_insights ADD COLUMN expires_at INTEGER;
+  ALTER TABLE ai_insights ADD COLUMN requests_json TEXT;
+  CREATE TABLE ai_feedback (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id INTEGER, from_addr TEXT, domain TEXT, subject TEXT, kind TEXT NOT NULL, value TEXT, created_at INTEGER
+  );
+  CREATE INDEX idx_ai_feedback_sender ON ai_feedback(user_id, from_addr);
+  CREATE INDEX idx_ai_feedback_domain ON ai_feedback(user_id, domain);
+  `,
 ];

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test --test-concurrency=1 test/unit.test.js test/ai.test.js test/memory.test.js test/e2e.test.js test/dav.test.js"
+    "test": "node --test --test-concurrency=1 test/unit.test.js test/ai.test.js test/memory.test.js test/analysis.test.js test/e2e.test.js test/dav.test.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

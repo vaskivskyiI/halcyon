@@ -41,12 +41,14 @@ export async function buildContext(userId, question, sc) {
   if (ids.length < 4) ids = [...new Set([...ids, ...all(`SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn} ORDER BY m.date DESC LIMIT 8`, userId).map((r) => r.id)])];
   const texts = memoryText([...bestChunk.values(), ...hits.filter((h) => h.kind !== 'message').map((h) => h.id)]);
   // The scope check is repeated here: memory hits are only candidates, the database decides what is visible.
-  const msgs = ids.map((id) => get(`SELECT m.*, i.summary AS ai_summary FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id = ? AND m.user_id = ? AND ${accIn}`, id, userId)).filter(Boolean).slice(0, 12);
+  // Small local models have short context windows (often 8k tokens): keep the prompt compact.
+  const msgs = ids.map((id) => get(`SELECT m.*, i.summary AS ai_summary FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id = ? AND m.user_id = ? AND ${accIn}`, id, userId)).filter(Boolean).slice(0, 8);
   const emailPart = msgs.map((m) => {
-    const excerpt = bestChunk.has(m.id) && texts.get(bestChunk.get(m.id)) ? chunkBody(texts.get(bestChunk.get(m.id))) : stripQuoted(m.body_text);
+    // The matching passage is kept whole (it is what answers the question); otherwise the start of the email.
+    const excerpt = bestChunk.has(m.id) && texts.get(bestChunk.get(m.id)) ? chunkBody(texts.get(bestChunk.get(m.id))).slice(0, 1500) : stripQuoted(m.body_text).slice(0, 1000);
     return `[#${m.id}] ${new Date(m.date).toISOString().slice(0, 16)} From: ${m.from_name || ''} <${m.from_addr}> To: ${json(m.to_json, []).map((a) => a.address).join(', ')}
 Subject: ${m.subject}
-${m.ai_summary ? `Summary: ${m.ai_summary}\n` : ''}${excerpt.slice(0, 1400)}`;
+${m.ai_summary ? `Summary: ${m.ai_summary}\n` : ''}${excerpt}`;
   });
 
   // Facts: everything the user explicitly asked to remember (in scope) plus the most relevant learned ones.
@@ -89,7 +91,9 @@ ${m.ai_summary ? `Summary: ${m.ai_summary}\n` : ''}${excerpt.slice(0, 1400)}`;
   return { text: sections.join('\n\n') + cal + tasks, sources: msgs.map((m) => ({ id: m.id, subject: m.subject, from: m.from_name || m.from_addr, date: m.date })) };
 }
 
-export async function ask(userId, { chatId, question, space = '' }, onToken) {
+const FIRST_TOKEN_MS = 90e3;
+
+export async function ask(userId, { chatId, question, space = '' }, onToken, { signal, onStatus } = {}) {
   let chatRow = chatId && get('SELECT * FROM chats WHERE id = ? AND user_id = ?', chatId, userId);
   if (!chatRow) {
     const r = run('INSERT INTO chats (user_id, title, space, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', userId, question.slice(0, 80), cleanSpace(space), now(), now());
@@ -114,12 +118,28 @@ export async function ask(userId, { chatId, question, space = '' }, onToken) {
 
   const sc = scope(userId, chatRow.space);
   const history = all('SELECT role, content FROM chat_messages WHERE chat_id = ? ORDER BY id DESC LIMIT 10', chatRow.id).reverse();
+  onStatus?.('Searching your mail…');
   const { text, sources } = await buildContext(userId, question, sc);
+  onStatus?.(`Reading ${sources.length} email${sources.length === 1 ? '' : 's'}…`);
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const settings = getSettings(userId);
   const accounts = userAccounts(userId).filter((a) => !sc || sc.accountIds.includes(a.id));
   const ctx = userContext(user, settings, accounts) + (sc ? `\nThis conversation is limited to the user's "${sc.space}" space; you only see its mail, calendars and contacts.` : '');
-  const res = await chat(userId, 'chat', { ...askPrompt({ ctx, language: 'the user\'s language', context: text, history }), temperature: 0.3, maxTokens: 1500, onToken });
+  // A busy or stuck model server must not leave the user staring at a spinner: give up if no answer starts in time.
+  const ctl = new AbortController();
+  signal?.addEventListener('abort', () => ctl.abort(signal.reason));
+  let started = false;
+  const timer = setTimeout(() => ctl.abort(new Error('timeout')), FIRST_TOKEN_MS);
+  let res;
+  try {
+    res = await chat(userId, 'chat', { ...askPrompt({ ctx, language: 'the user\'s language', context: text, history }), temperature: 0.3, maxTokens: 1500, signal: ctl.signal,
+      onToken: (t) => { if (!started) { started = true; clearTimeout(timer); } onToken?.(t); } });
+  } catch (e) {
+    if (!started && !signal?.aborted) throw new Error(`The AI model did not start answering within ${FIRST_TOKEN_MS / 1000} s — the AI server is probably busy or unreachable. Try again shortly; background work pauses while you ask.`);
+    throw e;
+  } finally { clearTimeout(timer); }
+  // Every email given to the model is listed so its statements can be checked; the ones it cited come first.
   const cited = new Set([...res.text.matchAll(/#(\d+)/g)].map((m) => Number(m[1])));
-  return finish(res.text, sources.filter((s) => cited.has(s.id)));
+  const ordered = [...sources.filter((x) => cited.has(x.id)).map((x) => ({ ...x, cited: true })), ...sources.filter((x) => !cited.has(x.id))].slice(0, 10);
+  return finish(res.text, ordered);
 }

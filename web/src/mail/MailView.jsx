@@ -143,6 +143,9 @@ function MessageList({ view, openId, onMenu }) {
   const [tab, setTab] = useState(() => (view === 'unified' && settings.mail.focusedInbox ? 'focused' : 'all'));
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
+  // AI part of search: { status: 'loading' | 'done' | 'unavailable', items }
+  const [aiResults, setAiResults] = useState(null);
+  const aiQuery = useRef('');
   const [selected, setSelected] = useState(new Set());
   const [openMenu, menuNode] = useMenu();
   const listRef = useRef();
@@ -155,7 +158,7 @@ function MessageList({ view, openId, onMenu }) {
 
   const params = useCallback((before) => {
     const p = new URLSearchParams({ ...viewQuery(view), limit: 50 });
-    if (activeQuery) p.set('q', activeQuery);
+    if (activeQuery) { p.set('q', activeQuery); p.set('semantic', '0'); }
     if (tab !== 'all') p.set('filter', tab);
     if (before) p.set('before', before);
     if (!threaded) p.set('threads', '0');
@@ -169,6 +172,15 @@ function MessageList({ view, openId, onMenu }) {
       const r = await api.get(`/api/messages?${params(before)}`);
       setItems((cur) => (append ? [...cur, ...r.items] : r.items));
       setHasMore(r.hasMore);
+      // Keyword results are shown at once; matches by meaning follow when the AI answers.
+      if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
+        const q = activeQuery;
+        aiQuery.current = q;
+        setAiResults({ status: 'loading', items: [] });
+        api.get(`/api/search/semantic?q=${encodeURIComponent(q)}&exclude=${r.items.map((m) => m.id).join(',')}`)
+          .then((s) => { if (aiQuery.current === q) setAiResults({ status: s.unavailable ? 'unavailable' : 'done', items: s.items }); })
+          .catch(() => { if (aiQuery.current === q) setAiResults({ status: 'unavailable', items: [] }); });
+      } else if (!activeQuery) { aiQuery.current = ''; setAiResults(null); }
     } catch (e) { toastError(e); } finally { setLoading(false); }
   }, [params, items]);
 
@@ -253,12 +265,25 @@ function MessageList({ view, openId, onMenu }) {
     else { setSelected(new Set()); anchor.current = m.id; open(m); }
   };
 
+  // Corrections teach the AI per sender; the list updates from the returned insight.
+  const feedbackMany = async (ids, kind) => {
+    try {
+      for (const id of ids) {
+        const r = await api.post(`/api/messages/${id}/feedback`, { kind });
+        setItems((cur) => cur.map((x) => (x.id === id && x.ai ? { ...x, ai: { ...x.ai, priority: r.insight.priority, needsReply: r.insight.needsReply } } : x)));
+      }
+      toast(`Noted — the AI will treat similar mail from ${ids.length > 1 ? 'these senders' : 'this sender'} the same way`);
+    } catch (e) { toastError(e); }
+  };
+
   const rowMenu = (e, m) => {
     const ids = selected.has(m.id) ? [...selected] : [m.id];
     openMenu(e, [
       { label: 'Reply', icon: Reply, onClick: () => { open(m); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:reply', { detail: { mode: 'reply' } })), 300); } },
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
       { label: m.isFlagged ? 'Unflag' : 'Flag', icon: Star, onClick: () => act(m.isFlagged ? 'unflag' : 'flag', {}, ids) },
+      settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },
+      settings.ai.enabled && { label: 'Mark as not important', icon: MailOpen, hint: 'AI learns', onClick: () => feedbackMany(ids, 'unimportant') },
       { label: 'Archive', icon: Archive, onClick: () => act('archive', {}, ids) },
       { label: 'Delete', icon: Trash2, onClick: () => act('trash', {}, ids) },
       { label: 'Spam', icon: AlertOctagon, onClick: () => act('spam', {}, ids) },
@@ -321,7 +346,15 @@ function MessageList({ view, openId, onMenu }) {
         {items.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => act(a, extra, [m.id])}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}
-        {!items.length && !loading && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : tab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
+        {activeQuery && aiResults && <div className="ai-results">
+          <div className="nav-section" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Sparkles size={13} /> Related by meaning (AI)
+            {aiResults.status === 'loading' && <><Spinner size={12} /><span className="faint">searching…</span></>}</div>
+          {aiResults.items.map((m) => <Row key={`ai${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={false}
+            onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => act(a, extra, [m.id])} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
+          {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
+          {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
+        </div>}
+        {!items.length && !loading && !aiResults?.items.length && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : tab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
         {loading && items.length === 0 && <div className="empty"><Spinner size={22} /></div>}
         {hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
       </div>

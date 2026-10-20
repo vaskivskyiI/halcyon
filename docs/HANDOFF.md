@@ -76,6 +76,28 @@ Derived requirements / design decisions:
 - Scale notes: brute-force int8 scan is fine to a few hundred thousand passages per user; beyond that add an ANN index
   (roadmap item 8). Embedding volume grows ~2–3× vs. one vector per mail (≤ 6 passages per email).
 
+### 2026-10-20 (evening): feedback from first real use
+- Search/chat "never answered": the user's Ollama was saturated (even a trivial request did not finish in 280 s).
+  Now: Ollama is called with `think: false` (thinking models spent minutes/whole token budget on hidden reasoning;
+  `<think>` blocks from OpenAI-compatible servers are stripped); per-provider lanes in `ai/router.js` let interactive
+  requests (chat, search query embedding, writing, "analyze now", brief refresh) go first while background work waits
+  and keeps ≤1 request in flight per self-hosted provider; embedding batches of 16; chat streams status lines and fails
+  after 90 s without a first token; search is two-phase (instant keyword results, then `/api/search/semantic`).
+- Sent mail is analysed (own commitments, other half of conversations; never "needs reply", low priority).
+- `ai_insights.expires_at` (migration 4): model-provided or detected for login/verification codes; a 2-minute sweep
+  drops expired items to priority ≤10 and clears needs-reply.
+- Event times: prompts ask for local date + HH:MM; `util/time.js` converts with the user's time zone (models wrote
+  12:30Z for a 12:30 meeting → shown 14:30).
+- Chat lists all emails given to the model as clickable sources (cited ones first).
+- `requested_items` from analysis → `findRequestedEmails()` (keyword + semantic, same space, older mail) → reader shows
+  candidates with "Forward to <sender>" (opens the composer; nothing is sent automatically).
+- Learning (`ai/learning.js`, table `ai_feedback`): important / not important / category / spam corrections per sender
+  (domain after two agreeing corrections, not for public mail domains); applied as hard preferences and as few-shot
+  examples in the analysis prompt; spam-marked senders are filed to Junk at ingest (user's own rule). Reviewable in
+  Settings → AI → Memory.
+- Not verified against the real model (Ollama was unresponsive): prompt changes (events/expires/requested_items) need a
+  check with qwen2.5:7b-instruct on real mail.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

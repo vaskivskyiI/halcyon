@@ -98,6 +98,7 @@ function Chat({ chatId, onCreated }) {
       let out = '';
       const r = await stream('/api/ai/ask', { chatId, question }, {
         signal: ctl.current.signal,
+        onStatus: (st) => setMessages((m) => (m.at(-1)?.pending && !out ? [...m.slice(0, -1), { role: 'assistant', content: '', pending: true, status: st }] : m)),
         onToken: (t) => { out += t; setMessages((m) => [...m.slice(0, -1), { role: 'assistant', content: out, pending: true }]); },
       });
       setMessages((m) => [...m.slice(0, -1), { role: 'assistant', content: r.answer, sources: r.sources }]);
@@ -115,9 +116,10 @@ function Chat({ chatId, onCreated }) {
         {messages.map((m, i) => (
           <div key={i} className={`bubble ${m.role}`}>
             {m.role === 'user' ? m.content : <>
-              {m.pending && !m.content ? <span className="pulse muted"><Sparkles size={14} /> Searching your mailbox…</span> : <Markdown text={m.content} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} />}
-              {m.sources?.length > 0 && <div className="row" style={{ flexWrap: 'wrap', marginTop: 6 }}>{m.sources.map((s) => (
-                <button key={s.id} className="chip ai" style={{ border: 0, cursor: 'pointer' }} onClick={() => navigate(`#/mail/unified/${s.id}`)}><Mail size={11} /> #{s.id} {s.from}: {String(s.subject).slice(0, 40)}</button>))}</div>}
+              {m.pending && !m.content ? <span className="pulse muted"><Sparkles size={14} /> {m.status || 'Searching your mailbox…'}</span> : <Markdown text={m.content} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} />}
+              {m.sources?.length > 0 && <div className="row" style={{ flexWrap: 'wrap', marginTop: 6, gap: 4 }}><span className="small faint">Sources — open to check:</span>{m.sources.map((s) => (
+                <button key={s.id} className={`chip ${s.cited ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={s.cited ? 'Cited in the answer' : 'Given to the AI as context'} onClick={() => navigate(`#/mail/unified/${s.id}`)}>
+                  <Mail size={11} /> #{s.id} {s.from}: {String(s.subject).slice(0, 40)}{s.date ? ` · ${new Date(s.date).toLocaleDateString()}` : ''}</button>))}</div>}
             </>}
           </div>
         ))}

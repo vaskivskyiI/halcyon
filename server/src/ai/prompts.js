@@ -15,13 +15,21 @@ export function stripQuoted(text) {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-export function messageForPrompt(m, maxChars = 6000) {
+/** "Tue 2026-10-20 14:05" in the given time zone (models resolve "tomorrow" etc. from the local date). */
+export function localStamp(t, tz) {
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    return `${p.weekday} ${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+  } catch { return new Date(t).toISOString(); }
+}
+
+export function messageForPrompt(m, maxChars = 6000, tz = null) {
   const to = json(m.to_json, []).map((a) => a.name || a.address).join(', ');
   const body = stripQuoted(m.body_text).slice(0, maxChars);
   const atts = json(m.attachments_json, []).filter((a) => !a.inline).map((a) => a.filename);
   return `From: ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr}
 To: ${to}
-Date: ${new Date(m.date).toISOString()}
+Date: ${tz ? `${localStamp(m.date, tz)} (${tz})` : new Date(m.date).toISOString()}
 Subject: ${m.subject}${atts.length ? `\nAttachments: ${atts.join(', ')}` : ''}
 
 ${body}`;
@@ -34,23 +42,25 @@ export function userContext(user, settings, accounts) {
   return lines.join('\n');
 }
 
-export function analyzePrompt({ ctx, message, senderInfo, language }) {
+export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '' }) {
   return {
     system: `You are an email triage assistant. ${ctx}
-Analyze the email and return a JSON object with exactly these keys:
+${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}Analyze the email and return a JSON object with exactly these keys:
 - "summary": 1-2 sentence summary of what the email is about and what is asked (written in ${language}).
 - "category": one of ${CATEGORIES.join(', ')}.
 - "priority": integer 0-100 for how important it is that the USER sees this soon (personal requests from real people, deadlines, money, security = high; newsletters, promotions, automated notifications = low).
 - "priority_reason": short reason (max 12 words, ${language}).
 - "needs_reply": true if a real person expects a reply from the user.
 - "action_items": array of {"text": string, "due": "YYYY-MM-DD" or null} the user must do (empty if none).
-- "events": array of {"title": string, "start": ISO 8601 datetime with timezone offset, "end": ISO datetime or null, "all_day": boolean, "location": string or null} for meetings/appointments/deadlines explicitly mentioned (empty if none).
+- "events": array of {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "all_day": boolean, "location": string or null} for meetings/appointments/deadlines explicitly mentioned. Copy times exactly as written in the email (24-hour clock, the user's time zone ${timezone}; convert only if the email names a different time zone). Resolve relative dates ("tomorrow", "next Tuesday") from the email's date. Empty if none.
 - "suggested_replies": if needs_reply, 3 very short distinct reply options (max 8 words each, in the email's language); else [].
 - "sentiment": one of positive, neutral, negative, urgent.
 - "language": ISO 639-1 code of the email.
 - "is_phishing": true only if the email shows clear signs of phishing/scam.
+- "expires": "YYYY-MM-DD HH:MM" (time zone ${timezone}) after which the email is no longer useful, else null. Set it for one-time/login/verification codes and sign-in or confirmation links (usually 10-30 minutes after the email's date unless a validity is stated), offers or notices valid only until a stated time, and reminders of events that are then over. Normal mail: null.
+- "requested_items": if the sender asks the user to send or forward an earlier email, document or attachment, an array of {"description": short description in English, "keywords": 3-6 search words in the email's language and in English}; else [].
 - "facts": 0-3 short, self-contained facts worth remembering for months (who someone is and their role, agreements, commitments, deadlines, project names), written in ${language} with full names, e.g. "Ana Novak is the user's PhD student". Use [] for newsletters, notifications, promotions and routine mail — usually [].
-Output JSON only.`,
+${preferences ? `\nThe user's own past corrections (follow them for similar mail):\n${preferences}\n` : ''}Output JSON only.`,
     messages: [{ role: 'user', content: `${senderInfo}\n\n${message}` }],
   };
 }
@@ -130,10 +140,11 @@ ${context}`,
   };
 }
 
-export function extractEventPrompt({ ctx, message }) {
+export function extractEventPrompt({ ctx, message, timezone }) {
   return {
     system: `Extract a calendar event from the email. ${ctx}
-Return JSON: {"title": string, "start": ISO 8601 datetime with offset, "end": ISO datetime, "all_day": boolean, "location": string|null, "description": short string, "attendees": [emails]}. If no date is mentioned, propose the next reasonable working-day slot.`,
+Return JSON: {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "all_day": boolean, "location": string|null, "description": short string, "attendees": [emails]}.
+Copy times exactly as written in the email (24-hour clock, time zone ${timezone}; convert only if the email names a different zone). Resolve relative dates from the email's date. If no date is mentioned, propose the next reasonable working-day slot.`,
     messages: [{ role: 'user', content: message }],
   };
 }

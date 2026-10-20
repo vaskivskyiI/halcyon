@@ -72,7 +72,7 @@ export default function AISettings() {
       <Switch label="Analyse new mail automatically" checked={ai.autoAnalyze} onChange={(v) => setAi({ autoAnalyze: v })} />
       <div className="form-grid">
         <label className="field">Analyse messages newer than (days)<input className="input" type="number" min="1" value={ai.analyzeDays} onChange={(e) => setAi({ analyzeDays: Number(e.target.value) })} /></label>
-        <label className="field">Folders to analyse<select className="input" value={ai.analyzeFolders} onChange={(e) => setAi({ analyzeFolders: e.target.value })}><option value="inbox">Inbox only</option><option value="all">All folders (except trash/spam)</option></select></label>
+        <label className="field">Folders to analyse<select className="input" value={ai.analyzeFolders} onChange={(e) => setAi({ analyzeFolders: e.target.value })}><option value="inbox">Inbox and Sent</option><option value="all">All folders (except trash/spam)</option></select></label>
         <label className="field">Parallel AI jobs<input className="input" type="number" min="1" max="8" value={ai.maxConcurrency} onChange={(e) => setAi({ maxConcurrency: Number(e.target.value) })} /></label>
       </div>
       <Switch label="Conversation summaries" hint="Summarise threads with 3+ messages" checked={ai.threadSummaries} onChange={(v) => setAi({ threadSummaries: v })} />
@@ -119,8 +119,11 @@ function Memory({ enabled }) {
   const [mem, setMem] = useState(null);
   const [text, setText] = useState('');
   const space = store.use((s) => s.space);
-  const load = () => api.get('/api/ai/memory').then(setMem).catch(() => {});
+  const [prefs, setPrefs] = useState([]);
+  const load = () => { api.get('/api/ai/memory').then(setMem).catch(() => {}); api.get('/api/ai/preferences').then(setPrefs).catch(() => {}); };
   useEffect(() => { load(); }, []);
+  const forgetSender = async (from) => { await api.del(`/api/ai/preferences?from=${encodeURIComponent(from)}`).catch(toastError); load(); };
+  const PREF = { important: 'important', unimportant: 'not important', spam: 'spam → Junk', notspam: 'not spam', category: 'category' };
   const add = async () => { if (!text.trim()) return; try { await api.post('/api/ai/memory/facts', { text }); setText(''); setTimeout(load, 300); } catch (e) { toastError(e); } };
   const del = async (id) => { await api.del(`/api/ai/memory/facts/${id}`).catch(toastError); load(); };
   const clear = async (what) => {
@@ -148,6 +151,15 @@ function Memory({ enabled }) {
           <button className="icon-btn" style={{ width: 24, height: 24 }} title="Forget this" onClick={() => del(f.id)}><Trash2 size={13} /></button>
         </div>))}
     </div>}
+    <h3 style={{ marginTop: 6 }}>Learned from your corrections</h3>
+    <div className="small muted" style={{ marginTop: -6 }}>When you mark mail as important, not important, spam or change its category, Halcyon applies it to future mail from the same sender (and the same company domain after two matching corrections) and shows the examples to the AI.</div>
+    {prefs.length > 0 ? <div className="card" style={{ padding: 6, maxHeight: 260, overflow: 'auto' }}>
+      {prefs.map((p, i) => (
+        <div key={i} className="row small" style={{ padding: '5px 8px', borderBottom: '1px solid var(--border)' }}>
+          <span className="grow truncate"><b>{p.fromAddr}</b> → {PREF[p.kind]}{p.kind === 'category' ? ` “${p.value}”` : ''} <span className="faint">· e.g. “{p.subject}”</span></span>
+          <button className="btn sm" onClick={() => forgetSender(p.fromAddr)}>Forget sender</button>
+        </div>))}
+    </div> : <div className="small faint">No corrections yet — use 👍 / 👎 or the category chip on a message.</div>}
     <div className="row">
       <button className="btn sm" onClick={() => clear('facts')}><Trash2 size={13} /> Forget all facts</button>
       <button className="btn sm" onClick={() => clear('all')}><Trash2 size={13} /> Clear all memory</button>

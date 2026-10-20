@@ -11,6 +11,9 @@ import { listRange } from '../calendar/repo.js';
 import { userAccounts } from '../accounts.js';
 import { contactByEmail } from '../contacts/service.js';
 import { scope, inIds } from '../spaces.js';
+import { localToEpoch, normalizeEvent } from '../util/time.js';
+import { senderPreference, applyPreference, preferenceExamples } from './learning.js';
+import { keywordSearch, embedQuery, messageHits } from '../search.js';
 
 const LANG_NAMES = { en: 'English', sl: 'Slovenian', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', hr: 'Croatian', sr: 'Serbian', uk: 'Ukrainian', pl: 'Polish', pt: 'Portuguese', nl: 'Dutch', cs: 'Czech', ru: 'Russian', ja: 'Japanese', zh: 'Chinese' };
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
@@ -31,33 +34,82 @@ export function serializeInsight(r) {
     summary: r.summary, category: r.category, priority: r.priority, priorityReason: r.priority_reason, needsReply: !!r.needs_reply,
     actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []),
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
+    expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
   };
 }
 
-function saveInsight(messageId, d, model) {
+// One-time codes and sign-in links lose all value within minutes; models do not always notice, so look for them too.
+const CODE_RE = /\b(verification|security|login|log-in|sign[- ]?in|one[- ]time|otp|2fa|authentication|potrditven\w*|prijavn\w*|varnostn\w*|enkratn\w*)\b[\s\S]{0,80}\b(code|koda|kodo|kod|passcode|pin)\b|\b(code|koda|kodo|passcode)\b[\s\S]{0,40}\b(verification|login|sign[- ]?in|one[- ]time|prijav\w*)\b/i;
+
+function expiryOf(d, m, tz) {
+  const t = d.expires ? localToEpoch(String(d.expires).slice(0, 10), String(d.expires).slice(11, 16), tz) : NaN;
+  if (!Number.isNaN(t) && t > m.date) return t;
+  const head = `${m.subject}\n${String(m.body_text || '').slice(0, 600)}`;
+  return CODE_RE.test(head) && /\b\d{4,8}\b|\b[A-Z0-9]{6,8}\b/.test(head) ? m.date + 30 * 60e3 : null;
+}
+
+function saveInsight(m, d, model, tz) {
+  const messageId = m.id;
+  const events = (Array.isArray(d.events) ? d.events : []).map((e) => normalizeEvent(e, tz)).filter(Boolean).slice(0, 5);
+  const expires = expiryOf(d, m, tz);
+  let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply ? 1 : 0;
+  if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; } // analysed after it expired
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
-    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?)`,
+    suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?)`,
     messageId, String(d.summary || '').slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
-    clampInt(d.priority, 0, 100, 30), String(d.priority_reason || '').slice(0, 200), d.needs_reply ? 1 : 0,
+    priority, String(d.priority_reason || '').slice(0, 200), needsReply,
     JSON.stringify((Array.isArray(d.action_items) ? d.action_items : []).slice(0, 10).map((a) => (typeof a === 'string' ? { text: a, due: null } : { text: String(a.text || ''), due: a.due || null })).filter((a) => a.text)),
     JSON.stringify((Array.isArray(d.suggested_replies) ? d.suggested_replies : []).slice(0, 3).map(String)),
-    JSON.stringify((Array.isArray(d.events) ? d.events : []).filter((e) => e?.start && !Number.isNaN(Date.parse(e.start))).slice(0, 5)),
+    JSON.stringify(events),
     ['positive', 'neutral', 'negative', 'urgent'].includes(d.sentiment) ? d.sentiment : 'neutral',
-    String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now());
+    String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
+}
+
+/** Expired insights (login codes, past deadlines…) drop out of priority views and "needs reply". */
+export function expireInsights() {
+  return run('UPDATE ai_insights SET priority = MIN(priority, 10), needs_reply = 0 WHERE expires_at IS NOT NULL AND expires_at < ? AND (priority > 10 OR needs_reply = 1)', now()).changes;
+}
+
+/**
+ * "Please forward me the email with the shipping documents": finds candidate messages for each requested item,
+ * in the same space as the request, older than it. Keyword and semantic matches are fused; attachments rank higher.
+ */
+export async function findRequestedEmails(userId, m, items) {
+  const acc = get('SELECT space FROM accounts WHERE id = ?', m.account_id);
+  const sc = scope(userId, acc?.space || '');
+  const out = [];
+  for (const it of (Array.isArray(items) ? items : []).slice(0, 2)) {
+    const description = String(it?.description || '').slice(0, 200);
+    const keywords = (Array.isArray(it?.keywords) ? it.keywords : []).map((k) => String(k).trim()).filter((k) => k.length > 2).slice(0, 8);
+    if (!description && !keywords.length) continue;
+    const score = new Map();
+    const add = (id, i, w = 1) => score.set(id, (score.get(id) || 0) + w / (20 + i));
+    for (const k of keywords) keywordSearch(userId, k, { limit: 15, sc }).forEach((id, i) => add(id, i));
+    const q = await embedQuery(userId, `${description} ${keywords.join(' ')}`, { interactive: false, timeoutMs: 60e3 });
+    messageHits(userId, q, 15, sc).forEach((h, i) => add(h.id, i, 2));
+    const rows = [...score.keys()].map((id) => get(`SELECT id, subject, from_name, from_addr, date, has_attachments, thread_id FROM messages WHERE id = ? AND user_id = ? AND date <= ? AND ${inIds('account_id', sc?.accountIds)}`, id, userId, m.date))
+      .filter((r) => r && r.id !== m.id && r.thread_id !== m.thread_id);
+    rows.sort((a, b) => (score.get(b.id) + (b.has_attachments ? 0.05 : 0)) - (score.get(a.id) + (a.has_attachments ? 0.05 : 0)));
+    out.push({ description, candidates: rows.slice(0, 3).map((r) => ({ id: r.id, subject: r.subject, from: r.from_name || r.from_addr, date: r.date, hasAttachments: !!r.has_attachments })) });
+  }
+  return out;
 }
 
 // ---------- background handlers ----------
 
-export async function analyzeMessage(userId, messageId) {
+export async function analyzeMessage(userId, messageId, { interactive = false } = {}) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw skip('message gone');
   // Same message seen in another folder (e.g. Gmail labels) → reuse the analysis.
   const dup = get('SELECT i.* FROM ai_insights i JOIN messages x ON x.id = i.message_id WHERE x.user_id = ? AND x.message_id = ? AND x.id != ? LIMIT 1', userId, m.message_id, m.id);
   let model;
   if (dup) {
-    run(`INSERT OR REPLACE INTO ai_insights SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
+    run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json)
+      SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
@@ -66,18 +118,25 @@ export async function analyzeMessage(userId, messageId) {
     const senderInfo = fromMe ? 'Sender: the user themself.' : contact
       ? `Sender is a known contact (${contact.contact_count} previous exchanges${contact.favorite ? ', marked as favorite/VIP' : ''}).`
       : 'Sender is not in the user\'s contacts.';
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m), senderInfo, language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
-    const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 900 });
+    const tz = settings.calendar.timezone;
+    const pref = fromMe ? { importance: null, category: null } : senderPreference(userId, m.from_addr);
+    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo, timezone: tz, fromMe, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+      language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
+    const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
     if (contact?.favorite && res.data.priority < 70) res.data.priority = 70;
-    if (fromMe) { res.data.needs_reply = false; res.data.suggested_replies = []; }
-    saveInsight(m.id, res.data, model);
+    applyPreference(res.data, pref);
+    if (fromMe) { res.data.needs_reply = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
+    if (Array.isArray(res.data.requested_items) && res.data.requested_items.length) {
+      res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
+    }
+    saveInsight(m, res.data, model, tz);
     if (settings.ai.embeddings) saveFacts(userId, m, res.data.facts, res.data.category);
   }
   const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
   notifyAI(userId, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(ins) });
   const settings = getSettings(userId);
-  if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5) notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
+  if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
   if (ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
   const count = get('SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND thread_id = ?', userId, m.thread_id).n;
   if (settings.ai.threadSummaries && count >= 3) enqueue(userId, 'thread', m.thread_id, 30, { force: true });
@@ -159,8 +218,9 @@ export async function memoryJob(userId, ref, job) {
     const texts = items.flatMap((it) => it.texts);
     const vectors = [];
     let model;
-    for (let i = 0; i < texts.length; i += 64) {
-      const res = await embed(userId, texts.slice(i, i + 64));
+    // Small batches: each background request to the model server stays short, so user requests are not held up.
+    for (let i = 0; i < texts.length; i += 16) {
+      const res = await embed(userId, texts.slice(i, i + 16));
       vectors.push(...res.vectors);
       model = res.model;
     }
@@ -269,7 +329,7 @@ export async function insightFor(userId, messageId, { wait = true } = {}) {
     ins = get('SELECT * FROM ai_insights WHERE message_id = ?', messageId);
   }
   if (!ins && wait) {
-    await analyzeMessage(userId, messageId);
+    await analyzeMessage(userId, messageId, { interactive: true });
     run("UPDATE ai_jobs SET status = 'done' WHERE user_id = ? AND type = 'analyze' AND ref_id = ?", userId, String(messageId));
     ins = get('SELECT * FROM ai_insights WHERE message_id = ?', messageId);
   }
@@ -285,17 +345,19 @@ export async function extractEvent(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw new Error('Message not found');
   const { ctx } = ctxFor(userId);
-  const { data } = await chatJSON(userId, 'compose', { ...P.extractEventPrompt({ ctx, message: P.messageForPrompt(m, 4000) }), temperature: 0.1, maxTokens: 500 });
-  const start = Date.parse(data.start);
-  const end = Date.parse(data.end) || (start + 3600e3);
+  const tz = getSettings(userId).calendar.timezone;
+  const { data } = await chatJSON(userId, 'compose', { ...P.extractEventPrompt({ ctx, message: P.messageForPrompt(m, 4000, tz), timezone: tz }), temperature: 0.1, maxTokens: 500 });
+  const ev = normalizeEvent(data, tz);
+  const start = ev ? Date.parse(ev.start) : NaN;
+  const end = ev ? Date.parse(ev.end) : NaN;
   return {
-    title: data.title || m.subject, start: Number.isNaN(start) ? null : start, end, allDay: !!data.all_day, location: data.location || '',
+    title: data.title || m.subject, start: Number.isNaN(start) ? null : start, end: Number.isNaN(end) ? null : end, allDay: !!ev?.all_day, location: data.location || '',
     description: data.description || '', attendees: (data.attendees || []).filter((x) => typeof x === 'string' && x.includes('@')).map((email) => ({ email, name: '', status: 'needs-action' })),
     sourceMessageId: m.id,
   };
 }
 
-export async function dailyBrief(userId, { day, force = false, space = '' } = {}) {
+export async function dailyBrief(userId, { day, force = false, space = '', interactive = false } = {}) {
   const today = day || new Date().toISOString().slice(0, 10);
   const sc = scope(userId, space);
   const key = sc ? `${today}@${sc.space}` : today; // one brief per day and space
@@ -321,7 +383,7 @@ export async function dailyBrief(userId, { day, force = false, space = '' } = {}
     awaitingYourReply: awaiting.map((m) => ({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, receivedDaysAgo: Math.round((now() - m.date) / 864e5) })),
     events, tasks,
   };
-  const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: uiLanguage, data }), temperature: 0.3, maxTokens: 1200 });
+  const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: uiLanguage, data }), temperature: 0.3, maxTokens: 1200, interactive });
   run('INSERT OR REPLACE INTO briefs (user_id, day, content_json, model, created_at) VALUES (?, ?, ?, ?, ?)', userId, key, res.text.trim(), res.model, now());
   notifyAI(userId, 'ai:brief', { day: today, space: sc?.space || '' });
   return { day: today, space: sc?.space || '', content: res.text.trim(), createdAt: now(), model: res.model };
