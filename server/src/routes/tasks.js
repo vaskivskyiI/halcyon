@@ -32,15 +32,17 @@ export default async function taskRoutes(app) {
   // with the AI as fallback when the text seems to mention a time the rules did not understand.
   app.post('/api/tasks', async (req, reply) => {
     const b = req.body || {};
+    let dueTz = null;
     if (b.text && !b.title) {
       const tz = getSettings(req.user.id).calendar.timezone;
       let parsed = parseDue(b.text, tz);
       if (!parsed.due && b.due == null && mentionsTime(b.text)) parsed = await aiParseTask(req.user.id, b.text, tz).catch(() => parsed);
-      b.title = parsed.title; if (b.due == null) b.due = parsed.due;
+      b.title = parsed.title;
+      if (b.due == null && parsed.due) { b.due = parsed.due; dueTz = tz; }
     }
     if (!b.title?.trim()) return httpError(reply, 400, 'Title required');
-    const r = run('INSERT INTO tasks (user_id, title, notes, due, priority, list, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      req.user.id, b.title.trim(), b.notes || '', b.due || null, b.priority || 0, b.list || 'Tasks', b.sourceMessageId || null, now(), now());
+    const r = run('INSERT INTO tasks (user_id, title, notes, due, due_tz, priority, list, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      req.user.id, b.title.trim(), b.notes || '', b.due || null, dueTz, b.priority || 0, b.list || 'Tasks', b.sourceMessageId || null, now(), now());
     notify(req.user.id, 'tasks:changed', {});
     return out(get('SELECT * FROM tasks WHERE id = ?', r.lastInsertRowid));
   });
@@ -49,8 +51,9 @@ export default async function taskRoutes(app) {
     const t = get('SELECT * FROM tasks WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!t) return httpError(reply, 404, 'Not found');
     const b = req.body || {};
-    run(`UPDATE tasks SET title = ?, notes = ?, due = ?, priority = ?, list = ?, done = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
-      b.title ?? t.title, b.notes ?? t.notes, b.due !== undefined ? b.due : t.due, b.priority ?? t.priority, b.list ?? t.list,
+    // A due time set here was picked by the user (absolute): no longer tied to the zone the server read it in.
+    run(`UPDATE tasks SET title = ?, notes = ?, due = ?, due_tz = ?, priority = ?, list = ?, done = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
+      b.title ?? t.title, b.notes ?? t.notes, b.due !== undefined ? b.due : t.due, b.due !== undefined ? null : t.due_tz, b.priority ?? t.priority, b.list ?? t.list,
       b.done !== undefined ? (b.done ? 1 : 0) : t.done, b.done ? (t.completed_at || now()) : (b.done === false ? null : t.completed_at), now(), t.id);
     notify(req.user.id, 'tasks:changed', {});
     return out(get('SELECT * FROM tasks WHERE id = ?', t.id));
@@ -79,8 +82,11 @@ export default async function taskRoutes(app) {
       // Older clients send the raw AI items ({ text, due: 'YYYY-MM-DD' }).
       const t = it.title ? it : p.items.find((x) => x.text === it.text) || { title: it.text, notes: p.context, due: null };
       if (!String(t.title || '').trim()) continue;
-      const r = run('INSERT INTO tasks (user_id, title, notes, due, priority, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        req.user.id, String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), Number(t.due) || null, t.priority ? 1 : 0, p.messageId, now(), now());
+      // Due as read from the email (unchanged in the dialog) is tied to the zone it was read in.
+      const due = Number(t.due) || null;
+      const read = due && p.items.some((x) => x.due === due) ? p.tz : null;
+      const r = run('INSERT INTO tasks (user_id, title, notes, due, due_tz, priority, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        req.user.id, String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), due, read, t.priority ? 1 : 0, p.messageId, now(), now());
       created.push(out(get('SELECT * FROM tasks WHERE id = ?', r.lastInsertRowid)));
     }
     notify(req.user.id, 'tasks:changed', {});
@@ -115,5 +121,5 @@ function proposeTasks(userId, id) {
   const items = ai.length
     ? ai.map((a) => ({ text: a.text, title: withWho(a.text), notes: context, due: due(a.due) }))
     : [{ text: '', title: withWho(ins?.action_summary || `Follow up: ${m.subject || '(no subject)'}`), notes: context, due: null }];
-  return { messageId: m.id, context, items };
+  return { messageId: m.id, context, items, tz };
 }

@@ -4,7 +4,9 @@ const base = (window.HALCYON_SERVER || '').replace(/\/$/, '');
 // The active space (e.g. "Work") travels with every request; the server scopes lists, search and the assistant by it.
 let activeSpace = '';
 export const setApiSpace = (s) => { activeSpace = s || ''; };
-const spaceHeader = () => (activeSpace ? { 'x-halcyon-space': encodeURIComponent(activeSpace) } : {});
+// The device's time zone travels too: the server reads times in mail ("tomorrow at 8") in the user's zone.
+const deviceTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } })();
+const spaceHeader = () => ({ ...(activeSpace ? { 'x-halcyon-space': encodeURIComponent(activeSpace) } : {}), ...(deviceTz ? { 'x-halcyon-tz': encodeURIComponent(deviceTz) } : {}) });
 
 export class ApiError extends Error {
   constructor(message, status, code) { super(message); this.status = status; this.code = code; }

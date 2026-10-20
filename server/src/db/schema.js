@@ -260,4 +260,9 @@ export const migrations = [
   CREATE INDEX idx_memory_stats ON memory(user_id, kind, model, ref_id);
   CREATE INDEX idx_ai_jobs_user ON ai_jobs(user_id, type, status, ref_id);
   `,
+  // 13: the zone a task's due time was read in by the server ("tomorrow at 10", a date from an email); NULL when the
+  //     user picked the time in the browser. Lets a time-zone correction fix the former without moving the latter.
+  `
+  ALTER TABLE tasks ADD COLUMN due_tz TEXT;
+  `,
 ];

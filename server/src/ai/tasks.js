@@ -54,7 +54,8 @@ function expiryOf(d, m, tz) {
 /** quiet: analysis of old mail that was most likely handled already — no "needs reply", out of brief/priority views. */
 function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   const messageId = m.id;
-  const events = (Array.isArray(d.events) ? d.events : []).map((e) => normalizeEvent(e, tz)).filter(Boolean).slice(0, 5);
+  const text = `${m.subject || ''}\n${m.body_text || ''}`;
+  const events = (Array.isArray(d.events) ? d.events : []).map((e) => normalizeEvent(e, tz, { text })).filter(Boolean).slice(0, 5);
   const expires = expiryOf(d, m, tz);
   let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply && !quiet ? 1 : 0;
   let needsAction = d.needs_action && !quiet ? 1 : 0;
@@ -500,7 +501,7 @@ export async function extractEvent(userId, messageId) {
   const { ctx } = ctxFor(userId);
   const tz = getSettings(userId).calendar.timezone;
   const { data } = await chatJSON(userId, 'compose', { ...P.extractEventPrompt({ ctx, message: P.messageForPrompt(m, 4000, tz), timezone: tz }), temperature: 0.1, maxTokens: 500 });
-  const ev = normalizeEvent(data, tz);
+  const ev = normalizeEvent(data, tz, { text: `${m.subject || ''}\n${m.body_text || ''}` });
   const start = ev ? Date.parse(ev.start) : NaN;
   const end = ev ? Date.parse(ev.end) : NaN;
   return {

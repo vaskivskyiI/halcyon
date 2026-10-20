@@ -2,6 +2,7 @@ import { get, run, all, now } from './db/index.js';
 import { hashPassword, verifyPassword, randomToken } from './util/crypto.js';
 import { config } from './config.js';
 import { ensureDefaults } from './bootstrap.js';
+import { noteClientTimezone } from './settings.js';
 
 const SESSION_DAYS = 30;
 const COOKIE = 'halcyon_session';
@@ -48,6 +49,8 @@ export async function requireUser(req, reply) {
   const u = userFromRequest(req);
   if (!u) return reply.code(401).send({ error: 'Not authenticated' });
   req.user = u;
+  const tz = req.headers['x-halcyon-tz'];
+  if (tz) { try { noteClientTimezone(u.id, decodeURIComponent(String(tz))); } catch { /* ignore a bad header */ } }
 }
 
 // Simple in-memory login throttling per IP.

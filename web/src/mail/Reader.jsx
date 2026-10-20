@@ -306,7 +306,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       )}
       {ins?.events?.length > 0 && (
         <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-          {ins.events.map((e, i) => <button key={i} className="btn sm" onClick={() => onEvent(e)}><CalendarPlus size={13} /> {e.title} · {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</button>)}
+          {ins.events.map((e, i) => <button key={i} className="btn sm" onClick={() => onEvent(e)} title={e.read ? `Read from the email as ${e.read.date}${e.read.time ? ` ${e.read.time}` : ''} (${e.read.tz})` : undefined}><CalendarPlus size={13} /> {e.title} · {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</button>)}
         </div>
       )}
       {(ins?.needsReply || ins?.suggestedReplies?.length > 0) && (

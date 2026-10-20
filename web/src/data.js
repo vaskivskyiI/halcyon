@@ -23,7 +23,7 @@ export function setSpace(space) {
 
 export async function loadMe() {
   const me = await api.get('/api/me');
-  store.set({ user: me.user, settings: me.settings, oauth: me.oauth, singleUser: me.singleUser });
+  store.set({ user: me.user, settings: me.settings, oauth: me.oauth, singleUser: me.singleUser, serverTimezone: me.serverTimezone });
   applyTheme(me.settings);
   // Times the AI reads from mail are local times; the server needs this device's zone, not its own (often UTC).
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;

@@ -26,10 +26,11 @@ export function localToEpoch(date, time, tz) {
  * Accepts { date, start_time, end_time } (preferred) or a legacy ISO "start"/"end", whose wall-clock part is used
  * and whose offset is ignored. Returns null when no usable date is present.
  */
-export function normalizeEvent(e, userTz) {
+export function normalizeEvent(e, userTz, { text } = {}) {
   if (!e || typeof e !== 'object') return null;
   // e.tz: the zone the email states for these times ("CET", "UTC", "Europe/London"); otherwise the user's zone.
-  const tz = zoneOf(e.tz) || userTz;
+  // Models also fill it in when the email states nothing (often "UTC"): only a zone the text really mentions counts.
+  const tz = (statedIn(text, e.tz) && zoneOf(e.tz)) || userTz;
   const legacy = (v) => String(v || '').match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
   const ls = legacy(e.start), le = legacy(e.end);
   const date = e.date || ls?.[1];
@@ -39,7 +40,18 @@ export function normalizeEvent(e, userTz) {
   if (Number.isNaN(start)) return null;
   let end = e.end_time ? localToEpoch(e.end_date || date, e.end_time, tz) : le?.[2] ? localToEpoch(le[1], le[2], tz) : NaN;
   if (Number.isNaN(end) || end <= start) end = allDay ? start + 864e5 : start + 3600e3;
-  return { title: String(e.title || '').slice(0, 200), start: new Date(start).toISOString(), end: new Date(end).toISOString(), all_day: allDay, location: e.location || null };
+  return { title: String(e.title || '').slice(0, 200), start: new Date(start).toISOString(), end: new Date(end).toISOString(), all_day: allDay, location: e.location || null,
+    // How it was read, shown to the user (and useful when a time looks wrong).
+    read: { date, time: allDay ? null : startTime, tz } };
+}
+
+/** Whether a zone label from the model appears in the email text (no text given: trusted). */
+function statedIn(text, label) {
+  if (!label) return false;
+  if (text == null) return true;
+  // As a word ("CET" not inside "facet"); spaces inside the label are optional ("GMT +1" / "GMT+1").
+  const body = String(label).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${body}($|[^\\p{L}\\p{N}])`, 'iu').test(String(text));
 }
 
 /** Keeps the wall-clock reading of an absolute time when the zone it was read in changes (UTC 08:00 → Ljubljana 08:00). */

@@ -215,6 +215,15 @@ Derived requirements / design decisions:
   once; a send error opens the panel. `POST /api/outbox/:id/to-draft`; failed outbox items can be edited/cancelled.
 - Outbox rows left 'sending' by a restart become 'failed' with an explanation (never resent automatically).
 
+### Time zone, end to end (migration 13)
+- Every web request carries `x-halcyon-tz`; `requireUser` → `noteClientTimezone()` sets `calendar.timezone` when
+  `tzAuto` is on (so a server/container in UTC is corrected by any open tab, not only at page load).
+- `timezoneChanged()` (settings.js) keeps the wall-clock time of what the server read in the old zone: insight events,
+  `expires_at`, and open tasks whose `due_tz` is the old zone (server-computed: typed "tomorrow at 10", dates from
+  mail) or older unedited tasks from mail. Times picked in the browser (`due_tz` NULL) never move.
+- A zone the model returns for an event counts only if the email text mentions it as a word (`statedIn`); events
+  store `read: { date, time, tz }` (shown on hover). Settings → Preferences shows the zone used, device and server zone.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,
