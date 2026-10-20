@@ -87,7 +87,7 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   // Message moved locally (uid unknown) and now re-discovered → just attach the uid.
   const pendingMove = get('SELECT id FROM messages WHERE folder_id = ? AND uid IS NULL AND message_id = ?', folder.id, messageId);
   if (pendingMove) {
-    run('UPDATE messages SET uid = ? WHERE id = ?', uid, pendingMove.id);
+    run('UPDATE messages SET uid = ?, local_copy = 0 WHERE id = ?', uid, pendingMove.id);
     return { id: pendingMove.id, isNew: false };
   }
   const existing = get('SELECT id FROM messages WHERE folder_id = ? AND uid = ?', folder.id, uid);
@@ -184,7 +184,7 @@ export function serializeMessage(m, extra = {}) {
     id: m.id, accountId: m.account_id, folderId: m.folder_id, uid: m.uid, messageId: m.message_id, threadId: m.thread_id,
     subject: m.subject, from: { name: m.from_name, address: m.from_addr }, to: json(m.to_json, []), cc: json(m.cc_json, []),
     bcc: json(m.bcc_json, []), replyTo: json(m.reply_to_json, []), date: m.date, snippet: m.snippet,
-    hasAttachments: !!m.has_attachments, isRead: !!m.is_read, isFlagged: !!m.is_flagged, isAnswered: !!m.is_answered, isForwarded: !!m.is_forwarded,
+    hasAttachments: !!m.has_attachments, isRead: !!m.is_read, isFlagged: !!m.is_flagged, isAnswered: !!m.is_answered, isForwarded: !!m.is_forwarded, notOnServer: !!m.local_copy && m.uid == null,
     isDraft: !!m.is_draft, snoozedUntil: m.snoozed_until, labels: json(m.labels_json, []), aiStatus: m.ai_status,
     hasInvite: !!m.calendar_ics, ...extra,
   };

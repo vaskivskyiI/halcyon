@@ -13,6 +13,7 @@ import CalendarView from './calendar/CalendarView.jsx';
 import ContactsView from './contacts/ContactsView.jsx';
 import TasksView from './tasks/TasksView.jsx';
 import TaskDialog from './tasks/TaskDialog.jsx';
+import Problems from './components/Problems.jsx';
 import { openComposer } from './mail/Composer.jsx';
 import AssistantView from './assistant/AssistantView.jsx';
 import SettingsView from './settings/SettingsView.jsx';
@@ -173,6 +174,7 @@ function Shell() {
           </button>
         ))}
         <div className="spacer" />
+        <Problems />
         <SpaceSwitcher />
         <button title={connected ? 'Sync now' : 'Sync now — live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'}
           aria-label="Sync now" onClick={syncNow} className={connected ? '' : 'offline'}>{syncing ? <Spinner size={18} /> : <RefreshCw size={19} />}{!connected && <span className="offline-dot" />}</button>

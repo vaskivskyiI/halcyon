@@ -361,3 +361,17 @@ pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); p
 .tab.sort-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .tab-count { margin-left: 5px; font-size: 11px; font-weight: 600; color: var(--text-2); }
 .tab.active .tab-count { color: inherit; }
+.rail button.problems-btn.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.rail button.problems-btn.warn { color: var(--warning); }
+.rail button.problems-btn.error .badge { background: var(--danger); }
+.rail button.problems-btn.warn .badge { background: var(--warning); }
+.problems-panel { position: fixed; left: 68px; bottom: 12px; width: min(420px, calc(100vw - 84px)); max-height: 70vh; overflow: auto; z-index: 60;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 12px; display: grid; gap: 8px; }
+.problem { border-left: 3px solid var(--warning); padding: 6px 10px; border-radius: 6px; background: var(--panel-2); }
+.problem.error { border-left-color: var(--danger); }
+.problem .t { font-weight: 600; font-size: 13px; }
+.msg-row .meta .chip.unsaved { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+@media (max-width: 860px) { .problems-panel { left: 8px; right: 8px; width: auto; bottom: 64px; } }
+.banner { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); }
+.banner.warn { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); color: var(--text); }
+.banner.warn svg { color: var(--danger); flex: none; }

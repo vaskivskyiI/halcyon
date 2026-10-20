@@ -200,6 +200,21 @@ Derived requirements / design decisions:
   they return `tz` as stated in the mail and `zoneOf()` maps it ("CET" → Europe/Paris with DST, "GMT+1", IANA).
   Invitations use their own times (`extractEvent` reads the ICS); floating ICS times use the user's zone.
 
+### Sent mail / drafts on the server, problems never silent (migration 11)
+- Bug fixed: `reconcileOrphans` deleted local sent copies (uid NULL) once their append had failed 5× — sent mail
+  vanished locally ("not found"). Copies made by Halcyon are now `messages.local_copy = 1` until the server copy is
+  matched by Message-ID and are never cleaned up; `notOnServer` in the API, "Not on server" chip / reader banner,
+  `POST /api/messages/save-to-server` ({ids} | {all}). Append ops carry `localId`; when the server's own Sent folder is
+  used instead, the local copy moves along.
+- Sent / Drafts found by special-use or localised names (`mailFolder()` in send.js, e.g. "Poslani elementi",
+  "Osnutki"); folders Halcyon creates are subscribed (most clients hide unsubscribed folders).
+- Drafts are stored on the server automatically (`syncDraftsToServer`, every 30 s for drafts unchanged for 30 s;
+  `drafts.server_saved_at`); the new copy is appended before the old one is deleted.
+- `GET /api/status/problems` + `components/Problems.jsx`: red indicator in the rail with a panel (reconnect, retry /
+  dismiss failed server changes, send again / save as draft, save unsaved sent mail on the server); new errors toast
+  once; a send error opens the panel. `POST /api/outbox/:id/to-draft`; failed outbox items can be edited/cancelled.
+- Outbox rows left 'sending' by a restart become 'failed' with an explanation (never resent automatically).
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

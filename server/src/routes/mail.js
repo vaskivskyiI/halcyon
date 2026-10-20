@@ -20,7 +20,7 @@ import { CATEGORIES } from '../ai/prompts.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
-  m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
+  m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
   i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
@@ -433,8 +433,36 @@ export default async function mailRoutes(app) {
   });
 
   app.post('/api/outbox/:id/retry', async (req) => {
-    run("UPDATE outbox SET status = 'queued', attempts = 0, send_at = ? WHERE id = ? AND user_id = ?", now(), req.params.id, req.user.id);
+    run("UPDATE outbox SET status = 'queued', attempts = 0, error = NULL, send_at = ? WHERE id = ? AND user_id = ? AND status != 'sent'", now(), req.params.id, req.user.id);
+    notify(req.user.id, 'outbox:changed', {});
     return { ok: true };
+  });
+
+  // A message that could not be sent: keep it as a draft instead (nothing is sent).
+  app.post('/api/outbox/:id/to-draft', async (req, reply) => {
+    const row = get("SELECT * FROM outbox WHERE id = ? AND user_id = ? AND status IN ('queued', 'failed')", req.params.id, req.user.id);
+    if (!row) return httpError(reply, 409, 'This message is being sent or was already sent');
+    const p = json(row.payload_json, {});
+    const d = saveDraft(req.user.id, { ...p, id: undefined, draftId: undefined, accountId: p.accountId || row.account_id });
+    run('DELETE FROM outbox WHERE id = ?', row.id);
+    notify(req.user.id, 'outbox:changed', {});
+    return { ok: true, draftId: d.id };
+  });
+
+  // Sent mail stored only here (saving it on the server failed): store it on the server again.
+  app.post('/api/messages/save-to-server', async (req) => {
+    const b = req.body || {};
+    const rows = all(`SELECT m.*, f.path AS folder_path FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND m.local_copy = 1 AND m.uid IS NULL
+      ${b.all ? '' : `AND m.id IN (${ids(b.ids).join(',') || 0})`}`, req.user.id);
+    let queued = 0;
+    for (const m of rows) {
+      const raw = readRaw(m);
+      if (!raw) continue;
+      run("DELETE FROM pending_ops WHERE account_id = ? AND op = 'append' AND json_extract(payload_json, '$.localId') = ?", m.account_id, m.id);
+      queueOp(m.account_id, 'append', { folder: m.folder_path, raw: raw.toString('base64'), flags: ['\\Seen'], localId: m.id, kind: 'sent' });
+      queued++;
+    }
+    return { queued };
   });
 
   // ---- drafts (stored locally, optionally saved to the IMAP Drafts folder)

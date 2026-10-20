@@ -512,6 +512,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
           {m.hasInvite && <CalendarPlus size={13} className="faint" title="Invitation" />}
           {m.hasAttachments && <Paperclip size={13} className="faint" />}
           {m.hasDraft && <span className="chip draft" title="You have an unsent reply in this conversation">Draft</span>}
+          {m.notOnServer && <span className="chip unsaved" title="Sent, but the copy is not saved on the mail server yet (other mail apps do not show it)">Not on server</span>}
           {m.isFlagged && <Star size={13} className="flag-icon" />}
           {m.labels?.map((id) => { const l = store.get().labels.find((x) => x.id === id); return l && <span key={id} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
         </div>
@@ -548,7 +549,10 @@ function OutboxList({ onMenu }) {
               <div className="row" style={{ marginTop: 6 }}>
                 <button className="btn sm" onClick={async () => { const r = await api.post(`/api/outbox/${o.id}/cancel`).catch(toastError); if (r) { openComposer(r.payload); load(); } }}>Edit</button>
                 <button className="btn sm danger" onClick={() => api.post(`/api/outbox/${o.id}/cancel`).then(load).catch(toastError)}>Cancel</button>
-                {o.status === 'failed' && <button className="btn sm" onClick={() => api.post(`/api/outbox/${o.id}/retry`).then(load)}>Retry</button>}
+                {(o.status === 'failed' || o.error) && <>
+                  <button className="btn sm" onClick={() => api.post(`/api/outbox/${o.id}/retry`).then(load).catch(toastError)}>Send again</button>
+                  <button className="btn sm" onClick={() => api.post(`/api/outbox/${o.id}/to-draft`).then(() => { toast('Saved as draft — nothing was sent'); load(); }).catch(toastError)}>Save as draft</button>
+                </>}
               </div>
             </div>
           </div>

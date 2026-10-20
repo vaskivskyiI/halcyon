@@ -88,7 +88,7 @@ export function saveDraft(userId, b) {
 // Drafts folder is affected, so no other mail can be touched.
 function dropServerCopy(userId, d) {
   const account = d?.server_msgid && get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', d.account_id, userId);
-  const folder = account && findSpecialFolder(account.id, '\\Drafts', 'Drafts');
+  const folder = account && mailFolder(account.id, '\\Drafts');
   if (!folder) return;
   queueOp(account.id, 'deleteByMessageId', { folder: folder.path, messageId: d.server_msgid });
   const local = all('SELECT id FROM messages WHERE folder_id = ? AND message_id = ?', folder.id, d.server_msgid.replace(/^<|>$/g, '')).map((r) => r.id);
@@ -101,14 +101,26 @@ export async function saveDraftToServer(userId, id) {
   const p = d && json(d.payload_json, {});
   const account = p && get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', p.accountId || d.account_id, userId);
   if (!account) throw new Error('The draft needs a sending account');
-  const folder = findSpecialFolder(account.id, '\\Drafts', 'Drafts');
-  if (!folder) throw new Error('This account has no Drafts folder');
+  const folder = mailFolder(account.id, '\\Drafts') || ensureFolder(account.id, '\\Drafts', 'Drafts');
   const raw = await buildMime(account, p);
   const msgid = (raw.toString('utf8', 0, 8192).match(/^Message-ID:\s*(<[^>\r\n]+>)/mi) || [])[1] || null;
+  // New copy first, then the previous one is removed: if storing fails, the server keeps the older version.
+  queueOp(account.id, 'append', { folder: folder.path, raw: raw.toString('base64'), flags: ['\\Draft', '\\Seen'], kind: 'draft' });
   dropServerCopy(userId, { ...d, account_id: account.id });
-  queueOp(account.id, 'append', { folder: folder.path, raw: raw.toString('base64'), flags: ['\\Draft', '\\Seen'] });
-  run('UPDATE drafts SET server_msgid = ?, account_id = ? WHERE id = ?', msgid, account.id, d.id);
+  run('UPDATE drafts SET server_msgid = ?, account_id = ?, server_saved_at = ? WHERE id = ?', msgid, account.id, d.updated_at, d.id);
   return { ok: true, folder: folder.name };
+}
+
+/** Drafts are kept on the server too (other mail clients see them): each changed draft is stored there once it has
+ *  not been edited for half a minute. Called by the scheduler. */
+export async function syncDraftsToServer() {
+  const due = all(`SELECT id, user_id FROM drafts WHERE account_id IS NOT NULL AND updated_at > COALESCE(server_saved_at, 0) AND updated_at < ?`, now() - 30e3);
+  for (const d of due) {
+    try { await saveDraftToServer(d.user_id, d.id); } catch (e) {
+      log.warn(`draft ${d.id} to server: ${e.message}`);
+      run('UPDATE drafts SET server_saved_at = updated_at WHERE id = ?', d.id); // not retried until edited again
+    }
+  }
 }
 
 export function deleteDraft(userId, id) {
@@ -119,7 +131,7 @@ export function deleteDraft(userId, id) {
 }
 
 export function cancelSend(userId, id) {
-  const row = get("SELECT * FROM outbox WHERE id = ? AND user_id = ? AND status = 'queued'", id, userId);
+  const row = get("SELECT * FROM outbox WHERE id = ? AND user_id = ? AND status IN ('queued', 'failed')", id, userId);
   if (!row) return null;
   run('DELETE FROM outbox WHERE id = ?', id);
   notify(userId, 'outbox:changed', {});
@@ -145,23 +157,34 @@ export async function deliver(row) {
   // Gmail and Microsoft store sent copies automatically.
   const autoSaves = /gmail\.com|googlemail\.com|office365\.com|outlook\.com/i.test(account.smtp_host || '');
   const sent = sentFolder(account.id) || (autoSaves ? null : ensureFolder(account.id, '\\Sent', 'Sent'));
-  if (sent && !autoSaves) queueOp(account.id, 'append', { folder: sent.path, raw: raw.toString('base64'), flags: ['\\Seen'] });
-  // Show the sent message right away (in Sent and in its conversation); when the server copy is synced later it is
-  // matched by Message-ID and only gets its UID attached.
+  // Show the sent message right away (in Sent and in its conversation). It is a local copy until the server's copy is
+  // synced and matched by Message-ID; until then it is never cleaned up, and the user can see it is not on the server.
+  let localId = null;
   if (sent) {
     try {
       const r = await ingestMessage({ account, folder: sent, uid: null, flags: ['\\Seen'], raw });
+      localId = r.id;
+      run('UPDATE messages SET local_copy = 1 WHERE id = ? AND uid IS NULL', r.id);
       if (r.isNew) { recountFolder(sent.id); await afterIngest(account, sent, [r.id]); notify(row.user_id, 'mail:changed', { ids: [r.id] }); }
     } catch (e) { log.warn(`local sent copy: ${e.message}`); }
   }
+  if (sent && !autoSaves) queueOp(account.id, 'append', { folder: sent.path, raw: raw.toString('base64'), flags: ['\\Seen'], localId, kind: 'sent' });
   collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true, row.account_id);
 }
 
 // Sent folder: special-use flag, else the usual names (servers without SPECIAL-USE, localised names).
-const SENT_NAMES = ['Sent', 'Sent Items', 'Sent Messages', 'Sent Mail', 'Poslano', 'Poslana pošta', 'Gesendet', 'Gesendete Elemente', 'INBOX.Sent', 'INBOX/Sent'];
-function sentFolder(accountId) {
-  return findSpecialFolder(accountId, '\\Sent') || SENT_NAMES.map((n) => findSpecialFolder(accountId, null, n)).find(Boolean) || null;
+// Matched against the folder's own name (last path part), so "INBOX.Sent" and "Sent" both match "Sent".
+const FOLDER_NAMES = {
+  '\\Sent': ['Sent', 'Sent Items', 'Sent Messages', 'Sent Mail', 'Poslano', 'Poslani elementi', 'Poslana pošta', 'Poslani', 'Gesendet',
+    'Gesendete Elemente', 'Gesendete Objekte', 'Elementos enviados', 'Enviados', 'Éléments envoyés', 'Envoyés', 'Posta inviata',
+    'Inviati', 'Verzonden items', 'Verzonden', 'Skickat', 'Wysłane', 'Odeslaná pošta', 'Elküldött elemek'],
+  '\\Drafts': ['Drafts', 'Draft', 'Osnutki', 'Entwürfe', 'Borradores', 'Brouillons', 'Bozze', 'Concepten', 'Utkast', 'Kopie robocze', 'Koncepty', 'Piszkozatok'],
+};
+/** The account's Sent / Drafts folder: special-use flag, else a usual (localised) name; null when there is none. */
+export function mailFolder(accountId, special) {
+  return findSpecialFolder(accountId, special) || (FOLDER_NAMES[special] || []).map((n) => findSpecialFolder(accountId, null, n)).find(Boolean) || null;
 }
+const sentFolder = (accountId) => mailFolder(accountId, '\\Sent');
 
 /** Last SMTP result per account (shown in Settings → Accounts). */
 export const smtpStatus = new Map();
@@ -171,6 +194,10 @@ export async function processOutbox() {
   if (busy) return;
   busy = true;
   try {
+    // Interrupted while sending (server restarted): not resent automatically (it may have gone out) — the user decides.
+    // (Only one run at a time, so a row still marked 'sending' here was left by a previous server process.)
+    run("UPDATE outbox SET status = 'failed', error = ? WHERE status = 'sending'",
+      'Sending was interrupted (server restart); it is not known whether the message went out. Check Sent, then send again or save as draft.');
     const due = all("SELECT * FROM outbox WHERE status = 'queued' AND send_at <= ? AND attempts < 5 ORDER BY send_at LIMIT 20", now());
     for (const row of due) {
       run("UPDATE outbox SET status = 'sending' WHERE id = ?", row.id);

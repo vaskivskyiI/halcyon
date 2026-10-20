@@ -1,4 +1,4 @@
-import { get, all, run, update } from '../db/index.js';
+import { get, all, run, update, now, json } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { userAccounts, userAccount, serializeAccount, accountFields, createAccount, ACCOUNT_COLS } from '../accounts.js';
@@ -45,6 +45,41 @@ export default async function accountRoutes(app) {
     history: a.sync_history || '90',
     historyFolders: all("SELECT name FROM folders WHERE account_id = ? AND sync_enabled = 1 AND history_done = 0 AND last_synced_at IS NOT NULL AND COALESCE(special_use, '') NOT IN ('\\Trash', '\\Junk') LIMIT 5", a.id).map((f) => f.name),
   })));
+
+  // Everything that currently needs the user's attention (shown as the red indicator): mail server connections,
+  // sending, server changes that failed, sent mail that is not on the server yet. Never silent.
+  app.get('/api/status/problems', { preHandler: requireUser }, async (req) => {
+    const out = [];
+    const t = now();
+    for (const a of userAccounts(req.user.id)) {
+      const who = a.email;
+      const st = syncManager.status(a.id);
+      if (a.sync_enabled && !st?.connected && (a.sync_state === 'error' || st?.lastError)) {
+        out.push({ key: `imap:${a.id}`, level: 'error', accountId: a.id, title: `${who}: cannot connect to the mail server`, text: st?.lastError || a.sync_error || '', at: st?.lastErrorAt, actions: ['reconnect'] });
+      }
+      for (const [folder, err] of Object.entries(st?.folderErrors || {})) {
+        out.push({ key: `folder:${a.id}:${folder}`, level: 'warn', accountId: a.id, title: `${who}: folder “${folder}” cannot be synchronised`, text: err });
+      }
+      const smtp = smtpStatus.get(a.id);
+      if (smtp && !smtp.ok) out.push({ key: `smtp:${a.id}`, level: 'error', accountId: a.id, title: `${who}: sending failed`, text: smtp.error || 'no details from the server', at: smtp.at, actions: ['test'] });
+      for (const o of all('SELECT id, op, error, attempts, created_at FROM pending_ops WHERE account_id = ? AND attempts > 0 ORDER BY id DESC LIMIT 20', a.id)) {
+        out.push({ key: `op:${o.id}`, level: o.attempts >= 5 ? 'error' : 'warn', accountId: a.id, opId: o.id,
+          title: `${who}: ${o.op === 'append' ? 'saving a copy on the server' : `server change “${o.op}”`} ${o.attempts >= 5 ? 'failed' : 'is being retried'}`,
+          text: o.error || '', at: o.created_at, actions: o.attempts >= 5 ? ['retry-op', 'dismiss-op'] : [] });
+      }
+      for (const r of all("SELECT id, payload_json, status, error, attempts, send_at FROM outbox WHERE account_id = ? AND (status = 'failed' OR (status = 'queued' AND attempts > 0))", a.id)) {
+        const p = json(r.payload_json, {});
+        out.push({ key: `outbox:${r.id}`, level: r.status === 'failed' ? 'error' : 'warn', accountId: a.id, outboxId: r.id,
+          title: `${r.status === 'failed' ? 'Not sent' : `Not sent yet (try ${r.attempts + 1} at ${new Date(r.send_at).toLocaleTimeString()})`}: “${p.subject || '(no subject)'}”`,
+          text: r.error || '', actions: ['retry-send', 'to-draft'] });
+      }
+      const unsaved = get(`SELECT COUNT(*) AS n FROM messages WHERE account_id = ? AND local_copy = 1 AND uid IS NULL AND created_at < ?
+        AND id NOT IN (SELECT json_extract(payload_json, '$.localId') FROM pending_ops WHERE account_id = ? AND op = 'append' AND attempts < 5 AND json_extract(payload_json, '$.localId') IS NOT NULL)`,
+        a.id, t - 120e3, a.id).n;
+      if (unsaved) out.push({ key: `unsaved:${a.id}`, level: 'error', accountId: a.id, title: `${who}: ${unsaved} sent message${unsaved > 1 ? 's are' : ' is'} not saved on the server`, text: 'They were sent, but other mail apps will not show them in Sent.', actions: ['save-unsaved'] });
+    }
+    return { problems: out.sort((x, y) => (x.level === y.level ? 0 : x.level === 'error' ? -1 : 1)) };
+  });
 
   // A server change that keeps failing: try it again now, or drop it (only the queued change; local mail stays as it is).
   app.post('/api/accounts/:id/ops/:opId/retry', { preHandler: requireUser }, async (req, reply) => {

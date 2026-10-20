@@ -162,7 +162,7 @@ export class AccountSync {
   reconcileOrphans() {
     if (get('SELECT 1 AS x FROM pending_ops WHERE account_id = ? AND attempts < 5', this.accountId)) return;
     const orphans = all(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id
-      WHERE m.account_id = ? AND m.uid IS NULL AND f.sync_enabled = 1 AND m.created_at < ?`, this.accountId, now() - 10 * 60e3).map((r) => r.id);
+      WHERE m.account_id = ? AND m.uid IS NULL AND COALESCE(m.local_copy, 0) = 0 AND f.sync_enabled = 1 AND m.created_at < ?`, this.accountId, now() - 10 * 60e3).map((r) => r.id);
     if (orphans.length) { deleteMessages(orphans, { keepAnalysis: true }); log.info(`account ${this.accountId}: removed ${orphans.length} stale local copies`); }
     run('DELETE FROM pending_ops WHERE account_id = ? AND attempts >= 5 AND created_at < ?', this.accountId, now() - 7 * 864e5);
   }
@@ -192,6 +192,8 @@ export class AccountSync {
       for (const f of all('SELECT id, path FROM folders WHERE account_id = ?', account.id)) {
         if (seen.has(f.path)) { missing.delete(f.id); continue; }
         if ((missing.get(f.id) || 0) < 1) { missing.set(f.id, 1); continue; }
+        // Sent mail not yet stored on the server lives here: keep the folder until it is.
+        if (get('SELECT 1 AS x FROM messages WHERE folder_id = ? AND local_copy = 1 AND uid IS NULL', f.id)) continue;
         deleteMessages(all('SELECT id FROM messages WHERE folder_id = ?', f.id).map((r) => r.id), { keepAnalysis: true });
         run('DELETE FROM folders WHERE id = ?', f.id);
         missing.delete(f.id);
@@ -375,6 +377,12 @@ export class AccountSync {
     }
   }
 
+  // Created and subscribed: most mail clients only show subscribed folders.
+  async createMailbox(path) {
+    await this.client.mailboxCreate(path).catch((e) => { if (!/exist/i.test(e.responseText || '')) throw e; });
+    if (this.client.mailboxSubscribe) await this.client.mailboxSubscribe(path).catch(() => {});
+  }
+
   async applyOp(type, p) {
     const c = this.client;
     switch (type) {
@@ -418,9 +426,17 @@ export class AccountSync {
           if (!said && (!boxes || boxes.some((b) => b.path === p.folder))) throw e;
           const want = (p.flags || []).includes('\\Draft') ? '\\Drafts' : '\\Sent';
           const own = boxes?.find((b) => b.specialUse === want && b.path !== p.folder);
-          if (own) target = own.path; else await c.mailboxCreate(p.folder).catch(() => {});
+          if (own) target = own.path; else await this.createMailbox(p.folder);
           await c.append(target, raw, p.flags || ['\\Seen']);
           await this.syncFolderList();
+          // The local copy (sent mail) moves along, so the server copy is matched to it instead of showing twice.
+          const to = target !== p.folder && p.localId && get('SELECT id FROM folders WHERE account_id = ? AND path = ?', this.accountId, target);
+          if (to) {
+            const from = get('SELECT folder_id FROM messages WHERE id = ?', p.localId)?.folder_id;
+            run('UPDATE messages SET folder_id = ? WHERE id = ? AND uid IS NULL', to.id, p.localId);
+            if (from) recountFolder(from);
+            recountFolder(to.id);
+          }
         }
         this.dirtyFolders.add(target);
         break;
@@ -434,7 +450,7 @@ export class AccountSync {
         } finally { lock.release(); }
         break;
       }
-      case 'createFolder': await c.mailboxCreate(p.path); await this.syncFolderList(); break;
+      case 'createFolder': await this.createMailbox(p.path); await this.syncFolderList(); break;
       case 'renameFolder': await c.mailboxRename(p.from, p.to); await this.syncFolderList(); break;
       case 'deleteFolder': await c.mailboxDelete(p.path); await this.syncFolderList(); break;
       case 'emptyFolder': {

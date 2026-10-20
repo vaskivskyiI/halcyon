@@ -246,4 +246,11 @@ export const migrations = [
   -- re-created, UIDVALIDITY reset, moved by another client) gets its analysis back instead of a new AI run.
   CREATE TABLE insight_archive (user_id INTEGER NOT NULL, msgid TEXT NOT NULL, data_json TEXT, created_at INTEGER, PRIMARY KEY (user_id, msgid));
   `,
+  // 11: copies stored by Halcyon itself (sent mail) until the server's copy is seen — never cleaned up as stale;
+  //     drafts are saved to the server automatically (server_saved_at = last version stored there).
+  `
+  ALTER TABLE messages ADD COLUMN local_copy INTEGER DEFAULT 0;
+  ALTER TABLE drafts ADD COLUMN server_saved_at INTEGER;
+  UPDATE messages SET local_copy = 1 WHERE uid IS NULL AND folder_id IN (SELECT id FROM folders WHERE special_use = '\\Sent');
+  `,
 ];

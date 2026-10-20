@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  Reply, ReplyAll, Forward, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
+  Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
   ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck,
 } from 'lucide-react';
@@ -48,7 +48,12 @@ export default function Reader({ id, view }) {
       const ex = new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]);
       setExpanded(ex);
       if (!images) { threadCache.delete(id); threadCache.set(id, { thread: t, expanded: ex }); if (threadCache.size > 40) threadCache.delete(threadCache.keys().next().value); }
-    } catch (e) { toastError(e); setThread(null); } finally { setLoading(false); }
+    } catch (e) {
+      setThread(null);
+      threadCache.delete(id);
+      // Gone (moved or deleted, here or by another mail app): say so and refresh the list instead of an error.
+      if (e.status === 404) window.dispatchEvent(new Event('halcyon:poll')); else toastError(e);
+    } finally { setLoading(false); }
   }, [id, conv, allowImages]);
 
   useEffect(() => {
@@ -79,7 +84,7 @@ export default function Reader({ id, view }) {
   });
 
   if (!id) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}><MailIcon size={44} strokeWidth={1.2} /><div>Select a message to read</div><div className="small">Shortcuts: j/k navigate · r reply · a reply all · f forward · e archive · # delete · s flag · / search · c compose</div></div></section>;
-  if (!thread) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}>{loading ? <Spinner size={22} /> : 'Message not found'}</div></section>;
+  if (!thread) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}>{loading ? <Spinner size={22} /> : <div style={{ textAlign: 'center' }}><div>This message is no longer here.</div><div className="small muted">It was moved or deleted (possibly in another mail app). The list has been refreshed.</div></div>}</div></section>;
 
   const msgs = thread.messages;
   const latest = [...msgs].reverse().find((m) => m.folder?.specialUse !== '\\Sent') || msgs[msgs.length - 1];
@@ -209,6 +214,12 @@ export default function Reader({ id, view }) {
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
         </div>
 
+        {msgs.some((m) => m.notOnServer) && (
+          <div className="banner warn">
+            <CloudOff size={15} /><span className="grow">Sent, but the copy is not saved on the mail server yet — other mail apps will not show it in Sent.</span>
+            <button className="btn sm" onClick={() => api.post('/api/messages/save-to-server', { ids: msgs.filter((m) => m.notOnServer).map((m) => m.id) }).then((r) => toast(r.queued ? 'Saving on the server…' : 'Nothing to save')).catch(toastError)}>Save on server</button>
+          </div>
+        )}
         <RelatedBar related={thread.related} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />
 
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}

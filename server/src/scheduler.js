@@ -1,6 +1,6 @@
 // Periodic housekeeping: outbox delivery, snooze wake-ups, event reminders, daily brief precomputation, DAV sync.
 import { db, all, get, run, json, now } from './db/index.js';
-import { processOutbox } from './mail/send.js';
+import { processOutbox, syncDraftsToServer } from './mail/send.js';
 import { regroupConversations } from './mail/store.js';
 import { wakeSnoozed } from './mail/actions.js';
 import { listRange } from './calendar/repo.js';
@@ -86,6 +86,7 @@ function scheduleBriefs() {
 
 export function startScheduler() {
   setInterval(() => processOutbox().catch((e) => log.error(e)), 2000).unref();
+  setInterval(() => syncDraftsToServer().catch((e) => log.error(e)), 30e3).unref();
   setInterval(() => { try { wakeSnoozed(); checkReminders(); scheduleBriefs(); } catch (e) { log.error(e); } }, 30e3).unref();
   const davAll = () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); };
   setTimeout(davAll, 5e3).unref();
