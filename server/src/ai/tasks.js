@@ -110,6 +110,24 @@ export function scheduleBriefRefresh(userId) {
   }
 }
 
+/**
+ * How the user is addressed: sole recipient, one of several in To, only in CC, or not at all (mailing list / BCC).
+ * The user's addresses are the account addresses plus their aliases.
+ */
+export function addressingOf(m, accounts) {
+  const mine = new Set(accounts.flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => (typeof x === 'string' ? x : x?.address))]).filter(Boolean).map((x) => x.toLowerCase()));
+  const to = json(m.to_json, []), cc = json(m.cc_json, []);
+  const isMine = (r) => mine.has(String(r.address || '').toLowerCase());
+  const others = to.length + cc.length - to.filter(isMine).length - cc.filter(isMine).length;
+  const bulk = m.list_unsubscribe ? ' The email has a List-Unsubscribe header (newsletter / mailing list).' : '';
+  if (to.some(isMine)) {
+    return others === 0 ? { role: 'sole', text: `Recipients: the user is the ONLY recipient (directly addressed).${bulk}` }
+      : { role: 'to', text: `Recipients: the user is in To together with ${others} other recipient(s).${bulk}` };
+  }
+  if (cc.some(isMine)) return { role: 'cc', text: `Recipients: the user is only in CC (${to.length} in To, ${cc.length} in CC) — usually for information unless the user is named or asked something.${bulk}` };
+  return { role: 'none', text: `Recipients: the user is NOT listed in To or CC (mailing list, distribution list or BCC; ${to.length + cc.length} visible recipients).${bulk}` };
+}
+
 /** Topics used in the last 90 days, most frequent first (the model is asked to reuse them for consistency). */
 export function recentTopics(userId, limit = 30) {
   return all(`SELECT i.topic, COUNT(*) AS n FROM ai_insights i JOIN messages m ON m.id = i.message_id
@@ -171,18 +189,25 @@ export async function analyzeMessage(userId, messageId, { interactive = false } 
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
     const fromMe = accounts.some((a) => a.email.toLowerCase() === m.from_addr);
+    const addressing = fromMe ? null : addressingOf(m, accounts);
     const contact = contactByEmail(userId, m.from_addr);
     const senderInfo = fromMe ? 'Sender: the user themself.' : contact
       ? `Sender is a known contact (${contact.contact_count} previous exchanges${contact.favorite ? ', marked as favorite/VIP' : ''}).`
       : 'Sender is not in the user\'s contacts.';
+    const recipientInfo = addressing ? `\n${addressing.text}` : '';
     const tz = settings.calendar.timezone;
     const pref = fromMe ? { importance: null, category: null } : senderPreference(userId, m.from_addr);
     const topics = recentTopics(userId);
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo, timezone: tz, fromMe, topics, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo: senderInfo + recipientInfo, timezone: tz, fromMe, topics, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
       language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
     if (contact?.favorite && res.data.priority < 70) res.data.priority = 70;
+    // Not addressed to the user at all (mailing list, BCC, bulk): nobody expects a reply and it is rarely urgent.
+    if (addressing?.role === 'none' && pref.importance !== 'important' && !contact?.favorite) {
+      res.data.needs_reply = false;
+      res.data.priority = Math.min(Number(res.data.priority) || 0, 55);
+    }
     applyPreference(res.data, pref);
     res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }

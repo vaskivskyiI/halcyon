@@ -208,7 +208,19 @@ function MessageList({ view, openId, onMenu }) {
 
   // Live updates.
   const reloadTimer = useRef();
+  // Periodic refresh when the live connection is down (see App), and after "Sync now".
+  useEffect(() => {
+    const h = () => { clearTimeout(reloadTimer.current); reloadTimer.current = setTimeout(() => load(false), 200); };
+    window.addEventListener('halcyon:poll', h);
+    return () => window.removeEventListener('halcyon:poll', h);
+  }, [params]);
+
   useEffect(() => onEvent((e) => {
+    // A finished analysis can move a message between Focused and Other: re-query those tabs.
+    if (e.type === 'ai:insight' && (tab === 'focused' || tab === 'other')) {
+      clearTimeout(reloadTimer.current);
+      reloadTimer.current = setTimeout(async () => { const r = await api.get(`/api/messages?${params(null)}`).catch(() => null); if (r) setItems(r.items); }, 800);
+    }
     if (['mail:changed', 'folder:synced', 'mail:unsnoozed', 'mail:new'].includes(e.type)) {
       if (e.type === 'folder:synced' && !e.payload.newCount) return;
       clearTimeout(reloadTimer.current);
@@ -338,7 +350,7 @@ function MessageList({ view, openId, onMenu }) {
         <div className="row">
           <button className="icon-btn mobile-only" onClick={onMenu} aria-label="Folders"><MenuIcon size={18} /></button>
           <h3 style={{ margin: 0, fontSize: 17 }} className="grow truncate">{activeQuery ? 'Search results' : title}</h3>
-          <button className="icon-btn" title="Refresh" onClick={() => { api.post('/api/sync'); load(false); }}>{loading ? <Spinner /> : <RefreshCw size={16} />}</button>
+          <button className="icon-btn" title="Check for new mail" onClick={() => { window.dispatchEvent(new Event('halcyon:sync')); load(false); }}>{loading ? <Spinner /> : <RefreshCw size={16} />}</button>
           <button className="icon-btn" title={threaded ? 'Conversation view: on' : 'Conversation view: off'} onClick={() => saveSettings({ ui: { conversationView: !threaded } })}><MailIcon size={16} /></button>
         </div>
         <form className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); }}>

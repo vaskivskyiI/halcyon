@@ -4,7 +4,7 @@ import { api, connectEvents, onEvent } from './api.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace } from './data.js';
-import { Toasts, useMenu } from './components/common.jsx';
+import { Toasts, useMenu, Spinner } from './components/common.jsx';
 import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
 import MailView from './mail/MailView.jsx';
@@ -106,6 +106,41 @@ function Shell() {
   ];
   const dark = document.documentElement.dataset.theme === 'dark';
   const space = store.use((s) => s.space);
+  const connected = store.use((s) => s.connected);
+  const [syncing, setSyncing] = useState(false);
+
+  // Without the live connection (e.g. a reverse proxy that does not pass WebSockets) the app would never hear about
+  // new mail or finished AI analysis: refresh periodically instead.
+  useEffect(() => {
+    if (connected) return undefined;
+    const t = setInterval(() => { loadFolders(); window.dispatchEvent(new Event('halcyon:poll')); }, 30e3);
+    return () => clearInterval(t);
+  }, [connected]);
+
+  // "Sync now": start a full sync of every account, wait until it has finished, then refresh and report.
+  const syncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      await api.post('/api/sync');
+      const t0 = Date.now();
+      let st = [];
+      do {
+        await new Promise((r) => setTimeout(r, 1500));
+        st = await api.get('/api/accounts/status');
+      } while (st.some((a) => a.syncEnabled && !['idle', 'error'].includes(a.state)) && Date.now() - t0 < 120e3);
+      loadFolders(); loadAccounts();
+      window.dispatchEvent(new Event('halcyon:poll'));
+      const errs = st.filter((a) => a.syncEnabled && a.state === 'error');
+      if (errs.length) toast(`Sync problem — ${errs.map((a) => `${a.email}: ${a.error}`).join('; ')}`, { kind: 'error', duration: 12000, action: { label: 'Details', onClick: () => navigate('#/settings/accounts') } });
+      else toast('Mailboxes are up to date');
+    } catch (e) { toast(e.message, { kind: 'error' }); } finally { setSyncing(false); }
+  };
+  useEffect(() => {
+    const h = () => syncNow();
+    window.addEventListener('halcyon:sync', h);
+    return () => window.removeEventListener('halcyon:sync', h);
+  });
 
   // Drag a message from the list onto Calendar (create an event from it) or Tasks (create tasks from it).
   const [dropNav, setDropNav] = useState(null);
@@ -130,7 +165,8 @@ function Shell() {
         ))}
         <div className="spacer" />
         <SpaceSwitcher />
-        <button title="Sync now" aria-label="Sync now" onClick={() => api.post('/api/sync').then(() => toast('Syncing…'))}><RefreshCw size={19} /></button>
+        <button title={connected ? 'Sync now' : 'Sync now — live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'}
+          aria-label="Sync now" onClick={syncNow} className={connected ? '' : 'offline'}>{syncing ? <Spinner size={18} /> : <RefreshCw size={19} />}{!connected && <span className="offline-dot" />}</button>
         <button title="Toggle theme" aria-label="Toggle theme" onClick={() => saveSettings({ ui: { theme: dark ? 'light' : 'dark' } })}>{dark ? <Sun size={19} /> : <Moon size={19} />}</button>
         <button className={section === 'settings' ? 'active' : ''} title="Settings" aria-label="Settings" onClick={() => navigate('#/settings')}><Settings size={21} /></button>
       </nav>

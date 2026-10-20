@@ -100,10 +100,7 @@ export default function AISettings() {
           {status.approvals > 0 && <a href="#/mail/unified"><b>{status.approvals}</b> AI rule actions awaiting your approval</a>}
         </div>
         {status.queue.lastError && <div className="small error-text">Last error ({status.queue.lastError.type}): {status.queue.lastError.error}</div>}
-        <div className="row">
-          <button className="btn sm" onClick={async () => { const r = await api.post('/api/ai/reprocess', { what: 'analyze', days: 14 }); toast(`Queued ${r.queued} emails`); }}><RefreshCw size={13} /> Re-analyse last 14 days</button>
-          <button className="btn sm" onClick={async () => { const r = await api.post('/api/ai/reprocess', { what: 'embed', days: 365 }); toast(`Indexing ${r.queued} emails`); }}><RefreshCw size={13} /> Rebuild search index</button>
-        </div>
+        <OlderMail pending={q('analyze', 'queued') + q('analyze', 'running')} onChange={loadStatus} />
         {status.usage.length > 0 && <table className="simple"><thead><tr><th>Model</th><th>Task</th><th>Calls (30d)</th><th>Tokens in/out</th><th>Avg time</th><th>Errors</th></tr></thead>
           <tbody>{status.usage.map((u, i) => <tr key={i}><td>{u.model}</td><td>{u.task}</td><td>{u.calls}</td><td>{Math.round(u.input / 1000)}k / {Math.round(u.output / 1000)}k</td><td>{(u.avgMs / 1000).toFixed(1)}s</td><td>{u.errors || ''}</td></tr>)}</tbody></table>}
       </div>}
@@ -165,6 +162,33 @@ function Memory({ enabled }) {
       <button className="btn sm" onClick={() => clear('all')}><Trash2 size={13} /> Clear all memory</button>
     </div>
   </>;
+}
+
+/** Analyse older mail (builds summaries, facts and topics for the memory) or re-analyse it; stop bulk work. */
+function OlderMail({ pending, onChange }) {
+  const [days, setDays] = useState('90');
+  const [redo, setRedo] = useState(false);
+  const start = async () => {
+    const label = days === 'all' ? 'all your mail' : `mail from the last ${days} days`;
+    if (!confirm(`${redo ? 'Re-analyse' : 'Analyse'} ${label}? This runs in the background with low priority (new mail always goes first) and can keep your AI server busy for a while.`)) return;
+    try { const r = await api.post('/api/ai/reprocess', { what: 'analyze', days: days === 'all' ? 'all' : Number(days), mode: redo ? 'all' : 'missing' }); toast(`${r.queued} emails queued for analysis`); onChange(); } catch (e) { toastError(e); }
+  };
+  const stop = async () => { const r = await api.post('/api/ai/cancel', { type: 'analyze' }).catch(toastError); if (r) { toast(`Stopped — ${r.cancelled} queued analyses removed`); onChange(); } };
+  return (
+    <div className="card" style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontWeight: 600 }}>Analyse older mail</div>
+      <div className="small muted">Builds summaries, topics and remembered facts for older mail, so search and the assistant know it too. The search index (memory) already covers all mail.</div>
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        <select className="input" style={{ width: 'auto' }} value={days} onChange={(e) => setDays(e.target.value)}>
+          <option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All mail</option>
+        </select>
+        <label className="row small"><input type="checkbox" checked={redo} onChange={(e) => setRedo(e.target.checked)} /> also re-analyse mail that was already analysed</label>
+        <button className="btn sm" onClick={start}><RefreshCw size={13} /> Start</button>
+        {pending > 0 && <button className="btn sm" onClick={stop}><XCircle size={13} /> Stop ({pending} waiting)</button>}
+        <button className="btn sm ghost" onClick={async () => { if (!confirm('Rebuild the search index from scratch? All mail is re-indexed in the background.')) return; const r = await api.post('/api/ai/reprocess', { what: 'embed', days: 'all' }); toast(`Indexing ${r.queued} emails`); }}><RefreshCw size={13} /> Rebuild search index</button>
+      </div>
+    </div>
+  );
 }
 
 function RouteRow({ task, label, hint, providers, route, onChange }) {

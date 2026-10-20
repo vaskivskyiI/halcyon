@@ -115,6 +115,20 @@ Derived requirements / design decisions:
 - Queue bug fixed: a delayed job (back-off, brief refresh) could make new jobs wait up to 60 s (`kick()`).
 - podman-pod.sh: `update` does `git pull --ff-only`, re-executes the new script, reuses options saved by `up`.
 
+### 2026-10-21: sync, recipients, older mail, status
+- Bug: "Sync now" (`trigger()` without folder) synced nothing until the 2-minute cycle; now it requests a full cycle,
+  and work arriving during a sync is not deferred (`hasPendingWork`). The UI waits for the sync to finish, refreshes
+  and reports errors. Without a WebSocket connection (proxy not passing /api/ws upgrades) the UI warns and polls every 30 s.
+- Focused/Other re-query when an analysis arrives. Analysis knows how the user is addressed (`addressingOf`: sole / To
+  with others / CC / not addressed incl. aliases); not addressed → never "needs reply", priority ≤ 55 unless the
+  sender is a favourite or marked important.
+- Settings → AI: analyse older mail (period, missing-only or all, low priority) and Stop (`/api/ai/cancel`).
+- Quote detection moved to `server/src/util/quotes.js` (used by the reader and by `stripQuoted` for prompts):
+  Slovenian/German/French attributions, wrapped lines, Outlook header blocks; sanitizer keeps `data-quote`.
+- Settings → Accounts: live IMAP status (connected, IDLE push, last full sync, folder errors), pending/failed server
+  operations, last SMTP result, outbox problems, "Test connection" for saved accounts (`/api/accounts/status`, `/test`).
+- AI accent colour changed from purple to teal; AI summaries in the list use normal text colour.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

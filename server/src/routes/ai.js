@@ -5,7 +5,7 @@ import { encrypt, decrypt } from '../util/crypto.js';
 import { PROVIDER_TYPES, makeProvider, isLocalEndpoint } from '../ai/providers/index.js';
 import { enqueue, resumeWaiting, queueStats } from '../ai/queue.js';
 import { memoryStats, invalidate, removeMemory } from '../ai/memory.js';
-import { scope, reqSpace, spaceMap, ownerSpace, cleanSpace } from '../spaces.js';
+import { scope, reqSpace, spaceMap, ownerSpace, cleanSpace, inIds } from '../spaces.js';
 import { listPreferences, forgetSender } from '../ai/learning.js';
 import * as T from '../ai/tasks.js';
 import { ask } from '../ai/assistant.js';
@@ -115,13 +115,35 @@ export default async function aiRoutes(app) {
     return r || httpError(reply, 404, 'Not found');
   });
 
+  // Analyse older mail (builds summaries, facts and topics for the AI memory) or re-analyse it.
+  // days: number or 'all'; mode: 'missing' (only mail without analysis) | 'all' (re-analyse everything in the range).
+  // Older mail gets lower priority than new mail, which keeps being analysed first.
   app.post('/api/ai/reprocess', async (req) => {
-    const { what = 'analyze', days = 14 } = req.body || {};
-    const since = now() - Number(days) * 864e5;
-    const rows = all("SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND m.date >= ? AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')" + (what === 'analyze' ? " AND f.special_use = '\\Inbox'" : ''), req.user.id, since);
+    const { what = 'analyze', days = 14, mode = 'all' } = req.body || {};
+    const since = days === 'all' ? 0 : now() - Number(days) * 864e5;
+    const sc = scope(req.user.id, reqSpace(req));
+    const folders = what === 'analyze'
+      ? (getSettings(req.user.id).ai.analyzeFolders === 'all' ? "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')" : "f.special_use IN ('\\Inbox', '\\Sent')")
+      : "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')";
+    const missing = what === 'analyze' && mode === 'missing' ? 'AND NOT EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id)' : '';
+    const rows = all(`SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id
+      WHERE m.user_id = ? AND m.date >= ? AND ${inIds('m.account_id', sc?.accountIds)} AND ${folders} ${missing} ORDER BY m.date DESC`, req.user.id, since);
     if (what === 'embed') { run('DELETE FROM memory WHERE user_id = ? AND kind = ?', req.user.id, 'message'); invalidate(req.user.id); }
-    for (const m of rows) enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : Math.max(10, 80 - Math.round((now() - m.date) / 864e5)), { force: true });
+    for (const m of rows) {
+      const ageDays = (now() - m.date) / 864e5;
+      enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : ageDays > 30 ? 3 : Math.max(10, 80 - Math.round(ageDays)), { force: true });
+    }
     return { queued: rows.length };
+  });
+
+  // Stop bulk work: drops queued (not yet started) analysis / indexing jobs; new mail is still handled.
+  app.post('/api/ai/cancel', async (req) => {
+    const types = req.body?.type === 'embed' ? ['embed', 'memory'] : ['analyze'];
+    const ph = types.map(() => '?').join(',');
+    run(`UPDATE messages SET ai_status = 'none' WHERE user_id = ? AND ai_status = 'pending' AND CAST(id AS TEXT) IN
+      (SELECT ref_id FROM ai_jobs WHERE user_id = ? AND type = 'analyze' AND status = 'queued')`, req.user.id, req.user.id);
+    const r = run(`DELETE FROM ai_jobs WHERE user_id = ? AND status = 'queued' AND type IN (${ph})`, req.user.id, ...types);
+    return { cancelled: r.changes };
   });
 
   // ---- per-message / thread AI

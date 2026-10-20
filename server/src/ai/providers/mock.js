@@ -5,6 +5,8 @@ export function mock() {
   return {
     async chat({ messages, json, onToken }) {
       const last = messages[messages.length - 1]?.content || '';
+      // The email itself (after the "Sender…/Recipients…" notes), so the notes are not mistaken for content.
+      const email = last.slice(Math.max(0, last.indexOf('From:')));
       let text;
       if (json) {
         const subject = (last.match(/Subject: (.*)/) || [])[1] || 'message';
@@ -16,7 +18,7 @@ export function mock() {
           needs_reply: question, action_items: urgent ? [{ text: 'Respond to request', due: null }] : [],
           events: [], suggested_replies: question ? ['Sounds good, thanks!', 'Let me check and get back to you.', 'Can we discuss this tomorrow?'] : [],
           sentiment: urgent ? 'urgent' : 'neutral', language: 'en', is_phishing: false,
-          facts: (last.match(/[^.\n]* is the [^.\n]+/g) || []).slice(0, 3).map((x) => x.trim()),
+          facts: (email.match(/[^.\n]* is the [^.\n]+/g) || []).slice(0, 3).map((x) => x.trim()),
           topic: (subject.match(/order \d+/i) || [null])[0],
           // "Please forward me the email with …" → long words of the email body as search keywords.
           requested_items: /forward|posreduj|send me|pošlji/i.test(last)

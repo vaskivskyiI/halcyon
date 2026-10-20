@@ -12,7 +12,7 @@ const log = logger('sync');
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-class AccountSync {
+export class AccountSync {
   constructor(accountId) {
     this.accountId = accountId;
     this.client = null;
@@ -21,6 +21,9 @@ class AccountSync {
     this.dirtyFolders = new Set();
     this.backoff = 5000;
     this.running = false;
+    this.fullRequested = false;  // "Sync now": run a full cycle at the next opportunity
+    // Shown in Settings → Accounts: what the connection is doing and what went wrong last.
+    this.status = { connectedAt: null, lastFullAt: null, lastFullMs: null, lastError: null, lastErrorAt: null, folderErrors: {}, lastNewMailAt: null };
   }
 
   get account() { return get('SELECT * FROM accounts WHERE id = ?', this.accountId); }
@@ -34,8 +37,12 @@ class AccountSync {
 
   trigger(folderPath) {
     if (folderPath) this.dirtyFolders.add(folderPath);
+    else this.fullRequested = true;
     this.wake?.();
   }
+
+  // Work that arrived while a sync was running must not wait for the next poll interval.
+  get hasPendingWork() { return this.fullRequested || this.dirtyFolders.size > 0; }
 
   async start() {
     this.running = true;
@@ -51,6 +58,7 @@ class AccountSync {
         if (this.stopped) break;
         const msg = e.responseText || e.message || String(e);
         log.warn(`account ${this.accountId}: ${msg}`);
+        this.status.lastError = msg; this.status.lastErrorAt = now(); this.status.connectedAt = null;
         this.setState('error', msg);
         await this.closeClient();
         await this.waitFor(this.backoff);
@@ -91,6 +99,7 @@ class AccountSync {
     client.on('expunge', (d) => this.trigger(d.path));
     await client.connect();
     this.client = client;
+    this.status.connectedAt = now();
   }
 
   async loop() {
@@ -99,10 +108,11 @@ class AccountSync {
       // Keep INBOX selected so the server pushes EXISTS via IDLE.
       const inbox = get("SELECT path FROM folders WHERE account_id = ? AND special_use = '\\Inbox'", this.accountId);
       if (inbox && this.client.mailbox?.path !== inbox.path) await this.client.mailboxOpen(inbox.path);
-      await this.waitFor(config.pollIntervalSec * 1000);
+      if (!this.hasPendingWork) await this.waitFor(config.pollIntervalSec * 1000);
       if (!this.client || this.stopped) break;
       await this.processOps();
-      if (now() - lastFull >= config.pollIntervalSec * 1000) {
+      if (this.fullRequested || now() - lastFull >= config.pollIntervalSec * 1000) {
+        this.fullRequested = false;
         await this.fullCycle();
         lastFull = now();
       } else if (this.dirtyFolders.size) {
@@ -119,6 +129,7 @@ class AccountSync {
   }
 
   async fullCycle() {
+    const t0 = now();
     this.setState('syncing');
     await this.processOps();
     await this.syncFolderList();
@@ -126,13 +137,15 @@ class AccountSync {
     folders.sort((a, b) => rank(a) - rank(b));
     for (const f of folders) {
       if (this.stopped || !this.client) return;
-      try { await this.syncFolder(f); } catch (e) {
+      try { await this.syncFolder(f); delete this.status.folderErrors[f.path]; } catch (e) {
         if (!this.client?.usable) throw e;
         log.warn(`folder ${f.path}: ${e.responseText || e.message}`);
+        this.status.folderErrors[f.path] = e.responseText || e.message;
       }
     }
     this.dirtyFolders.clear();
     this.reconcileOrphans();
+    this.status.lastFullAt = now(); this.status.lastFullMs = now() - t0;
     this.setState('idle');
   }
 
@@ -248,6 +261,7 @@ class AccountSync {
       const fresh = get('SELECT * FROM folders WHERE id = ?', folder.id);
       await afterIngest(account, fresh, newIds, { initial: !folder.last_uid });
     }
+    if (newIds.length) this.status.lastNewMailAt = now();
     notify(account.user_id, 'folder:synced', { accountId: account.id, folderId: folder.id, newCount: newIds.length });
   }
 
@@ -354,6 +368,14 @@ class SyncManager {
   trigger(accountId, folderPath) {
     const w = this.workers.get(accountId);
     if (w) w.trigger(folderPath); else this.start(accountId);
+  }
+
+  /** Live connection details of an account's sync worker (null when not running). */
+  status(accountId) {
+    const w = this.workers.get(accountId);
+    if (!w) return null;
+    const c = w.client;
+    return { ...w.status, connected: !!c?.usable, push: !!(c?.usable && c.idling), selected: c?.mailbox?.path || null };
   }
 
   async stopAll() { await Promise.all([...this.workers.keys()].map((id) => this.stop(id))); }

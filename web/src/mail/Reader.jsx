@@ -12,6 +12,7 @@ import { openComposer, replyPayload } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 import { EventEditor } from '../calendar/CalendarView.jsx';
 import { loadFolders } from '../data.js';
+import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
@@ -307,13 +308,14 @@ function linkify(text = '') {
 /** Email HTML rendered in a sandboxed iframe (no scripts) with auto height. */
 // Where quoted history starts in an HTML email (Gmail, Outlook incl. Slovenian headers, Apple/Thunderbird, Halcyon).
 const QUOTE_SELECTORS = ['[data-quote]', '.gmail_quote', '.gmail_extra', 'blockquote[type="cite"]', '#divRplyFwdMsg', '#appendonsend', '.moz-cite-prefix', '.yahoo_quoted', 'div[style*="border-top:solid #E1E1E1"]', 'div[style*="border-top: solid #E1E1E1"]', 'div[style*="border-top:solid #B5C4DF"]'];
-const QUOTE_LINE = /^\s*(On .{5,200} wrote:|Am .{5,120} schrieb|Le .{5,120} a écrit|-{2,}\s*(Original Message|Izvirno sporočilo|Forwarded message|Posredovano sporočilo)\s*-{2,}|(From|Od):\s.+\s(Sent|Poslano|Date|Datum):\s)/i;
 
 function findQuoteStart(doc) {
   const body = doc.body;
   let el = null;
   for (const sel of QUOTE_SELECTORS) { el = body.querySelector(sel); if (el) break; }
-  if (!el) el = [...body.querySelectorAll('div, p, span, hr')].find((n) => n.children.length < 12 && QUOTE_LINE.test(n.textContent || '')) || body.querySelector(':scope > blockquote, :scope > div > blockquote');
+  // The first element (document order) whose text starts with an attribution or a forwarded/original header.
+  if (!el) el = [...body.querySelectorAll('div, p, span, td, font')].find((n) => QUOTE_HEAD.test((n.textContent || '').slice(0, 400)))
+    || body.querySelector(':scope > blockquote, :scope > div > blockquote');
   if (!el) return null;
   // Only fold when the user-visible part before the quote has content (not for pure forwards).
   const range = doc.createRange();
@@ -372,14 +374,12 @@ function HtmlFrame({ html }) {
 /** Plain-text body with the quoted history ("On … wrote:", "> …") folded. */
 function PlainBody({ text }) {
   const [open, setOpen] = useState(false);
-  const lines = String(text || '').split(/\r?\n/);
-  let cut = lines.findIndex((l, i) => QUOTE_LINE.test(l) || (/^\s*>/.test(l) && lines.slice(i).every((x) => !x.trim() || /^\s*>/.test(x))));
-  if (cut > 0 && !lines.slice(0, cut).join('').trim()) cut = -1;
-  if (cut <= 0) return <pre className="plain">{linkify(text)}</pre>;
+  const q = splitPlainQuote(text);
+  if (!q) return <pre className="plain">{linkify(text)}</pre>;
   return <>
-    <pre className="plain">{linkify(lines.slice(0, cut).join('\n').trimEnd())}</pre>
-    <button className="quote-toggle" onClick={() => setOpen(!open)}>{open ? 'Hide quoted text' : `··· Show quoted text (${lines.length - cut} lines)`}</button>
-    {open && <pre className="plain quoted">{linkify(lines.slice(cut).join('\n'))}</pre>}
+    <pre className="plain">{linkify(q.own)}</pre>
+    <button className="quote-toggle" onClick={() => setOpen(!open)}>{open ? 'Hide quoted text' : `··· Show quoted text (${q.lines} lines)`}</button>
+    {open && <pre className="plain quoted">{linkify(q.quoted)}</pre>}
   </>;
 }
 

@@ -10,6 +10,7 @@ import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri } fr
 import { syncDav } from '../scheduler.js';
 import { invalidate } from '../ai/memory.js';
 import { purgeMemory } from '../mail/pipeline.js';
+import { smtpStatus } from '../mail/send.js';
 
 const pendingOAuth = new Map(); // state -> { userId, provider, accountId, t }
 
@@ -26,6 +27,26 @@ export default async function accountRoutes(app) {
     const draft = { ...(existing || {}), ...Object.fromEntries(Object.entries(accountFields(b)).filter(([, v]) => v !== undefined)) };
     draft.auth_type ||= 'password';
     return testAccount(draft);
+  });
+
+  // Connection health of every account: IMAP sync worker, queued server operations, last SMTP result, outbox problems.
+  app.get('/api/accounts/status', { preHandler: requireUser }, async (req) => userAccounts(req.user.id).map((a) => ({
+    id: a.id, email: a.email, syncEnabled: !!a.sync_enabled, state: a.sync_state, error: a.sync_error, lastSyncAt: a.last_sync_at,
+    imap: syncManager.status(a.id),
+    pendingOps: get('SELECT COUNT(*) AS n FROM pending_ops WHERE account_id = ? AND attempts < 5', a.id).n,
+    failedOps: all('SELECT op, error, attempts, created_at AS createdAt FROM pending_ops WHERE account_id = ? AND attempts > 0 ORDER BY id DESC LIMIT 5', a.id),
+    smtp: smtpStatus.get(a.id) || null,
+    outboxFailed: get("SELECT COUNT(*) AS n FROM outbox WHERE account_id = ? AND status = 'failed'", a.id).n,
+    outboxRetrying: get("SELECT COUNT(*) AS n FROM outbox WHERE account_id = ? AND status = 'queued' AND attempts > 0", a.id).n,
+  })));
+
+  // Test the stored IMAP + SMTP settings of an existing account (read-only: logs in, lists folders, verifies SMTP).
+  app.post('/api/accounts/:id/test', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    if (!a) return httpError(reply, 404, 'Not found');
+    const r = await testAccount(a);
+    if (r.smtp) smtpStatus.set(a.id, { ...r.smtp, at: Date.now(), tested: true });
+    return { ...r, at: Date.now() };
   });
 
   app.post('/api/accounts', { preHandler: requireUser }, async (req, reply) => {

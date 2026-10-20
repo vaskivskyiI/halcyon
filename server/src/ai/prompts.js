@@ -1,18 +1,13 @@
 // Prompt construction. Kept compact so small local models (7–8B) handle them well.
 import { json } from '../db/index.js';
+import { splitPlainQuote } from '../util/quotes.js';
 
 export const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
 
 // Removes quoted history and signatures so the model sees the new content.
 export function stripQuoted(text) {
-  const lines = String(text || '').split(/\r?\n/);
-  const out = [];
-  for (const l of lines) {
-    if (/^On .{5,200} wrote:\s*$/i.test(l) || /^-{2,}\s*Original Message\s*-{2,}/i.test(l) || /^_{10,}$/.test(l) || /^From: .+$/.test(l) && out.length > 3) break;
-    if (/^\s*>/.test(l)) continue;
-    out.push(l);
-  }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const q = splitPlainQuote(text);
+  return (q ? q.own : String(text || '')).split(/\r?\n/).filter((l) => !/^\s*>/.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /** "Tue 2026-10-20 14:05" in the given time zone (models resolve "tomorrow" etc. from the local date). */
@@ -25,10 +20,12 @@ export function localStamp(t, tz) {
 
 export function messageForPrompt(m, maxChars = 6000, tz = null) {
   const to = json(m.to_json, []).map((a) => a.name || a.address).join(', ');
+  const cc = json(m.cc_json, []).map((a) => a.name || a.address).slice(0, 15).join(', ');
   const body = stripQuoted(m.body_text).slice(0, maxChars);
   const atts = json(m.attachments_json, []).filter((a) => !a.inline).map((a) => a.filename);
   return `From: ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr}
-To: ${to}
+To: ${to}${cc ? `
+Cc: ${cc}` : ''}
 Date: ${tz ? `${localStamp(m.date, tz)} (${tz})` : new Date(m.date).toISOString()}
 Subject: ${m.subject}${atts.length ? `\nAttachments: ${atts.join(', ')}` : ''}
 
@@ -48,7 +45,7 @@ export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fr
 ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}Analyze the email and return a JSON object with exactly these keys:
 - "summary": 1-2 sentence summary of what the email is about and what is asked (written in ${language}).
 - "category": one of ${CATEGORIES.join(', ')}.
-- "priority": integer 0-100 for how important it is that the USER sees this soon (personal requests from real people, deadlines, money, security = high; newsletters, promotions, automated notifications = low).
+- "priority": integer 0-100 for how important it is that the USER sees this soon (personal requests from real people, deadlines, money, security = high; newsletters, promotions, automated notifications = low). Weigh how the user is addressed (see "Recipients"): the only direct recipient = most important; one of many in To = less; only in CC = usually informational unless the user is named or asked to act; not addressed at all (mailing list / BCC) = low unless clearly relevant to the user.
 - "priority_reason": short reason (max 12 words, ${language}).
 - "needs_reply": true if a real person expects a reply from the user.
 - "action_items": array of {"text": string, "due": "YYYY-MM-DD" or null} the user must do (empty if none).

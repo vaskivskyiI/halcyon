@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, RefreshCw, Trash2, Pencil, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
@@ -9,6 +9,14 @@ import { toast, toastError, fmtListDate } from '../util.js';
 export default function Accounts() {
   const accounts = store.use((s) => s.accounts);
   const [editing, setEditing] = useState(null);
+  const [status, setStatus] = useState({});
+  const [tests, setTests] = useState({});
+  const loadStatus = () => api.get('/api/accounts/status').then((l) => setStatus(Object.fromEntries(l.map((x) => [x.id, x])))).catch(() => {});
+  useEffect(() => { loadStatus(); const t = setInterval(loadStatus, 10e3); return () => clearInterval(t); }, []);
+  const test = async (a) => {
+    setTests((t) => ({ ...t, [a.id]: { busy: true } }));
+    try { const r = await api.post(`/api/accounts/${a.id}/test`); setTests((t) => ({ ...t, [a.id]: r })); loadStatus(); } catch (e) { setTests((t) => ({ ...t, [a.id]: { error: e.message } })); }
+  };
   return (
     <div className="settings-section">
       <div className="row"><div className="grow"><h2>Email accounts</h2><div className="muted">Connect any IMAP/SMTP mailbox — Gmail, Microsoft 365, iCloud, Fastmail, your company server, …</div></div>
@@ -20,15 +28,48 @@ export default function Accounts() {
             <div style={{ fontWeight: 600 }}>{a.displayName ? `${a.displayName} · ` : ''}{a.email}</div>
             <div className="small muted truncate">{a.imap.host} · {a.authType.startsWith('oauth') ? 'OAuth' : 'password'} · {a.syncState}{a.lastSyncAt ? ` · last sync ${fmtListDate(a.lastSyncAt)}` : ''}</div>
             {a.syncError && <div className="small error-text"><AlertTriangle size={12} /> {a.syncError}</div>}
+            <AccountStatus st={status[a.id]} test={tests[a.id]} />
             {(a.caldavUrl || a.carddavUrl) && <div className="small faint">{a.caldavUrl && 'CalDAV'}{a.caldavUrl && a.carddavUrl && ' + '}{a.carddavUrl && 'CardDAV'} sync enabled</div>}
           </div>
-          <button className="icon-btn" title="Sync now" onClick={() => api.post(`/api/accounts/${a.id}/sync`).then(() => toast('Re-syncing…'))}><RefreshCw size={16} /></button>
+          <button className="btn sm" title="Log in to the IMAP and SMTP servers with the stored settings (nothing is changed or sent)" onClick={() => test(a)} disabled={tests[a.id]?.busy}>{tests[a.id]?.busy ? <Spinner size={13} /> : <CheckCircle2 size={13} />} Test connection</button>
+          <button className="icon-btn" title="Reconnect and sync now" onClick={() => api.post(`/api/accounts/${a.id}/sync`).then(() => { toast('Reconnecting and syncing…'); setTimeout(loadStatus, 2000); })}><RefreshCw size={16} /></button>
           <button className="icon-btn" title="Edit" onClick={() => setEditing(a)}><Pencil size={16} /></button>
           <button className="icon-btn" title="Remove" onClick={async () => { if (confirm(`Remove ${a.email} from Halcyon? Mail stays on the server.`)) { await api.del(`/api/accounts/${a.id}`); loadAccounts(); loadFolders(); } }}><Trash2 size={16} /></button>
         </div>
       ))}
       {!accounts.length && <div className="card empty">No accounts yet. Add your first mailbox to get started.</div>}
       {editing && <AccountEditor account={editing.id ? editing : null} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+const ago = (t) => (t ? fmtListDate(t) : 'never');
+const Line = ({ ok, warn, children }) => (
+  <div className="small" style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+    <span className="status-dot" style={{ background: ok ? 'var(--success)' : warn ? 'var(--warning)' : 'var(--danger)', flex: 'none', transform: 'translateY(-1px)' }} /><span>{children}</span>
+  </div>);
+
+/** IMAP / SMTP health of one account, from /api/accounts/status and the last "Test connection". */
+function AccountStatus({ st, test }) {
+  if (!st) return null;
+  const imap = st.imap;
+  return (
+    <div className="acct-status">
+      {!st.syncEnabled ? <Line warn>IMAP: sync is turned off for this account</Line>
+        : imap?.connected ? <Line ok>IMAP: connected{imap.push ? ' · new mail is pushed instantly (IDLE)' : ' · checking periodically'} · last full sync {ago(imap.lastFullAt)}{imap.lastFullMs != null ? ` (took ${(imap.lastFullMs / 1000).toFixed(1)} s)` : ''}{imap.lastNewMailAt ? ` · new mail ${ago(imap.lastNewMailAt)}` : ''}</Line>
+          : <Line warn={st.state !== 'error'}>IMAP: {st.state === 'connecting' ? 'connecting…' : 'not connected'}{imap?.lastError ? ` · last error ${ago(imap.lastErrorAt)}: ${imap.lastError}` : ''}</Line>}
+      {imap && Object.entries(imap.folderErrors || {}).map(([f, e]) => <Line key={f}>Folder “{f}”: {e}</Line>)}
+      {st.pendingOps > 0 && <Line warn>{st.pendingOps} change{st.pendingOps > 1 ? 's' : ''} (move, flag, delete…) waiting to be applied on the server</Line>}
+      {st.failedOps.map((o, i) => <Line key={i}>Server change “{o.op}” failed {o.attempts}×: {o.error}</Line>)}
+      {st.smtp ? (st.smtp.ok ? <Line ok>SMTP: {st.smtp.tested ? 'login OK' : 'last message sent'} {ago(st.smtp.at)}</Line> : <Line>SMTP: failed {ago(st.smtp.at)} — {st.smtp.error || 'no details from the server'}</Line>)
+        : <Line warn>SMTP: not used since the server started — use “Test connection”</Line>}
+      {(st.outboxFailed > 0 || st.outboxRetrying > 0) && <Line>{st.outboxFailed} message(s) could not be sent, {st.outboxRetrying} retrying — see Mail → Outbox & drafts</Line>}
+      {test && !test.busy && <div className="acct-test">
+        {test.error ? <Line>Test failed: {test.error}</Line> : <>
+          <Line ok={test.imap?.ok}>IMAP test: {test.imap?.ok ? `login OK, ${test.imap.folders} folders` : test.imap?.error || 'failed (no details from the server)'}</Line>
+          <Line ok={test.smtp?.ok}>SMTP test: {test.smtp?.ok ? 'login OK' : test.smtp?.error || 'failed (no details from the server)'}</Line>
+        </>}
+      </div>}
     </div>
   );
 }

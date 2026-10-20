@@ -98,6 +98,9 @@ export async function deliver(row) {
   collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true, row.account_id);
 }
 
+/** Last SMTP result per account (shown in Settings → Accounts). */
+export const smtpStatus = new Map();
+
 let busy = false;
 export async function processOutbox() {
   if (busy) return;
@@ -108,10 +111,12 @@ export async function processOutbox() {
       run("UPDATE outbox SET status = 'sending' WHERE id = ?", row.id);
       try {
         await deliver(row);
+        smtpStatus.set(row.account_id, { ok: true, at: now() });
         run("UPDATE outbox SET status = 'sent', sent_at = ?, error = NULL WHERE id = ?", now(), row.id);
         notify(row.user_id, 'mail:sent', { outboxId: row.id });
       } catch (e) {
         log.warn(`send failed (${row.id}): ${e.message}`);
+        smtpStatus.set(row.account_id, { ok: false, at: now(), error: e.message });
         const attempts = row.attempts + 1;
         run("UPDATE outbox SET status = ?, attempts = ?, error = ?, send_at = ? WHERE id = ?",
           attempts >= 5 ? 'failed' : 'queued', attempts, e.message, now() + attempts * 60e3, row.id);

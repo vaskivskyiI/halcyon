@@ -10,6 +10,7 @@ export function sanitizeEmailHtml(html, { messageId, allowRemote = false } = {})
     allowVulnerableTags: true, // <style> is allowed; the iframe sandbox contains it.
     allowedAttributes: {
       '*': ['style', 'class', 'align', 'valign', 'width', 'height', 'bgcolor', 'color', 'dir', 'lang', 'title', 'border', 'cellpadding', 'cellspacing', 'colspan', 'rowspan', 'face', 'size', 'id', 'role'],
+      div: ['data-quote', 'style', 'class', 'align', 'dir', 'lang', 'id'], // data-quote marks the quoted part of Halcyon replies
       a: ['href', 'name', 'target', 'rel', 'style'],
       img: ['src', 'alt', 'width', 'height', 'style', 'data-remote-src'],
     },
