@@ -156,6 +156,25 @@ Derived requirements / design decisions:
   is then downloaded in batches (`backfillHistory`, HALCYON_HISTORY_BATCH) back to `accounts.sync_history`
   ('90' | '365' | 'all'), set in Settings → Accounts, which also shows downloaded vs. on-server counts.
 
+### Next round: time zone, counts, sending, tasks, calmer list
+- Time zone: `calendar.tzAuto` (default on) — the web client sets `calendar.timezone` to the browser's zone (a server in a
+  container runs in UTC, which shifted AI-read times by the UTC offset). Changing the zone re-zones stored insight events /
+  `expires_at` keeping their wall-clock time (`rezone()` in util/time.js, settings route).
+- Sidebar counts use the list's own filter (`scopeFor`) and count conversations: unread for mailboxes, open items for
+  Needs reply / Action needed / Snoozed. The web refreshes counts after its own changes (`halcyon:mutated`), not only on
+  socket events (which may not pass a proxy).
+- Sending: delivery starts when the undo window closes (timer in `queueSend`), the original is flagged `\Answered` /
+  `$Forwarded` (migration 9, `is_forwarded`) right after SMTP; the client refreshes after the expected send time.
+- Failed server changes store the IMAP server's text (`responseText`) and folder; `append` to a missing folder
+  (TRYCREATE) creates it and retries once; Settings → Accounts has Retry / Dismiss per failed change.
+- History download searches each folder once (cached UIDs) instead of every batch.
+- List sorting: `sort=date|from|subject|size|unread|flagged&dir=asc|desc`, offset paging when not newest-first.
+- Tasks from mail: `GET /api/tasks/from-message/:id` proposes title with the sender + context body (from, date,
+  subject, summary) + due in the user's zone; the web dialog edits them before `POST`. Task list: details (notes), ⋯ /
+  right-click menu with due presets (today, tomorrow, in N days, next Monday, …), edit dialog.
+- Calmer list: one accent for unread/important, neutral outlined chips, category/"Draft ready" chips removed from rows,
+  Outlook-style replied/forwarded icons before the subject.
+
 ## 3. Not verified yet (do these first on real infrastructure)
 0. This session's changes were tested with unit tests + `ai.test.js` + the web UI in a browser (demo data, mock AI);
    `e2e.test.js`/`dav.test.js` were not run (no Dovecot/Radicale available) — run them before release. Podman script,

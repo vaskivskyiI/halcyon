@@ -9,7 +9,7 @@ import { store } from '../store.js';
 import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, textToHtml, escapeHtml, CATEGORY_COLORS } from '../util.js';
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { openComposer, replyPayload } from './Composer.jsx';
-import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
+import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor } from '../calendar/CalendarView.jsx';
 import { loadFolders } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
@@ -57,6 +57,7 @@ export default function Reader({ id, view }) {
     // A reply was just delivered: show it in the conversation.
     if (e.type === 'mail:sent') load();
   }), [thread]);
+  useEffect(() => { const h = () => load(); window.addEventListener('halcyon:sent', h); return () => window.removeEventListener('halcyon:sent', h); }, [thread]);
 
   // Keyboard reply shortcuts dispatched from the list.
   useEffect(() => {
@@ -131,7 +132,7 @@ export default function Reader({ id, view }) {
   };
 
   const createTasks = async (items) => {
-    try { const r = await api.post(`/api/tasks/from-message/${latest.id}`, items ? { items } : {}); toast(`${r.length} task${r.length > 1 ? 's' : ''} added`, { action: { label: 'View', onClick: () => navigate('#/tasks') } }); } catch (e) { toastError(e); }
+    store.set({ taskDialog: latest.id });
   };
 
   const translate = async (m) => {
@@ -522,6 +523,7 @@ function QuickReply({ latest, onSent, hasDraft }) {
       const p = payloadFor(mode);
       const r = await api.post('/api/send', { ...p, html: textToHtml(text) + (p.quoteHtml || ''), draftId: draftId || undefined });
       setText(''); setDraftId(null); typed.current = false;
+      afterSend(r);
       if (settings.mail.undoSendSeconds > 0) {
         toast('Sending…', { duration: settings.mail.undoSendSeconds * 1000, action: { label: 'Undo', onClick: async () => {
           try { const c = await api.post(`/api/outbox/${r.id}/cancel`); openComposer({ ...c.payload, draftId: null }); } catch { toast('Too late — message already sent', { kind: 'error' }); }

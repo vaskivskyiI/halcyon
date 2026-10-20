@@ -20,11 +20,21 @@ import { CATEGORIES } from '../ai/prompts.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
-  m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
+  m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
   i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
+
+// Message list orders (t = table prefix: 'm.' or '' inside the threaded CTE).
+const SORTS = {
+  date: (t) => `${t}date`,
+  from: (t) => `lower(COALESCE(NULLIF(${t}from_name, ''), ${t}from_addr))`,
+  subject: (t) => `lower(ltrim(${t}subject, ' '))`,
+  size: (t) => `${t}size`,
+  unread: (t) => `${t}is_read`,
+  flagged: (t) => `${t}is_flagged`,
+};
 
 function listItem(r) {
   return serializeMessage(r, {
@@ -79,20 +89,27 @@ export default async function mailRoutes(app) {
       accountId: a.id, email: a.email, name: a.name || a.email, color: a.color, syncState: a.sync_state, syncError: a.sync_error,
       folders: all('SELECT id, path, name, delimiter, special_use AS specialUse, parent_path AS parentPath, total, unread, sync_enabled AS syncEnabled FROM folders WHERE account_id = ? ORDER BY path', a.id),
     }));
+    // Each count uses the same filter as its list and counts conversations (as the list shows them):
+    // unread ones for mailboxes, all open ones for the AI views and the snoozed list.
+    const threaded = getSettings(req.user.id).ui.conversationView;
+    const countView = (view, unreadOnly) => {
+      const { where, params } = scopeFor(req.user.id, { view }, sc);
+      if (unreadOnly) where.push('m.is_read = 0');
+      return get(`SELECT COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params).n;
+    };
     const counts = {
-      unified: get(`SELECT COUNT(*) AS n FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND f.special_use = '\\Inbox' AND m.is_read = 0 AND m.snoozed_until IS NULL`, req.user.id).n,
-      flagged: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.is_flagged = 1`, req.user.id).n,
-      snoozed: get(`SELECT COUNT(*) AS n FROM messages m WHERE m.user_id = ? AND ${acc} AND m.snoozed_until IS NOT NULL`, req.user.id).n,
-      needsreply: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND f.special_use = '\\Inbox'`, req.user.id).n,
-      needsaction: get(`SELECT COUNT(*) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${acc} AND i.needs_action = 1 AND i.dismissed_at IS NULL AND f.special_use = '\\Inbox'`, req.user.id).n,
+      unified: countView('unified', true), needsreply: countView('needsreply'), needsaction: countView('needsaction'), snoozed: countView('snoozed'),
       scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, req.user.id).n,
     };
+    const unreadByFolder = new Map(all(`SELECT m.folder_id AS id, COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m
+      WHERE m.user_id = ? AND ${acc} AND m.is_read = 0 AND m.snoozed_until IS NULL GROUP BY m.folder_id`, req.user.id).map((r) => [r.id, r.n]));
+    for (const a of out) for (const f of a.folders) f.unread = unreadByFolder.get(f.id) || 0;
     // Dynamic AI views: active topics and the categories present (excluding the generic ones), with unread counts.
     const recent = `FROM ai_insights i JOIN messages m ON m.id = i.message_id JOIN folders f ON f.id = m.folder_id
       WHERE m.user_id = ? AND ${acc} AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk') AND m.date > ?`;
-    const topics = all(`SELECT i.topic AS name, COUNT(*) AS count, SUM(1 - m.is_read) AS unread, MAX(m.date) AS last ${recent} AND i.topic IS NOT NULL
+    const topics = all(`SELECT i.topic AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread, MAX(m.date) AS last ${recent} AND i.topic IS NOT NULL
       GROUP BY lower(i.topic) HAVING count >= 2 ORDER BY unread > 0 DESC, last DESC LIMIT 12`, req.user.id, Date.now() - 60 * 864e5);
-    const categories = all(`SELECT i.category AS name, COUNT(*) AS count, SUM(1 - m.is_read) AS unread ${recent} AND f.special_use = '\\Inbox'
+    const categories = all(`SELECT i.category AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread ${recent} AND f.special_use = '\\Inbox'
       AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, req.user.id, Date.now() - 30 * 864e5);
     return { accounts: out, counts, topics, categories };
   });
@@ -158,17 +175,24 @@ export default async function mailRoutes(app) {
       return { items: found.map((id) => byId.get(id)).filter(Boolean).map(listItem), hasMore: false };
     }
     const { where, params } = scopeFor(req.user.id, q, sc);
-    const cursor = Number(q.before) || 8.64e15;
     const threaded = q.threads !== '0' && getSettings(req.user.id).ui.conversationView;
+    // Newest first pages by date (stable while mail arrives); other orders page by offset.
+    const key = SORTS[q.sort] ? q.sort : 'date';
+    const dir = q.dir === 'asc' ? 'ASC' : q.dir === 'desc' ? 'DESC' : (['date', 'size', 'flagged'].includes(key) ? 'DESC' : 'ASC');
+    const byDate = key === 'date' && dir === 'DESC';
+    const cursor = byDate ? Number(q.before) || 8.64e15 : 8.64e15;
+    const offset = byDate ? 0 : Math.max(0, Number(q.offset) || 0);
+    const order = (t) => `${SORTS[key](t)} ${dir}${key === 'date' ? '' : `, ${t}date DESC`}`;
     let rows;
     if (threaded) {
       rows = all(`WITH scoped AS (
-          SELECT ${LIST_COLS}, ROW_NUMBER() OVER (PARTITION BY m.thread_id ORDER BY m.date DESC) AS rn,
+          SELECT ${LIST_COLS}, m.size AS size, ROW_NUMBER() OVER (PARTITION BY m.thread_id ORDER BY m.date DESC) AS rn,
             COUNT(*) OVER (PARTITION BY m.thread_id) AS thread_count, SUM(1 - m.is_read) OVER (PARTITION BY m.thread_id) AS thread_unread
           FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')})
-        SELECT * FROM scoped WHERE rn = 1 AND date < ? ORDER BY date DESC LIMIT ?`, ...params, cursor, limit + 1);
+        SELECT * FROM scoped WHERE rn = 1 AND date < ? ORDER BY ${order('')} LIMIT ? OFFSET ?`, ...params, cursor, limit + 1, offset);
     } else {
-      rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.date < ? ORDER BY m.date DESC LIMIT ?`, ...params, cursor, limit + 1);
+      rows = all(`SELECT ${LIST_COLS}, m.size AS size FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.date < ?
+        ORDER BY ${order('m.')} LIMIT ? OFFSET ?`, ...params, cursor, limit + 1, offset);
     }
     return { items: rows.slice(0, limit).map(listItem), hasMore: rows.length > limit };
   });

@@ -37,7 +37,7 @@ function resolveThreadId(userId, messageId, refs) {
 
 export function flagsToCols(flags) {
   const f = new Set(flags || []);
-  return { is_read: f.has('\\Seen') ? 1 : 0, is_flagged: f.has('\\Flagged') ? 1 : 0, is_answered: f.has('\\Answered') ? 1 : 0, is_draft: f.has('\\Draft') ? 1 : 0 };
+  return { is_read: f.has('\\Seen') ? 1 : 0, is_flagged: f.has('\\Flagged') ? 1 : 0, is_answered: f.has('\\Answered') ? 1 : 0, is_draft: f.has('\\Draft') ? 1 : 0, is_forwarded: f.has('$Forwarded') ? 1 : 0 };
 }
 
 export async function parseRaw(raw) {
@@ -89,12 +89,12 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   const id = db.transaction(() => {
     const r = run(`INSERT INTO messages (user_id, account_id, folder_id, uid, message_id, in_reply_to, references_json, thread_id,
       subject, from_name, from_addr, to_json, cc_json, bcc_json, reply_to_json, date, snippet, body_text, body_html,
-      has_attachments, attachments_json, size, is_read, is_flagged, is_answered, is_draft, raw_path, list_unsubscribe, calendar_ics, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      has_attachments, attachments_json, size, is_read, is_flagged, is_answered, is_draft, is_forwarded, raw_path, list_unsubscribe, calendar_ics, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       account.user_id, account.id, folder.id, uid, messageId, inReplyTo || null, JSON.stringify(refs), threadId,
       parsed.subject || '', from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), JSON.stringify(replyTo),
       date, snippet, text, html, realAttachments.length ? 1 : 0, JSON.stringify(attachments), raw.length,
-      f.is_read, f.is_flagged, f.is_answered, f.is_draft, rawPath, unsubStr, ics, now());
+      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics, now());
     const mid = r.lastInsertRowid;
     run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', mid, parsed.subject || '',
       `${from.name} ${from.address}`, [...to, ...cc].map((a) => `${a.name} ${a.address}`).join(' '), text.slice(0, 30000));
@@ -131,7 +131,7 @@ export function serializeMessage(m, extra = {}) {
     id: m.id, accountId: m.account_id, folderId: m.folder_id, uid: m.uid, messageId: m.message_id, threadId: m.thread_id,
     subject: m.subject, from: { name: m.from_name, address: m.from_addr }, to: json(m.to_json, []), cc: json(m.cc_json, []),
     bcc: json(m.bcc_json, []), replyTo: json(m.reply_to_json, []), date: m.date, snippet: m.snippet,
-    hasAttachments: !!m.has_attachments, isRead: !!m.is_read, isFlagged: !!m.is_flagged, isAnswered: !!m.is_answered,
+    hasAttachments: !!m.has_attachments, isRead: !!m.is_read, isFlagged: !!m.is_flagged, isAnswered: !!m.is_answered, isForwarded: !!m.is_forwarded,
     isDraft: !!m.is_draft, snoozedUntil: m.snoozed_until, labels: json(m.labels_json, []), aiStatus: m.ai_status,
     hasInvite: !!m.calendar_ics, ...extra,
   };

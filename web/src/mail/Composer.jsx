@@ -7,6 +7,7 @@ import { api, stream } from '../api.js';
 import { store } from '../store.js';
 import { toast, toastError, textToHtml, escapeHtml, addrFull, fileToBase64, fmtSize, fmtFull, htmlToText, toLocalInput } from '../util.js';
 import { useMenu, Spinner, Modal } from '../components/common.jsx';
+import { afterSend } from './mailActions.js';
 
 let seq = 0;
 export function openComposer(init = {}) {
@@ -39,7 +40,7 @@ export function replyPayload(mode, msg, accounts, extra = {}) {
     : `<div data-quote="1"><br><div>On ${fmtFull(msg.date)}, ${escapeHtml(addrFull(msg.from))} wrote:</div><blockquote>${body}</blockquote></div>`;
   return {
     accountId: msg.accountId, to: mode === 'forward' ? [] : dedupe(to), cc: dedupe(cc), subject,
-    quoteHtml: quote, inReplyToId: mode === 'forward' ? null : msg.id, replyToMessage: mode !== 'forward' ? msg.id : null,
+    quoteHtml: quote, inReplyToId: mode === 'forward' ? null : msg.id, forwardOfId: mode === 'forward' ? msg.id : null, replyToMessage: mode !== 'forward' ? msg.id : null,
     attachments: mode === 'forward' ? (msg.attachments || []).map((a) => ({ fromMessageId: msg.id, index: a.index, filename: a.filename, size: a.size })) : [],
     ...extra,
   };
@@ -291,6 +292,7 @@ function Composer({ id, init, minimized }) {
     try {
       const r = await api.post('/api/send', sendAt ? { ...p, sendAt } : p);
       closeComposer(id);
+      afterSend(r);
       if (sendAt) toast(`Scheduled for ${new Date(sendAt).toLocaleString()}`);
       else if (settings.mail.undoSendSeconds > 0) {
         toast('Sending…', {

@@ -12,6 +12,7 @@ import ComposerDock from './mail/Composer.jsx';
 import CalendarView from './calendar/CalendarView.jsx';
 import ContactsView from './contacts/ContactsView.jsx';
 import TasksView from './tasks/TasksView.jsx';
+import TaskDialog from './tasks/TaskDialog.jsx';
 import { openComposer } from './mail/Composer.jsx';
 import AssistantView from './assistant/AssistantView.jsx';
 import SettingsView from './settings/SettingsView.jsx';
@@ -53,11 +54,15 @@ function Shell() {
   const accounts = store.use((s) => s.accounts);
   const accountsLoaded = store.use((s) => s.accountsLoaded);
   const reloadTimer = useRef();
+  const insightTimer = useRef();
 
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     const reload = () => { clearTimeout(reloadTimer.current); reloadTimer.current = setTimeout(() => { loadFolders(); }, 300); };
-    return onEvent((e) => {
+    // Our own changes: refresh now, and once more after the server has applied follow-up work (sent copy, recounts).
+    const mutated = () => { reload(); setTimeout(reload, 2500); };
+    window.addEventListener('halcyon:mutated', mutated);
+    const off = onEvent((e) => {
       const s = store.get().settings;
       switch (e.type) {
         case 'connected': store.set({ connected: true }); reload(); break;
@@ -74,12 +79,15 @@ function Shell() {
           toast(`Reminder: ${e.payload.title} at ${new Date(e.payload.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, { duration: 15000, action: e.payload.onlineMeeting ? { label: 'Join', onClick: () => window.open(e.payload.onlineMeeting, '_blank') } : undefined });
           break;
         case 'mail:sendError': toast(`Sending failed: ${e.payload.error}`, { kind: 'error', duration: 10000 }); reload(); break;
-        case 'outbox:changed': case 'folders:changed': case 'folder:synced': case 'mail:changed': case 'mail:unsnoozed': reload(); break;
+        case 'outbox:changed': case 'folders:changed': case 'folder:synced': case 'mail:changed': case 'mail:unsnoozed': case 'mail:sent': reload(); break;
+        // Background analysis can produce many of these: refresh the AI counts at most every few seconds.
+        case 'ai:insight': if (!insightTimer.current) insightTimer.current = setTimeout(() => { insightTimer.current = null; reload(); }, 4000); break;
         case 'sync:state': if (['idle', 'error'].includes(e.payload.state)) loadAccounts(); reload(); break;
         case 'spaces:changed': loadSpaces().catch(() => {}); loadAccounts(); reload(); break;
         default: break;
       }
     });
+    return () => { off(); window.removeEventListener('halcyon:mutated', mutated); };
   }, []);
 
   // Unread count in the title and (desktop) taskbar badge.
@@ -107,6 +115,7 @@ function Shell() {
   const dark = document.documentElement.dataset.theme === 'dark';
   const space = store.use((s) => s.space);
   const connected = store.use((s) => s.connected);
+  const taskDialog = store.use((s) => s.taskDialog);
   const [syncing, setSyncing] = useState(false);
 
   // Without the live connection (e.g. a reverse proxy that does not pass WebSockets) the app would never hear about
@@ -181,6 +190,7 @@ function Shell() {
       </main>
       <ComposerDock />
       <Toasts />
+      {taskDialog && <TaskDialog messageId={taskDialog} onClose={() => store.set({ taskDialog: null })} />}
     </div>
   );
 }
@@ -220,6 +230,8 @@ async function eventFromMessage(messageId) {
 
 async function tasksFromMessages(ids) {
   try {
+    // One message: review the proposed tasks first; several: add them as proposed.
+    if (ids.length === 1) { store.set({ taskDialog: ids[0] }); return; }
     let n = 0;
     for (const id of ids) n += (await api.post(`/api/tasks/from-message/${id}`, {})).length;
     toast(`${n} task${n === 1 ? '' : 's'} added`, { action: { label: 'View', onClick: () => navigate('#/tasks') } });

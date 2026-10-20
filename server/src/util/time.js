@@ -39,3 +39,10 @@ export function normalizeEvent(e, tz) {
   if (Number.isNaN(end) || end <= start) end = allDay ? start + 864e5 : start + 3600e3;
   return { title: String(e.title || '').slice(0, 200), start: new Date(start).toISOString(), end: new Date(end).toISOString(), all_day: allDay, location: e.location || null };
 }
+
+/** Keeps the wall-clock reading of an absolute time when the zone it was read in changes (UTC 08:00 → Ljubljana 08:00). */
+export function rezone(epoch, fromTz, toTz) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: fromTz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(epoch));
+  const g = (t) => p.find((x) => x.type === t).value;
+  return localToEpoch(`${g('year')}-${g('month')}-${g('day')}`, `${g('hour')}:${g('minute')}`, toTz);
+}

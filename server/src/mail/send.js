@@ -66,6 +66,8 @@ export function queueSend(userId, payload, { delayMs = 0, sendAt = null } = {}) 
     userId, account.id, JSON.stringify(payload), when, now());
   if (payload.draftId) deleteDraft(userId, payload.draftId);
   notify(userId, 'outbox:changed', {});
+  // Deliver as soon as the undo window closes rather than on the next scheduler tick.
+  if (when - now() < 3600e3) setTimeout(() => processOutbox().catch((e) => log.warn(`outbox: ${e.message}`)), Math.max(0, when - now()) + 25).unref();
   return { id: r.lastInsertRowid, sendAt: when };
 }
 
@@ -136,6 +138,10 @@ export async function deliver(row) {
   try {
     await transport.sendMail({ envelope, raw });
   } finally { transport.close(); }
+  // The original shows as replied / forwarded at once; storing the sent copy below can take a moment.
+  if (p.inReplyToId) setFlags(row.user_id, [p.inReplyToId], { answered: true });
+  if (p.forwardOfId) setFlags(row.user_id, [p.forwardOfId], { forwarded: true });
+  notify(row.user_id, 'mail:sent', { outboxId: row.id, inReplyToId: p.inReplyToId || null });
   // Gmail and Microsoft store sent copies automatically.
   const autoSaves = /gmail\.com|googlemail\.com|office365\.com|outlook\.com/i.test(account.smtp_host || '');
   const sent = sentFolder(account.id) || (autoSaves ? null : ensureFolder(account.id, '\\Sent', 'Sent'));
@@ -148,7 +154,6 @@ export async function deliver(row) {
       if (r.isNew) { recountFolder(sent.id); await afterIngest(account, sent, [r.id]); notify(row.user_id, 'mail:changed', { ids: [r.id] }); }
     } catch (e) { log.warn(`local sent copy: ${e.message}`); }
   }
-  if (p.inReplyToId) setFlags(row.user_id, [p.inReplyToId], { answered: true });
   collectAddresses(row.user_id, [...normAddrs(p.to), ...normAddrs(p.cc)], now(), true, row.account_id);
 }
 
@@ -173,7 +178,6 @@ export async function processOutbox() {
         await deliver(row);
         smtpStatus.set(row.account_id, { ok: true, at: now() });
         run("UPDATE outbox SET status = 'sent', sent_at = ?, error = NULL WHERE id = ?", now(), row.id);
-        notify(row.user_id, 'mail:sent', { outboxId: row.id });
       } catch (e) {
         log.warn(`send failed (${row.id}): ${e.message}`);
         smtpStatus.set(row.account_id, { ok: false, at: now(), error: e.message });

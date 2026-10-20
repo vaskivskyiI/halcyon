@@ -34,7 +34,7 @@ export default async function accountRoutes(app) {
     id: a.id, email: a.email, syncEnabled: !!a.sync_enabled, state: a.sync_state, error: a.sync_error, lastSyncAt: a.last_sync_at,
     imap: syncManager.status(a.id),
     pendingOps: get('SELECT COUNT(*) AS n FROM pending_ops WHERE account_id = ? AND attempts < 5', a.id).n,
-    failedOps: all('SELECT op, error, attempts, created_at AS createdAt FROM pending_ops WHERE account_id = ? AND attempts > 0 ORDER BY id DESC LIMIT 5', a.id),
+    failedOps: all('SELECT id, op, error, attempts, created_at AS createdAt FROM pending_ops WHERE account_id = ? AND attempts > 0 ORDER BY id DESC LIMIT 5', a.id),
     smtp: smtpStatus.get(a.id) || null,
     outboxFailed: get("SELECT COUNT(*) AS n FROM outbox WHERE account_id = ? AND status = 'failed'", a.id).n,
     outboxRetrying: get("SELECT COUNT(*) AS n FROM outbox WHERE account_id = ? AND status = 'queued' AND attempts > 0", a.id).n,
@@ -44,6 +44,21 @@ export default async function accountRoutes(app) {
       FROM folders WHERE account_id = ? AND sync_enabled = 1`, a.id, a.id),
     history: a.sync_history || '90',
   })));
+
+  // A server change that keeps failing: try it again now, or drop it (only the queued change; local mail stays as it is).
+  app.post('/api/accounts/:id/ops/:opId/retry', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    if (!a) return httpError(reply, 404, 'Not found');
+    run('UPDATE pending_ops SET attempts = 0, error = NULL WHERE id = ? AND account_id = ?', req.params.opId, a.id);
+    syncManager.trigger(a.id);
+    return { ok: true };
+  });
+  app.delete('/api/accounts/:id/ops/:opId', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    if (!a) return httpError(reply, 404, 'Not found');
+    run('DELETE FROM pending_ops WHERE id = ? AND account_id = ? AND attempts > 0', req.params.opId, a.id);
+    return { ok: true };
+  });
 
   // Test the stored IMAP + SMTP settings of an existing account (read-only: logs in, lists folders, verifies SMTP).
   app.post('/api/accounts/:id/test', { preHandler: requireUser }, async (req, reply) => {

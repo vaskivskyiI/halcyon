@@ -246,8 +246,8 @@ export class AccountSync {
           tx(() => {
             for (const msg of updates) {
               const f = flagsToCols([...(msg.flags || [])]);
-              run('UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ? WHERE folder_id = ? AND uid = ?',
-                f.is_read, f.is_flagged, f.is_answered, f.is_draft, folder.id, msg.uid);
+              run('UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ?, is_forwarded = ? WHERE folder_id = ? AND uid = ?',
+                f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, folder.id, msg.uid);
             }
           });
         }
@@ -297,7 +297,14 @@ export class AccountSync {
         else {
           const crit = { uid: `1:${below - 1}` };
           if (days) crit.since = new Date(now() - days * 864e5);
-          const older = ((await client.search(crit, { uid: true })) || []).filter((u) => u < below).sort((a, b) => b - a);
+          // One SEARCH per folder, not per batch: on a 30k-message mailbox repeating it kept the connection busy.
+          const cache = (this.historyCache ||= new Map());
+          let hit = cache.get(folder.id);
+          if (!hit || hit.days !== days || hit.uidValidity !== String(client.mailbox.uidValidity)) {
+            hit = { days, uidValidity: String(client.mailbox.uidValidity), uids: ((await client.search(crit, { uid: true })) || []).sort((a, b) => b - a) };
+            cache.set(folder.id, hit);
+          }
+          const older = hit.uids.filter((u) => u < below);
           const batch = older.slice(0, HISTORY_BATCH);
           for (let i = 0; i < batch.length; i += 25) {
             for await (const msg of client.fetch(batch.slice(i, i + 25), { uid: true, flags: true, source: true, internalDate: true }, { uid: true })) {
@@ -312,6 +319,7 @@ export class AccountSync {
           if (older.length <= HISTORY_BATCH) done = 1;
         }
         // last_uid only grows (a folder with no recent mail gets its first last_uid here, so new-mail checks start above it).
+        if (done) this.historyCache?.delete(folder.id);
         run('UPDATE folders SET oldest_uid = ?, history_done = ?, last_uid = MAX(COALESCE(last_uid, 0), ?) WHERE id = ?', oldest ?? null, done, newest, folder.id);
       } finally { lock.release(); }
       recountFolder(folder.id);
@@ -335,8 +343,10 @@ export class AccountSync {
         await this.applyOp(op.op, p);
         run('DELETE FROM pending_ops WHERE id = ?', op.id);
       } catch (e) {
-        log.warn(`op ${op.op} failed: ${e.responseText || e.message}`);
-        run('UPDATE pending_ops SET attempts = attempts + 1, error = ? WHERE id = ?', e.message, op.id);
+        // The server's own words ("[TRYCREATE] Mailbox doesn't exist") are what the user needs, not "Command failed".
+        const why = `${e.responseText || e.message}${p.folder ? ` (${p.folder})` : ''}`.slice(0, 300);
+        log.warn(`op ${op.op} failed: ${why}`);
+        run('UPDATE pending_ops SET attempts = attempts + 1, error = ? WHERE id = ?', why, op.id);
         if (!this.client?.usable) throw e;
       } finally { runningOps.delete(op.id); }
     }
@@ -373,7 +383,15 @@ export class AccountSync {
         break;
       }
       case 'append': {
-        await c.append(p.folder, Buffer.from(p.raw, 'base64'), p.flags || ['\\Seen']);
+        const raw = Buffer.from(p.raw, 'base64');
+        try { await c.append(p.folder, raw, p.flags || ['\\Seen']); } catch (e) {
+          // A folder created locally (e.g. "Sent") that the server does not have yet: create it, then retry once.
+          const code = e.response?.attributes?.[0]?.section?.[0]?.value;
+          if (code !== 'TRYCREATE' && !/exist|unknown mailbox|not found/i.test(e.responseText || '')) throw e;
+          await c.mailboxCreate(p.folder).catch(() => {});
+          await c.append(p.folder, raw, p.flags || ['\\Seen']);
+          await this.syncFolderList();
+        }
         this.dirtyFolders.add(p.folder);
         break;
       }
@@ -440,7 +458,7 @@ class SyncManager {
     const w = this.workers.get(accountId);
     if (!w) return null;
     const c = w.client;
-    return { ...w.status, connected: !!c?.usable, push: !!(c?.usable && c.idling), selected: c?.mailbox?.path || null };
+    return { ...w.status, connected: !!c?.usable, push: !!(c?.usable && (c.idling || c.capabilities?.has('IDLE'))), selected: c?.mailbox?.path || null };
   }
 
   async stopAll() { await Promise.all([...this.workers.keys()].map((id) => this.stop(id))); }

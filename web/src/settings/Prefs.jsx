@@ -55,7 +55,8 @@ export function CalendarPrefs() {
         <label className="field">Default event length (minutes)<input className="input" type="number" value={c.defaultDurationMin} onChange={(e) => save({ calendar: { defaultDurationMin: Number(e.target.value) } })} /></label>
         <label className="field">Default reminder (minutes before)<input className="input" type="number" value={c.defaultReminderMin} onChange={(e) => save({ calendar: { defaultReminderMin: Number(e.target.value) } })} /></label>
         <label className="field">Week starts on<select className="input" value={s.ui.weekStart} onChange={(e) => save({ ui: { weekStart: Number(e.target.value) } })}><option value={1}>Monday</option><option value={0}>Sunday</option><option value={6}>Saturday</option></select></label>
-        <label className="field">Time zone<input className="input" value={c.timezone} onChange={(e) => save({ calendar: { timezone: e.target.value } })} list="tzs" /></label>
+        <label className="field">Time zone<input className="input" value={c.timezone} disabled={c.tzAuto !== false} onChange={(e) => save({ calendar: { timezone: e.target.value } })} list="tzs" /></label>
+        <label className="row small" style={{ alignSelf: 'end' }}><input type="checkbox" checked={c.tzAuto !== false} onChange={(e) => save({ calendar: { tzAuto: e.target.checked, ...(e.target.checked ? { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } : {}) } })} /> Use this device's time zone</label>
         <datalist id="tzs">{(Intl.supportedValuesOf?.('timeZone') || []).map((z) => <option key={z} value={z} />)}</datalist>
       </div>
     </div>

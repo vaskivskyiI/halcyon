@@ -28,7 +28,7 @@ export default function Accounts() {
             <div style={{ fontWeight: 600 }}>{a.displayName ? `${a.displayName} · ` : ''}{a.email}</div>
             <div className="small muted truncate">{a.imap.host} · {a.authType.startsWith('oauth') ? 'OAuth' : 'password'} · {a.syncState}{a.lastSyncAt ? ` · last sync ${fmtListDate(a.lastSyncAt)}` : ''}</div>
             {a.syncError && <div className="small error-text"><AlertTriangle size={12} /> {a.syncError}</div>}
-            <AccountStatus st={status[a.id]} test={tests[a.id]} />
+            <AccountStatus st={status[a.id]} test={tests[a.id]} account={a} reload={loadStatus} />
             <label className="row small" style={{ marginTop: 6 }}>Download mail from
               <select className="input" style={{ width: 'auto', height: 28 }} value={a.syncHistory || '90'} onChange={async (e) => {
                 const v = e.target.value;
@@ -51,6 +51,7 @@ export default function Accounts() {
   );
 }
 
+const OP_NAMES = { append: 'save a copy (sent mail / draft)', flags: 'flag change', move: 'move', delete: 'delete', createFolder: 'create folder', deleteByMessageId: 'replace draft' };
 const ago = (t) => (t ? fmtListDate(t) : 'never');
 const Line = ({ ok, warn, children }) => (
   <div className="small" style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
@@ -58,7 +59,7 @@ const Line = ({ ok, warn, children }) => (
   </div>);
 
 /** IMAP / SMTP health of one account, from /api/accounts/status and the last "Test connection". */
-function AccountStatus({ st, test }) {
+function AccountStatus({ st, test, account, reload }) {
   if (!st) return null;
   const imap = st.imap;
   return (
@@ -71,7 +72,9 @@ function AccountStatus({ st, test }) {
         {st.mailbox.foldersPending ? ' · downloading older mail…' : st.history === 'all' ? ' · complete' : ` · older than ${st.history === '365' ? 'a year' : '90 days'} not downloaded`}</Line>}
       {imap && Object.entries(imap.folderErrors || {}).map(([f, e]) => <Line key={f}>Folder “{f}”: {e}</Line>)}
       {st.pendingOps > 0 && <Line warn>{st.pendingOps} change{st.pendingOps > 1 ? 's' : ''} (move, flag, delete…) waiting to be applied on the server</Line>}
-      {st.failedOps.map((o, i) => <Line key={i}>Server change “{o.op}” failed {o.attempts}×: {o.error}</Line>)}
+      {st.failedOps.map((o) => <Line key={o.id}>Server change “{OP_NAMES[o.op] || o.op}” failed {o.attempts}×: {o.error}{' '}
+        <button className="link-btn" onClick={() => api.post(`/api/accounts/${account.id}/ops/${o.id}/retry`).then(() => setTimeout(reload, 2500)).catch(toastError)}>Retry</button>{' · '}
+        <button className="link-btn" title="Forget this queued change; nothing on the server is touched" onClick={() => confirm('Forget this change? It will not be applied on the server (nothing is deleted).') && api.del(`/api/accounts/${account.id}/ops/${o.id}`).then(reload).catch(toastError)}>Dismiss</button></Line>)}
       {st.smtp ? (st.smtp.ok ? <Line ok>SMTP: {st.smtp.tested ? 'login OK' : 'last message sent'} {ago(st.smtp.at)}</Line> : <Line>SMTP: failed {ago(st.smtp.at)} — {st.smtp.error || 'no details from the server'}</Line>)
         : <Line warn>SMTP: not used since the server started — use “Test connection”</Line>}
       {(st.outboxFailed > 0 || st.outboxRetrying > 0) && <Line>{st.outboxFailed} message(s) could not be sent, {st.outboxRetrying} retrying — see Mail → Outbox & drafts</Line>}

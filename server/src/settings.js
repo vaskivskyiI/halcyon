@@ -6,7 +6,8 @@ export const DEFAULT_SETTINGS = {
     undoSendSeconds: 10, loadRemoteImages: false, markReadAfterMs: 1500, focusedInbox: true,
     defaultAccountId: null, replyAllDefault: false, composeFormat: 'html', autoCollectContacts: true,
   },
-  calendar: { defaultDurationMin: 30, defaultReminderMin: 15, workStart: '08:00', workEnd: '17:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+  calendar: { defaultDurationMin: 30, defaultReminderMin: 15, workStart: '08:00', workEnd: '17:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, tzAuto: true },
+  // tzAuto: the web client keeps `timezone` equal to the browser's zone (a server in a container usually runs in UTC).
   notifications: { newMail: true, onlyImportant: false, reminders: true },
   ai: {
     enabled: true,

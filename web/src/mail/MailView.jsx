@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, Send, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
-  ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon,
+  ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
   ClipboardCheck, SlidersHorizontal,
 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
-import { navigate, fmtListDate, CATEGORY_COLORS, toast, toastError } from '../util.js';
+import { navigate, fmtListDate, toast, toastError } from '../util.js';
 import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
@@ -22,6 +22,9 @@ const SMART = [
   ['snoozed', Clock, 'Snoozed', 'snoozed'],
   ['scheduled', SendIcon, 'Outbox & drafts', 'scheduled'],
 ];
+const SORTS = [['date', 'Date', 'desc'], ['from', 'From', 'asc'], ['subject', 'Subject', 'asc'], ['size', 'Size', 'desc'], ['unread', 'Unread first', 'asc'], ['flagged', 'Flagged first', 'desc']];
+const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
+const COUNT_TITLES = { unified: 'Unread conversations', needsreply: 'Conversations waiting for your reply', needsaction: 'Open action items', snoozed: 'Snoozed conversations', scheduled: 'Messages waiting to be sent' };
 const FOLDER_ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Archive': Archive, '\\Trash': Trash2, '\\Junk': AlertOctagon, '\\Flagged': Star };
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
 
@@ -86,7 +89,7 @@ function FolderNav({ view, open, onNavigate }) {
       <div className="sidebar-scroll">
         {SMART.map(([key, Icon, label, countKey]) => (
           <div key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => go(key)}>
-            <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && <span className="count">{folders.counts[countKey]}</span>}
+            <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && <span className="count" title={COUNT_TITLES[countKey]}>{folders.counts[countKey]}</span>}
           </div>
         ))}
         {folders.topics?.length > 0 && <>
@@ -100,7 +103,7 @@ function FolderNav({ view, open, onNavigate }) {
           <div className="nav-section" style={{ cursor: 'default' }}>AI categories</div>
           {folders.categories.map((c) => (
             <div key={c.name} className={`nav-item ${view === categoryView(c.name) ? 'active' : ''}`} onClick={() => go(categoryView(c.name))}>
-              <Tag size={15} color={CATEGORY_COLORS[c.name]} /><span className="truncate" style={{ textTransform: 'capitalize' }}>{c.name}</span>{c.unread > 0 && <span className="count">{c.unread}</span>}
+              <Tag size={15} /><span className="truncate" style={{ textTransform: 'capitalize' }}>{c.name}</span>{c.unread > 0 && <span className="count">{c.unread}</span>}
             </div>))}
         </>}
         {folders.accounts.map((acc) => {
@@ -125,7 +128,7 @@ function FolderNav({ view, open, onNavigate }) {
                   <div key={f.id} className={`nav-item ${view === key ? 'active' : ''} ${dropTarget === key ? 'drop' : ''}`} style={{ paddingLeft: 10 + depth * 14, opacity: f.syncEnabled ? 1 : 0.55 }}
                     onClick={() => go(key)} onContextMenu={(e) => folderMenu(e, acc, f)} {...dropProps(key, f.id)}>
                     <Icon size={16} /><span className="truncate">{f.name}</span>
-                    {f.unread > 0 && !['\\Sent', '\\Trash', '\\Junk', '\\Drafts'].includes(f.specialUse) && <span className="count">{f.unread}</span>}
+                    {f.unread > 0 && !['\\Sent', '\\Trash', '\\Junk', '\\Drafts'].includes(f.specialUse) && <span className="count" title="Unread conversations">{f.unread}</span>}
                     {f.specialUse === '\\Drafts' && f.total > 0 && <span className="count faint">{f.total}</span>}
                   </div>
                 );
@@ -175,18 +178,23 @@ function MessageList({ view, openId, onMenu }) {
   const searchRef = useRef();
   const anchor = useRef(null);
   const threaded = settings.ui.conversationView;
+  // Sort order is a per-device choice; newest first pages by date, other orders by offset.
+  const [sort, setSortState] = useState(() => { try { return JSON.parse(localStorage.getItem('halcyon.sort')) || { key: 'date', dir: 'desc' }; } catch { return { key: 'date', dir: 'desc' }; } });
+  const setSort = (s) => { setSortState(s); try { localStorage.setItem('halcyon.sort', JSON.stringify(s)); } catch { /* private mode */ } };
+  const byDate = sort.key === 'date' && sort.dir === 'desc';
 
   const isInboxView = view === 'unified' || (view.startsWith('f') && folders.accounts.some((a) => a.folders.some((f) => `f${f.id}` === view && f.specialUse === '\\Inbox')));
   useEffect(() => { setTab(isInboxView && settings.mail.focusedInbox ? 'focused' : 'all'); setSelected(new Set()); setActiveQuery(''); setQuery(''); }, [view]);
 
-  const params = useCallback((before) => {
+  const params = useCallback((before, offset) => {
     const p = new URLSearchParams({ ...viewQuery(view), limit: 50 });
+    if (!byDate) { p.set('sort', sort.key); p.set('dir', sort.dir); if (offset) p.set('offset', offset); }
     if (activeQuery) { p.set('q', activeQuery); p.set('semantic', '0'); }
     if (tab !== 'all') p.set('filter', tab);
     if (before) p.set('before', before);
     if (!threaded) p.set('threads', '0');
     return p;
-  }, [view, tab, activeQuery, threaded]);
+  }, [view, tab, activeQuery, threaded, sort]);
 
   // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one.
   const openRef = useRef(openId);
@@ -211,8 +219,8 @@ function MessageList({ view, openId, onMenu }) {
   const load = useCallback(async (append = false) => {
     setLoading(true);
     try {
-      const before = append && items.length ? items[items.length - 1].date : null;
-      const r = await api.get(`/api/messages?${params(before)}`);
+      const before = append && items.length && byDate ? items[items.length - 1].date : null;
+      const r = await api.get(`/api/messages?${params(before, append ? items.length : 0)}`);
       setItems((cur) => (append ? [...cur, ...r.items] : keepOpen(r.items, cur)));
       setHasMore(r.hasMore);
       // Keyword results are shown at once; matches by meaning follow when the AI answers.
@@ -349,6 +357,7 @@ function MessageList({ view, openId, onMenu }) {
       { label: 'Reply', icon: Reply, onClick: () => { open(m); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:reply', { detail: { mode: 'reply' } })), 300); } },
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
       { label: m.isFlagged ? 'Unflag' : 'Flag', icon: Star, onClick: () => act(m.isFlagged ? 'unflag' : 'flag', {}, ids) },
+      { label: 'Create task…', icon: ClipboardCheck, onClick: () => store.set({ taskDialog: m.id }) },
       { label: 'Mark as needs reply', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, true) },
       { label: 'Remove “needs reply”', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, false) },
       settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },
@@ -400,6 +409,13 @@ function MessageList({ view, openId, onMenu }) {
           <button className={`tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All</button>
           <button className={`tab ${tab === 'unread' ? 'active' : ''}`} onClick={() => setTab('unread')}>Unread</button>
           <button className={`tab ${tab === 'attachments' ? 'active' : ''}`} onClick={() => setTab('attachments')} title="With attachments"><Paperclip size={14} /></button>
+          <button className="tab sort-btn" title={`Sort: ${SORTS.find((x) => x[0] === sort.key)?.[1]}, ${sortDirLabel(sort.key, sort.dir).toLowerCase()}`} onClick={(e) => openMenu(e, [
+            { section: 'Sort by' },
+            ...SORTS.map(([key, label, dir]) => ({ label, icon: sort.key === key ? Check : undefined, onClick: () => setSort({ key, dir }) })),
+            'sep',
+            { label: sortDirLabel(sort.key, 'asc'), icon: sort.dir === 'asc' ? Check : undefined, onClick: () => setSort({ ...sort, dir: 'asc' }) },
+            { label: sortDirLabel(sort.key, 'desc'), icon: sort.dir === 'desc' ? Check : undefined, onClick: () => setSort({ ...sort, dir: 'desc' }) },
+          ])}><ArrowUpDown size={13} />{!byDate && ` ${SORTS.find((x) => x[0] === sort.key)?.[1]}`}</button>
         </div>}
       </div>
       <AiApprovals />
@@ -442,7 +458,6 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
   const ai = m.ai;
   const expired = !!ai?.expired;
   const important = !expired && ai?.priority >= 70;
-  const prioColor = expired ? null : ai?.priority >= 80 ? 'var(--danger)' : ai?.priority >= 60 ? 'var(--warning)' : null;
   return (
     <div className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={onClick} onContextMenu={onContextMenu} draggable
       onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'copyMove'; }}>
@@ -451,29 +466,27 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
       </div>
       <div className="body">
         <div className="from">
-          {unread && <span className="unread-dot" title="Unread" />}
           {important && <Flame size={13} className="imp-icon" title={`Important (priority ${ai.priority})`} />}
-          {!important && prioColor && <span className="prio-dot" style={{ background: prioColor }} title={`Priority ${ai.priority}`} />}
           <span className="truncate">{m.folder?.specialUse === '\\Sent' ? `To: ${m.to.map((a) => a.name || a.address).join(', ')}` : m.from.name || m.from.address}</span>
           {threaded && m.threadCount > 1 && <span className="faint small">{m.threadCount}</span>}
           <span className="date">{m.snoozedUntil ? <span title="Snoozed until"><Clock size={11} /> {fmtListDate(m.snoozedUntil)}</span> : fmtListDate(m.date)}</span>
         </div>
-        <div className="subject truncate">{m.subject || '(no subject)'}</div>
+        <div className="subject truncate">
+          {m.isAnswered && <ReplyIcon size={13} className="state-icon" title="You replied" />}
+          {m.isForwarded && <ForwardIcon size={13} className="state-icon" title="You forwarded this" />}
+          {m.subject || '(no subject)'}</div>
         {showAi && ai?.summary ? <div className="ai-line"><Sparkles size={12} /><span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{ai.summary}</span></div>
           : <div className="snippet truncate">{m.snippet}</div>}
         <div className="meta">
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
           {expired && <span className="chip faint" title="Time-sensitive content that is no longer valid"><Hourglass size={11} /> expired</span>}
-          {m.isAnswered && <span className="chip faint" title="You replied"><ReplyIcon size={11} /> replied</span>}
           {ai?.topic && <span className="chip topic clickable" title={`Show all mail about “${ai.topic}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${topicView(ai.topic)}`); }}><Hash size={10} />{ai.topic}</span>}
           {ai?.needsReply && !m.isAnswered && !expired && <span className="chip ai"><CornerUpLeft size={11} /> Reply needed</span>}
           {ai?.needsAction && !expired && <span className="chip action" title={ai.actionSummary || 'Action needed'}><ClipboardCheck size={11} /> {ai.actionSummary ? (ai.actionSummary.length > 42 ? `${ai.actionSummary.slice(0, 40)}…` : ai.actionSummary) : 'Action needed'}</span>}
-          {ai?.hasDraft && !m.isAnswered && <span className="chip ai"><Sparkles size={11} /> Draft ready</span>}
-          {ai?.category && !['work', 'personal', 'other'].includes(ai.category) && <span className="chip clickable" style={{ color: CATEGORY_COLORS[ai.category] }} title={`Show all ${ai.category} mail`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${categoryView(ai.category)}`); }}>{ai.category}</span>}
-          {m.hasInvite && <span className="chip"><CalendarPlus size={11} /> Invitation</span>}
+          {m.hasInvite && <CalendarPlus size={13} className="faint" title="Invitation" />}
           {m.hasAttachments && <Paperclip size={13} className="faint" />}
           {m.hasDraft && <span className="chip draft" title="You have an unsent reply in this conversation">Draft</span>}
-          {m.isFlagged && <Star size={13} fill="#f59e0b" color="#f59e0b" />}
+          {m.isFlagged && <Star size={13} className="flag-icon" />}
           {m.labels?.map((id) => { const l = store.get().labels.find((x) => x.id === id); return l && <span key={id} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
         </div>
       </div>

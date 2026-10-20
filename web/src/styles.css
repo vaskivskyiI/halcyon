@@ -335,3 +335,27 @@ pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); p
 .seg button { border: 0; background: none; padding: 3px 9px; font-size: 12px; color: var(--text-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .seg button:disabled { opacity: .45; cursor: default; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+.state-icon { color: var(--accent); vertical-align: -2px; margin-right: 4px; flex: none; }
+.task-add { display: grid; gap: 8px; padding: 12px; margin: 16px 0; }
+.task-notes { white-space: pre-wrap; font-size: 13px; color: var(--text-2); margin: 4px 0 6px; padding: 8px 10px; background: var(--bg-2, rgba(127,127,127,.06)); border-radius: 6px; }
+.task-propose { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.task-propose:last-child { border-bottom: 0; }
+.icon-btn.inline { width: 18px; height: 18px; padding: 0; display: inline-flex; vertical-align: -3px; margin-right: 2px; }
+.imp-flag { color: var(--danger); vertical-align: -1px; margin-right: 4px; }
+.clickable { cursor: pointer; }
+
+/* Calm list: one accent for unread, neutral chips, colour only where something needs attention. */
+.msg-row.unread { background: transparent; }
+.msg-row.unread::before { background: var(--accent); }
+.msg-row.important::before { background: var(--accent); }
+.msg-row.read.important::before { display: none; }
+.msg-row.unread .date { color: var(--text); }
+.msg-row .imp-icon { color: color-mix(in srgb, var(--danger) 70%, var(--text-3)); }
+.msg-row .ai-line svg { color: var(--text-3); }
+.msg-row .meta .chip { height: 20px; font-size: 11px; background: transparent; border: 1px solid var(--border); color: var(--text-2); }
+.msg-row .meta .chip.ai, .msg-row .meta .chip.action { color: var(--ai); border-color: color-mix(in srgb, var(--ai) 35%, var(--border)); }
+.msg-row .meta .chip.topic { color: var(--text-2); }
+.msg-row .meta .chip.draft { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: transparent; }
+.flag-icon { color: var(--warning); fill: var(--warning); flex: none; }
+.tab.sort-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }

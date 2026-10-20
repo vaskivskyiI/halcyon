@@ -225,4 +225,8 @@ export const migrations = [
   ALTER TABLE folders ADD COLUMN history_done INTEGER DEFAULT 0;
   UPDATE folders SET oldest_uid = (SELECT MIN(uid) FROM messages WHERE folder_id = folders.id AND uid IS NOT NULL);
   `,
+  // 9: forwarded messages ($Forwarded keyword, as set by Outlook / Thunderbird / Apple Mail).
+  `
+  ALTER TABLE messages ADD COLUMN is_forwarded INTEGER DEFAULT 0;
+  `,
 ];

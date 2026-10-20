@@ -43,3 +43,13 @@ export async function mailAction(action, ids, extra = {}, { threads = false, onD
     loadFolders();
   } catch (e) { toastError(e); }
 }
+
+/** After queuing a message: once it should have gone out, refresh the list, the conversation and the counts
+ *  (the live event does this too, but not when the event socket is unavailable). */
+export function afterSend(r) {
+  const due = Math.max(0, (r?.sendAt || Date.now()) - Date.now());
+  if (due > 3600e3) return;
+  for (const extra of [2500, 8000]) {
+    setTimeout(() => ['halcyon:poll', 'halcyon:sent', 'halcyon:mutated'].forEach((t) => window.dispatchEvent(new Event(t))), due + extra);
+  }
+}

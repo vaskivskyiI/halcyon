@@ -6,6 +6,8 @@ import { getSettings } from '../settings.js';
 import { parseDue, mentionsTime } from '../util/dates.js';
 import { aiParseTask } from '../ai/tasks.js';
 import { scheduleBriefRefresh } from '../ai/tasks.js';
+import { localToEpoch } from '../util/time.js';
+import { localStamp } from '../ai/prompts.js';
 
 // Task changes also refresh the AI overview of the daily brief (debounced there).
 const notify = (userId, type, payload) => { notifyRaw(userId, type, payload); if (type === 'tasks:changed') scheduleBriefRefresh(userId); };
@@ -60,18 +62,58 @@ export default async function taskRoutes(app) {
     return { ok: true };
   });
 
-  // Create tasks from the AI-extracted action items of a message.
+  // Tasks proposed from a message (AI action items, else a follow-up), with the sender in the title and the context in
+  // the body; the web client shows them for editing (title, body, due) before they are created.
+  app.get('/api/tasks/from-message/:id', async (req, reply) => {
+    const p = proposeTasks(req.user.id, req.params.id);
+    return p || httpError(reply, 404, 'Not found');
+  });
+
+  // Create tasks from a message: the edited proposals (body.items: [{ title, notes, due }]) or the proposals as they are.
   app.post('/api/tasks/from-message/:id', async (req, reply) => {
-    const m = get('SELECT id, subject FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
-    if (!m) return httpError(reply, 404, 'Not found');
-    const items = req.body?.items || json(get('SELECT action_items_json FROM ai_insights WHERE message_id = ?', m.id)?.action_items_json, []);
+    const p = proposeTasks(req.user.id, req.params.id);
+    if (!p) return httpError(reply, 404, 'Not found');
+    const items = Array.isArray(req.body?.items) && req.body.items.length ? req.body.items : p.items;
     const created = [];
-    for (const it of items.length ? items : [{ text: `Follow up: ${m.subject}` }]) {
-      const due = it.due ? Date.parse(it.due + (String(it.due).length === 10 ? 'T17:00:00' : '')) : null;
-      const r = run('INSERT INTO tasks (user_id, title, due, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', req.user.id, it.text, Number.isNaN(due) ? null : due, m.id, now(), now());
+    for (const it of items) {
+      // Older clients send the raw AI items ({ text, due: 'YYYY-MM-DD' }).
+      const t = it.title ? it : p.items.find((x) => x.text === it.text) || { title: it.text, notes: p.context, due: null };
+      if (!String(t.title || '').trim()) continue;
+      const r = run('INSERT INTO tasks (user_id, title, notes, due, priority, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        req.user.id, String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), Number(t.due) || null, t.priority ? 1 : 0, p.messageId, now(), now());
       created.push(out(get('SELECT * FROM tasks WHERE id = ?', r.lastInsertRowid)));
     }
     notify(req.user.id, 'tasks:changed', {});
     return created;
   });
+}
+
+function proposeTasks(userId, id) {
+  const m = get(`SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_json, m.date, m.snippet, f.special_use FROM messages m JOIN folders f ON f.id = m.folder_id
+    WHERE m.id = ? AND m.user_id = ?`, id, userId);
+  if (!m) return null;
+  const tz = getSettings(userId).calendar.timezone;
+  const ins = get('SELECT summary, action_items_json, action_summary FROM ai_insights WHERE message_id = ?', m.id);
+  // Who the task is about: the sender, or for the user's own sent mail the first recipient.
+  const sent = m.special_use === '\\Sent';
+  const other = sent ? json(m.to_json, [])[0] || {} : { name: m.from_name, address: m.from_addr };
+  const who = (other.name || String(other.address || '').split('@')[0] || '').trim();
+  const context = [
+    `${sent ? 'To' : 'From'}: ${other.name ? `${other.name} <${other.address}>` : other.address || ''}`,
+    `Date: ${localStamp(m.date, tz)}`,
+    `Subject: ${m.subject || '(no subject)'}`,
+    '',
+    ins?.summary || m.snippet || '',
+  ].join('\n').trim();
+  const withWho = (text) => (who && !text.toLowerCase().includes(who.toLowerCase()) ? `${text} (${sent ? 'to ' : ''}${who})` : text);
+  const due = (d) => {
+    const x = String(d || '').match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
+    const t = x ? localToEpoch(x[1], x[2] || '17:00', tz) : NaN;
+    return Number.isNaN(t) ? null : t;
+  };
+  const ai = json(ins?.action_items_json, []).filter((a) => a?.text);
+  const items = ai.length
+    ? ai.map((a) => ({ text: a.text, title: withWho(a.text), notes: context, due: due(a.due) }))
+    : [{ text: '', title: withWho(ins?.action_summary || `Follow up: ${m.subject || '(no subject)'}`), notes: context, due: null }];
+  return { messageId: m.id, context, items };
 }

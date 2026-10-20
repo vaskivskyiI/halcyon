@@ -12,7 +12,7 @@ export class ApiError extends Error {
 
 async function request(method, url, body) {
   const r = await fetch(base + url, {
-    method, credentials: 'include',
+    method, credentials: 'include', cache: 'no-store',
     headers: { ...spaceHeader(), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
@@ -22,6 +22,8 @@ async function request(method, url, body) {
     if (r.status === 401 && !url.startsWith('/api/auth')) window.dispatchEvent(new Event('halcyon:unauthorized'));
     throw new ApiError(data?.error || r.statusText, r.status, data?.code);
   }
+  // Mail changed from here: counts in the sidebar refresh even when the event socket is not connected (e.g. behind a proxy).
+  if (method !== 'GET' && /^\/api\/(messages|folders|send|outbox|drafts|ai\/approvals)/.test(url)) window.dispatchEvent(new CustomEvent('halcyon:mutated', { detail: { url } }));
   return data;
 }
 

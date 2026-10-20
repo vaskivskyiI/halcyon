@@ -13,19 +13,21 @@ function ownedMessages(userId, ids) {
 
 const groupBy = (arr, key) => arr.reduce((m, x) => { (m[x[key]] ||= []).push(x); return m; }, {});
 
-export function setFlags(userId, ids, { read, flagged, answered }) {
+export function setFlags(userId, ids, { read, flagged, answered, forwarded }) {
   const msgs = ownedMessages(userId, ids);
   tx(() => {
     for (const m of msgs) {
       if (read !== undefined) run('UPDATE messages SET is_read = ? WHERE id = ?', read ? 1 : 0, m.id);
       if (flagged !== undefined) run('UPDATE messages SET is_flagged = ? WHERE id = ?', flagged ? 1 : 0, m.id);
       if (answered !== undefined) run('UPDATE messages SET is_answered = ? WHERE id = ?', answered ? 1 : 0, m.id);
+      if (forwarded !== undefined) run('UPDATE messages SET is_forwarded = ? WHERE id = ?', forwarded ? 1 : 0, m.id);
     }
   });
   const add = [], remove = [];
   if (read !== undefined) (read ? add : remove).push('\\Seen');
   if (flagged !== undefined) (flagged ? add : remove).push('\\Flagged');
   if (answered !== undefined) (answered ? add : remove).push('\\Answered');
+  if (forwarded !== undefined) (forwarded ? add : remove).push('$Forwarded');
   for (const group of Object.values(groupBy(msgs, 'folder_id'))) {
     const uids = group.map((m) => m.uid).filter(Boolean);
     if (uids.length) queueOp(group[0].account_id, 'flags', { folder: group[0].folder_path, uids, add, remove });
