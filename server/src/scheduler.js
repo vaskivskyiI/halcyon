@@ -35,7 +35,7 @@ function checkReminders() {
   const t = now();
   for (const u of all('SELECT id FROM users')) {
     if (!getSettings(u.id).notifications.reminders) continue;
-    const upcoming = listRange(u.id, t - 60e3, t + 24 * 3600e3);
+    const upcoming = listRange(u.id, t - 60e3, t + 24 * 3600e3, null, { includeInfo: false });
     for (const e of upcoming) {
       if (e.status === 'cancelled') continue;
       for (const min of e.reminders || []) {

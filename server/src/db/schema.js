@@ -276,4 +276,9 @@ export const migrations = [
   ALTER TABLE calendars ADD COLUMN sync_error TEXT;
   ALTER TABLE calendars ADD COLUMN last_sync_at INTEGER;
   `,
+  // 15: how a calendar's events count: 'busy' (block time: overlaps, free slots, scheduling), 'free' (shown, never
+  //     block time) or 'info' (shown faintly, never block time, no reminders, not in the daily brief).
+  `
+  ALTER TABLE calendars ADD COLUMN show_as TEXT DEFAULT 'busy';
+  `,
 ];

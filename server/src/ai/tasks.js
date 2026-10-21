@@ -97,7 +97,7 @@ export function briefLive(userId, space = '') {
     WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND i.needs_reply = 1 AND m.is_answered = 0 AND m.date >= ? AND ${live}
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 7 * 864e5).map(row).filter((m) => !attention.some((a) => a.id === m.id));
   const start = new Date(); start.setHours(0, 0, 0, 0);
-  const events = sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), start.getTime() + 864e5, sc?.calendarIds)
+  const events = sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), start.getTime() + 864e5, sc?.calendarIds, { includeInfo: false })
     .map((e) => ({ id: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location, onlineMeeting: e.onlineMeeting, color: e.color }));
   const actions = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic, i.action_summary
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
@@ -531,7 +531,7 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
     WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, userId, now() - 7 * 864e5);
   const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
   const tz = getSettings(userId).calendar.timezone;
-  const events = (sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), end.getTime(), sc?.calendarIds)).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
+  const events = (sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
   const tasks = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
     AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn})) ORDER BY due LIMIT 15`, userId, end.getTime(), userId)
     .map((t) => ({ title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));

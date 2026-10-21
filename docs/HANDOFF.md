@@ -288,3 +288,9 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   from `listRange` carry `readonly` and `calendarName`; the week view does not drag them.
 - Event editor: overlap note (other busy, timed events in the chosen time, all calendars) with "Find a free time".
 - dav.test.js and round12 (read-only source) were run against Radicale (pip --user install in WSL; no venv there).
+- `calendars.show_as` (migration 15): 'busy' | 'free' | 'info'. `listRange` sets each event's effective `busy`
+  (event busy AND calendar busy) and `showAs`; `{ includeInfo: false }` for the daily brief / live brief / reminders;
+  the assistant sees info/free events labelled. Web: "Show events as" in the calendar's menu and when adding,
+  free = light with coloured edge, info = faint dashed, "Show informational events" toggle (per device).
+- `findFreeSlots` works in the user's zone (it used the server's setHours/getDay) and offers starts every 30 min,
+  at most 4 per day.

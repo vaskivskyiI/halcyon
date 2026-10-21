@@ -1,3 +1,4 @@
+import { localToEpoch } from '../util/time.js';
 import { get, all, run, json, now, update, tx } from '../db/index.js';
 import { uuid } from '../util/crypto.js';
 import { expand } from './recurrence.js';
@@ -108,26 +109,34 @@ export function editOccurrence(userId, id, occurrenceStart, patch, { remove = fa
 }
 
 /** Expanded occurrences in [from, to) for the user's enabled calendars. */
-export function listRange(userId, from, to, calendarIds) {
+/** includeInfo: false leaves out calendars shown "just for information" (brief, reminders). */
+export function listRange(userId, from, to, calendarIds, { includeInfo = true } = {}) {
   const tz = getSettings(userId).calendar.timezone;
   let cals = all('SELECT * FROM calendars WHERE user_id = ? AND enabled = 1', userId);
   if (calendarIds?.length) cals = cals.filter((c) => calendarIds.includes(c.id));
+  if (!includeInfo) cals = cals.filter((c) => (c.show_as || 'busy') !== 'info');
   if (!cals.length) return [];
   const ph = cals.map(() => '?').join(',');
   const rows = all(`SELECT * FROM events WHERE deleted = 0 AND calendar_id IN (${ph}) AND (rrule IS NOT NULL OR (start < ? AND end >= ?))`, ...cals.map((c) => c.id), to, from);
   const overrides = new Map();
   for (const r of rows) if (r.recurrence_id) overrides.set(`${r.calendar_id}:${r.uid}:${r.recurrence_id}`, r);
   const calById = Object.fromEntries(cals.map((c) => [c.id, c]));
+  // What the calendar adds to each of its events: an event only blocks time when its calendar is shown as busy.
+  const extra = (r) => {
+    const c = calById[r.calendar_id];
+    const showAs = c.show_as || 'busy';
+    return { color: c.color, readonly: !!c.readonly, calendarName: c.name, showAs, busy: !!r.busy && showAs === 'busy' };
+  };
   const out = [];
   for (const r of rows) {
     if (r.recurrence_id) {
-      if (r.start < to && r.end >= from) out.push({ ...serializeEvent(r), instanceId: `${r.id}`, seriesId: get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL', r.calendar_id, r.uid)?.id, color: calById[r.calendar_id].color, readonly: !!calById[r.calendar_id].readonly, calendarName: calById[r.calendar_id].name });
+      if (r.start < to && r.end >= from) out.push({ ...serializeEvent(r), instanceId: `${r.id}`, seriesId: get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL', r.calendar_id, r.uid)?.id, ...extra(r) });
       continue;
     }
     const base = serializeEvent(r);
     for (const occ of expand(base, from, to, tz)) {
       if (r.rrule && overrides.has(`${r.calendar_id}:${r.uid}:${occ.start}`)) continue;
-      out.push({ ...base, start: occ.start, end: occ.end, occurrence: r.rrule ? occ.start : null, instanceId: r.rrule ? `${r.id}:${occ.start}` : `${r.id}`, color: calById[r.calendar_id].color, readonly: !!calById[r.calendar_id].readonly, calendarName: calById[r.calendar_id].name });
+      out.push({ ...base, start: occ.start, end: occ.end, occurrence: r.rrule ? occ.start : null, instanceId: r.rrule ? `${r.id}:${occ.start}` : `${r.id}`, ...extra(r) });
     }
   }
   return out.sort((a, b) => a.start - b.start);
@@ -136,22 +145,26 @@ export function listRange(userId, from, to, calendarIds) {
 /** Free/busy slot finder used by the AI scheduler and "suggest times". */
 export function findFreeSlots(userId, from, to, durationMin, { workStart, workEnd } = {}) {
   const s = getSettings(userId).calendar;
-  const [wsH, wsM] = (workStart || s.workStart).split(':').map(Number);
-  const [weH, weM] = (workEnd || s.workEnd).split(':').map(Number);
+  const tz = s.timezone;
+  // Working hours and weekends are the user's (their zone), not the server's.
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
   const busy = listRange(userId, from, to).filter((e) => e.busy && !e.allDay).map((e) => [e.start, e.end]).sort((a, b) => a[0] - b[0]);
+  const dur = durationMin * 60e3, step = 30 * 60e3, perDay = 4;
   const slots = [];
-  const dur = durationMin * 60e3;
-  for (let day = new Date(from); day < new Date(to) && slots.length < 20; day.setDate(day.getDate() + 1)) {
-    if ([0, 6].includes(day.getDay())) continue;
-    const ds = new Date(day); ds.setHours(wsH, wsM, 0, 0);
-    const de = new Date(day); de.setHours(weH, weM, 0, 0);
-    let t = Math.max(ds.getTime(), from);
-    for (const [bs, be] of busy) {
-      if (be <= t || bs >= de.getTime()) continue;
-      if (bs - t >= dur) slots.push({ start: t, end: t + dur });
-      t = Math.max(t, be);
+  const seen = new Set();
+  for (let t0 = from; t0 < to && slots.length < 20; t0 += 12 * 3600e3) {
+    const p = Object.fromEntries(day.formatToParts(new Date(t0)).map((x) => [x.type, x.value]));
+    const ymd = `${p.year}-${p.month}-${p.day}`;
+    if (seen.has(ymd)) continue;
+    seen.add(ymd);
+    if (p.weekday === 'Sat' || p.weekday === 'Sun') continue;
+    const ds = localToEpoch(ymd, workStart || s.workStart, tz), de = localToEpoch(ymd, workEnd || s.workEnd, tz);
+    // Start on a quarter hour, then offer starts every 30 minutes in each free gap (a few per day, so they spread).
+    let t = Math.ceil(Math.max(ds, from) / 9e5) * 9e5, n = 0;
+    for (const [bs, be] of [...busy.filter(([bs, be]) => be > t && bs < de), [de, de]]) {
+      for (; t + dur <= Math.min(bs, de) && n < perDay && slots.length < 20; t += step, n++) slots.push({ start: t, end: t + dur });
+      t = Math.max(t, Math.ceil(be / 9e5) * 9e5);
     }
-    if (de.getTime() - t >= dur) slots.push({ start: t, end: t + dur });
   }
-  return slots.slice(0, 20);
+  return slots;
 }

@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner } from '../components/common.jsx';
 import { toast, toastError, startOfDay, addDays, startOfWeek, toLocalInput, toDateInput, fmtTime, navigate } from '../util.js';
 
 const HOUR_PX = 48;
+// How a calendar's events count (also chosen when a calendar is added).
+const SHOW_AS = [
+  ['busy', 'Busy', 'blocks time'],
+  ['free', 'Free', 'shown, never blocks time'],
+  ['info', 'Just for information', 'faint, no reminders'],
+];
 const VIEWS = [['day', 'Day'], ['workweek', 'Work week'], ['week', 'Week'], ['month', 'Month'], ['agenda', 'Agenda']];
 
 function rangeFor(view, date, weekStart) {
@@ -74,6 +80,11 @@ export default function CalendarView() {
   };
 
   const visibleCals = calendars.filter((c) => c.enabled);
+  // Calendars shown "just for information" can be hidden with one click (per device) and shown when needed.
+  const [hideInfo, setHideInfo] = useState(() => { try { return localStorage.getItem('cal.hideInfo') === '1'; } catch { return false; } });
+  const toggleInfo = () => { const v = !hideInfo; setHideInfo(v); try { localStorage.setItem('cal.hideInfo', v ? '1' : '0'); } catch { /* private mode */ } };
+  const hasInfo = calendars.some((c) => c.enabled && c.showAs === 'info');
+  const shown = hideInfo ? events.filter((e) => e.showAs !== 'info') : events;
   return (
     <div className="main">
       <aside className="sidebar cal-side">
@@ -82,6 +93,8 @@ export default function CalendarView() {
         <div className="sidebar-scroll">
           <div className="nav-section" style={{ cursor: 'default' }}><span className="grow">Calendars</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="Add calendar" onClick={() => setNewCal(true)}><Plus size={13} /></button></div>
           {calendars.map((c) => <CalendarItem key={c.id} c={c} reload={() => { loadCals(); load(); }} />)}
+          {hasInfo && <label className="row small muted" style={{ padding: '6px 10px' }} title="Calendars set to “Just for information”">
+            <input type="checkbox" checked={!hideInfo} onChange={toggleInfo} /> Show informational events</label>}
         </div>
       </aside>
       <section className="cal">
@@ -94,9 +107,9 @@ export default function CalendarView() {
           <button className="icon-btn mobile-only" onClick={() => newEvent()}><Plus size={18} /></button>
           <select className="input" style={{ width: 'auto' }} value={view} onChange={(e) => setView(e.target.value)}>{VIEWS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
         </div>
-        {view === 'month' && <MonthView from={from} date={date} events={events} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={setEditing} onDay={(d) => { setDate(d); setView('day'); }} />}
-        {['week', 'workweek', 'day'].includes(view) && <TimeGrid from={from} days={Math.round((to - from) / 864e5)} events={events} settings={settings} onNew={newEvent} onOpen={setEditing} onMove={moveEvent} />}
-        {view === 'agenda' && <Agenda events={events} onOpen={setEditing} />}
+        {view === 'month' && <MonthView from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={setEditing} onDay={(d) => { setDate(d); setView('day'); }} />}
+        {['week', 'workweek', 'day'].includes(view) && <TimeGrid from={from} days={Math.round((to - from) / 864e5)} events={shown} settings={settings} onNew={newEvent} onOpen={setEditing} onMove={moveEvent} />}
+        {view === 'agenda' && <Agenda events={shown} onOpen={setEditing} />}
       </section>
       {editing && <EventEditor initial={editing} calendars={calendars} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {scopeAsk && <ScopeModal title="Change recurring event" onClose={() => { scopeAsk.onCancel?.(); setScopeAsk(null); }} onPick={(s) => { scopeAsk.onPick(s); setScopeAsk(null); }} />}
@@ -113,6 +126,9 @@ function CalendarItem({ c, reload }) {
       { label: 'Set as default', onClick: () => api.patch(`/api/calendars/${c.id}`, { isDefault: true }).then(reload) },
       { label: 'Change color', onClick: () => { const col = prompt('Color (hex)', c.color); if (col) api.patch(`/api/calendars/${c.id}`, { color: col }).then(reload); } },
       { label: 'Rename', onClick: () => { const n = prompt('Name', c.name); if (n) api.patch(`/api/calendars/${c.id}`, { name: n }).then(reload); } },
+      { section: 'Show events as' },
+      ...SHOW_AS.map(([v, label, hint]) => ({ label, hint, icon: (c.showAs || 'busy') === v ? Check : undefined, onClick: () => api.patch(`/api/calendars/${c.id}`, { showAs: v }).then(reload) })),
+      'sep',
       { label: 'Export .ics', icon: Download, onClick: () => window.open(api.url(`/api/calendars/${c.id}/export.ics`)) },
       !c.readonly && { label: 'Import .ics', icon: Upload, onClick: () => fileRef.current.click() },
       c.source !== 'local' && { label: 'Refresh', icon: RefreshCw, onClick: () => api.post(`/api/calendars/${c.id}/refresh`).then(reload) },
@@ -122,6 +138,8 @@ function CalendarItem({ c, reload }) {
       <input type="checkbox" checked={c.enabled} style={{ accentColor: c.color }} onChange={(e) => api.patch(`/api/calendars/${c.id}`, { enabled: e.target.checked }).then(reload)} />
       <span className="truncate grow" title={c.readonly ? `${c.name} — read-only${c.lastSyncAt ? `, refreshed ${new Date(c.lastSyncAt).toLocaleString()}` : ''}` : c.name}>{c.name}</span>
       {c.syncError && <AlertTriangle size={13} color="var(--warning)" title={`Could not refresh: ${c.syncError}`} />}
+      {c.showAs === 'free' && <span className="faint small" title="Events are shown but do not make you busy">free</span>}
+      {c.showAs === 'info' && <Info size={12} className="faint" title="Just for information: shown faintly, never busy, no reminders" />}
       {c.readonly && <Lock size={12} className="faint" title="Read-only" />}
       {c.isDefault && <span className="faint small">default</span>}
       <input ref={fileRef} type="file" accept=".ics,text/calendar" hidden onChange={async (e) => {
@@ -138,17 +156,18 @@ function CalendarItem({ c, reload }) {
 // read-only calendars from a CalDAV server that is not one of the mail accounts (Nextcloud, iCloud, Fastmail, ...).
 function NewCalendarModal({ onClose, onDone }) {
   const [kind, setKind] = useState('local');
-  const [f, setF] = useState({ name: '', color: '#10b981', url: '', username: '', password: '' });
+  const [f, setF] = useState({ name: '', color: '#10b981', url: '', username: '', password: '', showAs: '' });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const save = async () => {
     setBusy(true);
     try {
       if (kind === 'caldav') {
-        const r = await api.post('/api/calendar-sources', { url: f.url.trim(), username: f.username || undefined, password: f.password || undefined, name: f.name || undefined });
+        const r = await api.post('/api/calendar-sources', { url: f.url.trim(), username: f.username || undefined, password: f.password || undefined, name: f.name || undefined, showAs: f.showAs || 'busy' });
         toast(`Added ${r.calendars} calendar${r.calendars === 1 ? '' : 's'} from ${r.name} (read-only)`);
       } else {
-        await api.post('/api/calendars', { name: f.name || (kind === 'link' ? 'Subscribed calendar' : 'Calendar'), color: f.color, url: kind === 'link' ? f.url.trim() : undefined });
+        await api.post('/api/calendars', { name: f.name || (kind === 'link' ? 'Subscribed calendar' : 'Calendar'), color: f.color, url: kind === 'link' ? f.url.trim() : undefined,
+          showAs: f.showAs || (kind === 'link' ? 'free' : 'busy') });
       }
       onDone();
     } catch (e) { toastError(e); } finally { setBusy(false); }
@@ -181,6 +200,10 @@ function NewCalendarModal({ onClose, onDone }) {
     </>}
     <label className="field">Name{kind === 'caldav' ? ' (optional)' : ''}<input className="input" value={f.name} onChange={set('name')} autoFocus={kind === 'local'} /></label>
     {kind !== 'caldav' && <label className="field">Color<input type="color" value={f.color} onChange={set('color')} /></label>}
+    <label className="field">Show its events as
+      <select className="input" value={f.showAs || (kind === 'link' ? 'free' : 'busy')} onChange={set('showAs')}>
+        {SHOW_AS.map(([v, label, hint]) => <option key={v} value={v}>{label} — {hint}</option>)}
+      </select></label>
   </Modal>;
 }
 
@@ -220,7 +243,7 @@ function MonthView({ from, date, events, onNew, onOpen, onDay }) {
             <div key={i} className={`month-cell ${d.getMonth() !== date.getMonth() ? 'other' : ''} ${s === today ? 'today' : ''}`} onDoubleClick={() => onNew(d)}>
               <span className="num" style={{ cursor: 'pointer' }} onClick={() => onDay(d)}>{d.getDate()}</span>
               {evs.slice(0, 4).map((ev) => (
-                <div key={ev.instanceId} className="ev-pill" style={ev.allDay ? { background: ev.color, color: '#fff' } : { color: 'var(--text)' }} onClick={() => onOpen(ev)} title={ev.title}>
+                <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={ev.allDay ? { background: ev.color, color: '#fff' } : { color: 'var(--text)' }} onClick={() => onOpen(ev)} title={ev.title}>
                   {!ev.allDay && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 4, background: ev.color, marginRight: 4 }} />}
                   {!ev.allDay && <span className="faint">{fmtTime(ev.start)} </span>}{ev.title}
                 </div>
@@ -304,7 +327,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
         {dayList.map((d, i) => {
           const s = d.getTime(), e = s + 864e5;
           return <div key={i} className="day-col" style={{ padding: 2, display: 'flex', flexDirection: 'column', gap: 2 }} onDoubleClick={() => onNew(s, true)}>
-            {allDay.filter((x) => x.start < e && x.end > s).map((ev) => <div key={ev.instanceId} className="ev-pill" style={{ background: ev.color, color: '#fff' }} onClick={() => onOpen(ev)}>{ev.title}</div>)}
+            {allDay.filter((x) => x.start < e && x.end > s).map((ev) => <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={{ background: ev.color, color: '#fff' }} onClick={() => onOpen(ev)}>{ev.title}</div>)}
           </div>;
         })}
       </div>
@@ -321,7 +344,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
                   const top = ((Math.max(ev.start, s) - s) / 3600e3) * HOUR_PX;
                   const height = Math.max(18, ((Math.min(ev.end, e) - Math.max(ev.start, s)) / 3600e3) * HOUR_PX - 2);
                   return (
-                    <div key={ev.instanceId} className={`ev-block ${ev.status}`} style={{ top, height, background: ev.color, left: `calc(${(col / n) * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)`, right: 'auto' }}
+                    <div key={ev.instanceId} className={`ev-block ${ev.status} show-${ev.showAs || 'busy'}`} style={{ top, height, '--ev': ev.color, background: ev.color, left: `calc(${(col / n) * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)`, right: 'auto' }}
                       onMouseDown={(m) => startDrag(m, ev, 'move')} title={`${ev.title}\n${fmtTime(ev.start)}–${fmtTime(ev.end)}${ev.location ? `\n${ev.location}` : ''}`}>
                       <div style={{ fontWeight: 600 }} className="truncate">{ev.title}</div>
                       {height > 30 && <div style={{ opacity: 0.9 }}>{fmtTime(ev.start)}–{fmtTime(ev.end)}{ev.location ? ` · ${ev.location}` : ''}</div>}
@@ -351,7 +374,7 @@ function Agenda({ events, onOpen }) {
         <div key={day} style={{ marginBottom: 14 }}>
           <div className="small" style={{ fontWeight: 700, color: startOfDay(new Date()).getTime() === day ? 'var(--accent)' : 'var(--text-2)', padding: '6px 0' }}>{new Date(day).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           {evs.map((e) => (
-            <div key={e.instanceId} className="list-row" style={{ borderRadius: 8 }} onClick={() => onOpen(e)}>
+            <div key={e.instanceId} className="list-row" style={{ borderRadius: 8, opacity: e.showAs === 'info' ? 0.6 : 1 }} onClick={() => onOpen(e)}>
               <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, background: e.color }} />
               <span className="small muted" style={{ width: 96 }}>{e.allDay ? 'All day' : `${fmtTime(e.start)} – ${fmtTime(e.end)}`}</span>
               <span className="grow truncate"><b>{e.title}</b>{e.location && <span className="faint"> · {e.location}</span>}</span>

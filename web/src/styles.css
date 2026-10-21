@@ -378,3 +378,9 @@ pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); p
 .addr-lines { display: grid; gap: 1px; margin-top: 1px; cursor: text; }
 .addr-line { display: flex; gap: 6px; line-height: 1.45; }
 .addr-label { flex: none; width: 26px; color: var(--text-3); }
+/* How a calendar's events count: free = light with a coloured edge (as Outlook shows free time), info = faint outline. */
+.ev-block.show-free { background: color-mix(in srgb, var(--ev) 22%, var(--panel)) !important; color: var(--text); border-left: 3px solid var(--ev); }
+.ev-block.show-info { background: transparent !important; border: 1px dashed var(--ev); color: var(--text-2); opacity: .7; box-shadow: none; }
+.ev-block.show-info:hover, .ev-pill.show-info:hover { opacity: 1; }
+.ev-pill.show-free { opacity: .8; }
+.ev-pill.show-info { background: transparent !important; color: var(--text-2) !important; border: 1px dashed var(--border); opacity: .7; }

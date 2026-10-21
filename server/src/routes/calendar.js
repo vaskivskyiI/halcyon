@@ -11,7 +11,8 @@ import { syncDav } from '../scheduler.js';
 import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 
 const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, sourceId: c.source_id || null, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
-  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null });
+  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
+const SHOW_AS = ['busy', 'free', 'info'];
 const sourceOut = (s) => ({ id: s.id, name: s.name, url: s.url, username: s.dav_user, lastSyncAt: s.last_sync_at, error: s.error,
   calendars: get('SELECT COUNT(*) AS n FROM calendars WHERE source_id = ?', s.id).n });
 
@@ -24,14 +25,15 @@ export default async function calendarRoutes(app) {
   });
 
   app.post('/api/calendars', async (req, reply) => {
-    const { name, color, url, space } = req.body || {};
+    const { name, color, url, space, showAs } = req.body || {};
     // url → read-only ICS subscription (holidays, Google / Outlook "secret iCal address", shared calendars). It is
     // loaded before it is added, so a wrong link is reported instead of giving an empty calendar. New calendars
     // belong to the active space.
     let ics = null;
     if (url) { try { ics = await fetchIcs(url); } catch (e) { return httpError(reply, 400, `Could not load the calendar: ${e.message}`); } }
-    const r = run('INSERT INTO calendars (user_id, name, color, source, url, readonly, space, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      req.user.id, name || 'Calendar', color || '#10b981', url ? 'subscription' : 'local', url || null, url ? 1 : 0, cleanSpace(space ?? reqSpace(req)), now());
+    const r = run('INSERT INTO calendars (user_id, name, color, source, url, readonly, space, show_as, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      req.user.id, name || 'Calendar', color || '#10b981', url ? 'subscription' : 'local', url || null, url ? 1 : 0, cleanSpace(space ?? reqSpace(req)),
+      SHOW_AS.includes(showAs) ? showAs : 'busy', now());
     if (ics) {
       importIcsInto(req.user.id, r.lastInsertRowid, ics);
       run('UPDATE calendars SET last_sync_at = ? WHERE id = ?', now(), r.lastInsertRowid);
@@ -43,12 +45,15 @@ export default async function calendarRoutes(app) {
   // ---- read-only CalDAV sources (calendars on another server: Nextcloud, iCloud, Fastmail, a shared calendar, ...)
   app.get('/api/calendar-sources', async (req) => all('SELECT * FROM calendar_sources WHERE user_id = ? ORDER BY id', req.user.id).map(sourceOut));
   app.post('/api/calendar-sources', async (req, reply) => {
-    const { url, username, password, name, space } = req.body || {};
+    const { url, username, password, name, space, showAs } = req.body || {};
     if (!/^https?:\/\//i.test(String(url || '').trim())) return httpError(reply, 400, 'Enter the CalDAV address (https://...)');
     const r = run('INSERT INTO calendar_sources (user_id, name, url, dav_user, dav_pass_enc, space, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       req.user.id, String(name || new URL(String(url).trim()).hostname).slice(0, 80), String(url).trim(), username || null, password ? encrypt(password) : null,
       cleanSpace(space ?? reqSpace(req)), now());
-    try { await syncCalendarSource(r.lastInsertRowid); } catch (e) {
+    try {
+      await syncCalendarSource(r.lastInsertRowid);
+      if (SHOW_AS.includes(showAs)) run('UPDATE calendars SET show_as = ? WHERE source_id = ?', showAs, r.lastInsertRowid);
+    } catch (e) {
       // Login refused or nothing found: a source that never worked is not kept.
       run('DELETE FROM calendars WHERE source_id = ?', r.lastInsertRowid);
       run('DELETE FROM calendar_sources WHERE id = ?', r.lastInsertRowid);
@@ -77,8 +82,9 @@ export default async function calendarRoutes(app) {
   app.patch('/api/calendars/:id', async (req, reply) => {
     const c = repo.userCalendar(req.user.id, req.params.id);
     if (!c) return httpError(reply, 404, 'Not found');
-    const { name, color, enabled, isDefault } = req.body || {};
+    const { name, color, enabled, isDefault, showAs } = req.body || {};
     if (isDefault) run('UPDATE calendars SET is_default = 0 WHERE user_id = ?', req.user.id);
+    if (SHOW_AS.includes(showAs)) run('UPDATE calendars SET show_as = ? WHERE id = ?', showAs, c.id);
     run('UPDATE calendars SET name = COALESCE(?, name), color = COALESCE(?, color), enabled = COALESCE(?, enabled), is_default = COALESCE(?, is_default) WHERE id = ?',
       name ?? null, color ?? null, enabled === undefined ? null : (enabled ? 1 : 0), isDefault ? 1 : null, c.id);
     notify(req.user.id, 'calendar:changed', {});
