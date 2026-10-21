@@ -8,7 +8,9 @@ import { toast, toastError, fmtListDate } from '../util.js';
 
 export default function Accounts() {
   const accounts = store.use((s) => s.accounts);
+  const user = store.use((s) => s.user);
   const [editing, setEditing] = useState(null);
+  const [oauthSetup, setOauthSetup] = useState(null);
   const [status, setStatus] = useState({});
   const [tests, setTests] = useState({});
   const loadStatus = () => api.get('/api/accounts/status').then((l) => setStatus(Object.fromEntries(l.map((x) => [x.id, x])))).catch(() => {});
@@ -46,7 +48,9 @@ export default function Accounts() {
         </div>
       ))}
       {!accounts.length && <div className="card empty">No accounts yet. Add your first mailbox to get started.</div>}
-      {editing && <AccountEditor account={editing.id ? editing : null} onClose={() => setEditing(null)} />}
+      {user?.isAdmin && <OAuthStatus onSetup={setOauthSetup} />}
+      {editing && <AccountEditor account={editing.id ? editing : null} onClose={() => setEditing(null)} onSetupOAuth={(p) => { setEditing(null); setOauthSetup(p); }} />}
+      {oauthSetup && <OAuthSetup provider={oauthSetup} onClose={() => setOauthSetup(null)} />}
     </div>
   );
 }
@@ -88,7 +92,7 @@ function AccountStatus({ st, test, account, reload }) {
   );
 }
 
-function AccountEditor({ account, onClose }) {
+function AccountEditor({ account, onClose, onSetupOAuth }) {
   const oauth = store.use((s) => s.oauth);
   const [step, setStep] = useState(account ? 'details' : 'email');
   const [f, setF] = useState(() => account ? {
@@ -102,10 +106,13 @@ function AccountEditor({ account, onClose }) {
   const set = (path, v) => setF((x) => { const n = structuredClone(x); const ks = path.split('.'); let o = n; ks.slice(0, -1).forEach((k) => (o = o[k])); o[ks.at(-1)] = v; return n; });
 
   const discover = async () => {
+    // Gmail / Google Workspace addresses get the Google step (sign-in or app password).
+    if (/@(gmail|googlemail)\.com$/i.test(f.email)) { setStep('google'); return; }
     setBusy(true);
     try {
       const d = await api.get(`/api/accounts/discover?email=${encodeURIComponent(f.email)}`);
       setDisc(d);
+      if (d.oauth === 'google') { setStep('google'); return; }
       setF((x) => ({ ...x, imap: { ...d.imap, user: f.email }, smtp: { ...d.smtp, user: f.email }, caldavUrl: d.caldav || '', carddavUrl: d.carddav || '' }));
       setStep('password');
     } catch (e) { toastError(e); } finally { setBusy(false); }
@@ -121,6 +128,23 @@ function AccountEditor({ account, onClose }) {
   const runTest = async () => {
     setBusy(true); setTest(null);
     try { const r = await api.post('/api/accounts/test', { ...body(), id: account?.id }); setTest(r); return r; } catch (e) { toastError(e); return null; } finally { setBusy(false); }
+  };
+
+  // Google with an app password: Gmail's IMAP/SMTP, then (optionally) the calendar's secret iCal address.
+  const [icalUrl, setIcalUrl] = useState('');
+  const saveGoogle = async () => {
+    const gm = { imap: { host: 'imap.gmail.com', port: 993, secure: true, user: f.email }, smtp: { host: 'smtp.gmail.com', port: 465, secure: true, user: f.email } };
+    const b = { ...f, imap: { ...gm.imap, password: f.password }, smtp: { ...gm.smtp, password: f.password } };
+    setBusy(true); setTest(null);
+    try {
+      const t = await api.post('/api/accounts/test', b);
+      setTest(t);
+      if (!t.imap?.ok || !t.smtp?.ok) return;
+      await api.post('/api/accounts', b);
+      if (icalUrl.trim()) await api.post('/api/calendars', { name: 'Google Calendar', url: icalUrl.trim(), showAs: 'busy' }).catch((e) => toastError(e));
+      toast('Google account added — syncing your mail…');
+      await loadAccounts(); loadFolders(); onClose();
+    } catch (e) { toastError(e); } finally { setBusy(false); }
   };
 
   const save = async () => {
@@ -151,14 +175,44 @@ function AccountEditor({ account, onClose }) {
 
   const footer = step === 'email'
     ? <><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!/@/.test(f.email) || busy} onClick={discover}>{busy && <Spinner size={14} />} Continue</button></>
-    : <><button className="btn" onClick={runTest} disabled={busy}>{busy && <Spinner size={14} />} Test connection</button><span className="grow" /><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>{account ? 'Save' : 'Add account'}</button></>;
+    : step === 'google'
+      ? <><button className="btn" onClick={() => setStep('email')}>Back</button><span className="grow" /><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={busy || !/@/.test(f.email) || !f.password} onClick={saveGoogle}>{busy && <Spinner size={14} />} Add with app password</button></>
+      : <><button className="btn" onClick={runTest} disabled={busy}>{busy && <Spinner size={14} />} Test connection</button><span className="grow" /><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>{account ? 'Save' : 'Add account'}</button></>;
 
   return (
     <Modal title={account ? `Edit ${account.email}` : 'Add email account'} onClose={onClose} wide footer={footer}>
       {step === 'email' && <>
+        {!account && <div className="provider-row">
+          <button className="provider" onClick={() => setStep('google')}><b>Google</b><span>Gmail, Google Workspace</span></button>
+          <button className="provider" onClick={() => (oauth.microsoft ? startOAuth('microsoft') : toast('Enter your Microsoft address below; sign-in with Microsoft can be set up by an administrator in Settings → Accounts.'))}><b>Microsoft</b><span>Outlook.com, Microsoft 365</span></button>
+          <div className="provider muted"><b>Other</b><span>any IMAP/SMTP mailbox — enter the address below</span></div>
+        </div>}
         <label className="field">Email address<input className="input" type="email" autoFocus value={f.email} onChange={(e) => set('email', e.target.value.trim())} onKeyDown={(e) => e.key === 'Enter' && /@/.test(f.email) && discover()} /></label>
         <label className="field">Your name (shown to recipients)<input className="input" value={f.displayName} onChange={(e) => set('displayName', e.target.value)} /></label>
         {(oauth.google || oauth.microsoft) && <div className="row">{oauth.google && <button className="btn" onClick={() => startOAuth('google')}>Sign in with Google</button>}{oauth.microsoft && <button className="btn" onClick={() => startOAuth('microsoft')}>Sign in with Microsoft</button>}</div>}
+      </>}
+      {step === 'google' && <>
+        <div className="card google-step">
+          <h3 style={{ margin: '0 0 4px' }}>Sign in with Google <span className="faint small">— recommended: mail, calendar and contacts</span></h3>
+          {oauth.google ? <button className="btn primary" onClick={() => startOAuth('google')}>Sign in with Google</button>
+            : <div className="small muted">Not set up on this server yet: it needs a (free) Google OAuth client, registered once.{' '}
+              {store.get().user?.isAdmin ? <button className="link-btn" onClick={() => onSetupOAuth?.('google')}>Set it up now (about 5 minutes)</button> : 'Ask your administrator to set it up in Settings → Accounts.'}</div>}
+        </div>
+        <h3 style={{ margin: '12px 0 4px' }}>…or use an app password <span className="faint small">— mail only, works right away</span></h3>
+        <ol className="small muted steps">
+          <li>Turn on 2-Step Verification for your Google account.</li>
+          <li>Create an app password at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a> (name it “Halcyon”) and paste it below.</li>
+          <li>In Gmail settings → “Forwarding and POP/IMAP”, make sure IMAP is enabled.</li>
+        </ol>
+        <div className="form-grid">
+          <label className="field">Gmail address<input className="input" type="email" value={f.email} onChange={(e) => set('email', e.target.value.trim())} /></label>
+          <label className="field">App password<input className="input" type="password" value={f.password} placeholder="xxxx xxxx xxxx xxxx" onChange={(e) => set('password', e.target.value.replace(/\s+/g, ''))} autoComplete="new-password" /></label>
+          <label className="field">Your name (shown to recipients)<input className="input" value={f.displayName} onChange={(e) => set('displayName', e.target.value)} /></label>
+          <label className="field">Google Calendar (optional, read-only)<input className="input" value={icalUrl} placeholder="Secret address in iCal format" onChange={(e) => setIcalUrl(e.target.value)} /></label>
+        </div>
+        <div className="small faint">Google Calendar does not accept app passwords. For your calendar: Google Calendar → settings of the calendar → “Integrate calendar” → copy the “Secret address in iCal format”.</div>
+        <TestResult />
       </>}
       {step === 'password' && <>
         <div className="small muted">Settings found ({disc?.source}): IMAP {f.imap.host}:{f.imap.port} · SMTP {f.smtp.host}:{f.smtp.port}. <a href="#" onClick={(e) => { e.preventDefault(); setStep('details'); }}>Edit manually</a></div>
@@ -199,6 +253,68 @@ function AccountEditor({ account, onClose }) {
           <Switch label="Sync this account" checked={f.syncEnabled} onChange={(v) => set('syncEnabled', v)} />
         </>}
       </>}
+    </Modal>
+  );
+}
+
+/** For administrators: whether "Sign in with Google / Microsoft" works on this server. */
+function OAuthStatus({ onSetup }) {
+  const [st, setSt] = useState(null);
+  useEffect(() => { api.get('/api/admin/oauth').then(setSt).catch(() => {}); }, []);
+  if (!st) return null;
+  const line = (p, label) => (
+    <div className="row small">
+      {st[p].configured ? <CheckCircle2 size={14} color="var(--success)" /> : <AlertTriangle size={14} color="var(--text-3)" />}
+      <span className="grow">Sign in with {label}: {st[p].configured ? `ready${st[p].source === 'env' ? ' (set in the server environment)' : ''}` : 'not set up'}</span>
+      {st[p].source !== 'env' && <button className="btn sm" onClick={() => onSetup(p)}>{st[p].configured ? 'Change' : 'Set up'}</button>}
+    </div>);
+  return <div className="card" style={{ padding: 12, display: 'grid', gap: 6 }}><b className="small">Server sign-in options (administrator)</b>{line('google', 'Google')}{line('microsoft', 'Microsoft')}</div>;
+}
+
+/** Registering this server as an OAuth client with Google / Microsoft, step by step. */
+function OAuthSetup({ provider, onClose }) {
+  const [st, setSt] = useState(null);
+  const [f, setF] = useState({ clientId: '', clientSecret: '', tenant: 'common' });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get('/api/admin/oauth').then((r) => { setSt(r); setF((x) => ({ ...x, clientId: r[provider].clientId || '', tenant: r[provider].tenant || 'common' })); }).catch(toastError); }, []);
+  const save = async (clear) => {
+    setBusy(true);
+    try {
+      await api.put(`/api/admin/oauth/${provider}`, clear ? { clientId: '' } : f);
+      const me = await api.get('/api/me'); store.set({ oauth: me.oauth });
+      toast(clear ? 'Removed' : `Sign in with ${provider === 'google' ? 'Google' : 'Microsoft'} is ready`);
+      onClose();
+    } catch (e) { toastError(e); } finally { setBusy(false); }
+  };
+  const uri = st?.redirectUri || '';
+  const insecure = /^http:\/\/(?!localhost|127\.)/.test(uri);
+  const copy = () => navigator.clipboard?.writeText(uri).then(() => toast('Copied'));
+  return (
+    <Modal title={`Set up sign-in with ${provider === 'google' ? 'Google' : 'Microsoft'}`} onClose={onClose} wide footer={<>
+      {st?.[provider]?.source === 'settings' && <button className="btn danger" disabled={busy} onClick={() => confirm('Remove this sign-in option? Accounts connected with it stop syncing until set up again.') && save(true)}>Remove</button>}
+      <span className="grow" /><button className="btn" onClick={onClose}>Cancel</button>
+      <button className="btn primary" disabled={busy || !f.clientId.trim() || !f.clientSecret.trim()} onClick={() => save(false)}>{busy && <Spinner size={14} />} Save</button>
+    </>}>
+      <div className="small muted">This is done once per Halcyon server; afterwards every user can add Google accounts with one click. The client secret is stored encrypted.</div>
+      <label className="field">Redirect address to register
+        <div className="row"><input className="input grow" readOnly value={uri} onFocus={(e) => e.target.select()} /><button className="btn sm" onClick={copy}>Copy</button></div></label>
+      {insecure && <div className="notice warn">{provider === 'google' ? 'Google' : 'Microsoft'} only accepts https addresses. Set <code>HALCYON_PUBLIC_URL=https://your-domain</code> in the server environment (deploy/pod.env), restart, and open this dialog again.</div>}
+      {provider === 'google' ? <ol className="small steps">
+        <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Google Cloud console</a> and create a project (e.g. “Halcyon”).</li>
+        <li>In <a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noreferrer">APIs &amp; Services → Library</a>, enable <b>CalDAV API</b> and <b>Google Contacts CardDAV API</b> (mail needs no extra API).</li>
+        <li>In <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noreferrer">OAuth consent screen</a>: choose <b>External</b>, enter an app name and your email. Add yourself under Test users, then press <b>Publish app</b> — while it is in “Testing”, Google signs you out every 7 days. Google will show “unverified app” once at sign-in; that is expected for a private server.</li>
+        <li>In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Credentials</a>: Create credentials → OAuth client ID → <b>Web application</b>, and add the redirect address above under “Authorized redirect URIs”.</li>
+        <li>Copy the Client ID and Client secret here.</li>
+      </ol> : <ol className="small steps">
+        <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noreferrer">Microsoft Entra → App registrations</a> → New registration (any account type you need), platform <b>Web</b>, redirect URI = the address above.</li>
+        <li>Under API permissions add <b>Office 365 Exchange Online</b> (or APIs my organization uses → “Office 365 Exchange Online”) delegated permissions <b>IMAP.AccessAsUser.All</b> and <b>SMTP.Send</b>, plus <b>offline_access</b>, <b>openid</b>, <b>email</b>, <b>profile</b>.</li>
+        <li>Under Certificates &amp; secrets create a client secret; copy its <b>value</b> and the Application (client) ID here. Tenant: <code>common</code>, or your organisation's tenant ID.</li>
+      </ol>}
+      <div className="form-grid">
+        <label className="field">Client ID<input className="input" value={f.clientId} onChange={(e) => setF({ ...f, clientId: e.target.value })} /></label>
+        <label className="field">Client secret<input className="input" type="password" value={f.clientSecret} onChange={(e) => setF({ ...f, clientSecret: e.target.value })} autoComplete="new-password" /></label>
+        {provider === 'microsoft' && <label className="field">Tenant<input className="input" value={f.tenant} onChange={(e) => setF({ ...f, tenant: e.target.value })} /></label>}
+      </div>
     </Modal>
   );
 }

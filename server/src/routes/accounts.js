@@ -6,7 +6,7 @@ import { discover } from '../mail/autoconfig.js';
 import { testAccount } from '../mail/connection.js';
 import { syncManager } from '../mail/sync.js';
 import { encrypt, randomToken } from '../util/crypto.js';
-import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri } from '../mail/oauth.js';
+import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient } from '../mail/oauth.js';
 import { syncDav } from '../scheduler.js';
 import { invalidate } from '../ai/memory.js';
 import { purgeMemory } from '../mail/pipeline.js';
@@ -55,7 +55,10 @@ export default async function accountRoutes(app) {
       const who = a.email;
       const st = syncManager.status(a.id);
       if (a.sync_enabled && !st?.connected && (a.sync_state === 'error' || st?.lastError)) {
-        out.push({ key: `imap:${a.id}`, level: 'error', accountId: a.id, title: `${who}: cannot connect to the mail server`, text: st?.lastError || a.sync_error || '', at: st?.lastErrorAt, actions: ['reconnect'] });
+        // An OAuth account whose sign-in expired or was revoked needs the user to sign in again.
+        const oauth = a.auth_type?.startsWith('oauth') ? a.auth_type.slice(6) : null;
+        out.push({ key: `imap:${a.id}`, level: 'error', accountId: a.id, provider: oauth, title: `${who}: cannot connect to the mail server`, text: st?.lastError || a.sync_error || '', at: st?.lastErrorAt,
+          actions: oauth ? ['reauth', 'reconnect'] : ['reconnect'] });
       }
       for (const [folder, err] of Object.entries(st?.folderErrors || {})) {
         out.push({ key: `folder:${a.id}:${folder}`, level: 'warn', accountId: a.id, title: `${who}: folder “${folder}” cannot be synchronised`, text: err });
@@ -159,6 +162,23 @@ export default async function accountRoutes(app) {
     await syncManager.restart(a.id);
     syncDav(a);
     return { ok: true };
+  });
+
+  // ---- OAuth client setup (administrators): needed once per server for "Sign in with Google / Microsoft".
+  app.get('/api/admin/oauth', { preHandler: requireUser }, async (req, reply) => {
+    if (!req.user.is_admin) return httpError(reply, 403, 'Admin only');
+    const out = (p) => { const c = oauthClient(p); return { configured: !!c.clientId, clientId: c.clientId, source: c.source, tenant: p === 'microsoft' ? c.tenant : undefined }; };
+    return { redirectUri: redirectUri(req), google: out('google'), microsoft: out('microsoft') };
+  });
+  app.put('/api/admin/oauth/:provider', { preHandler: requireUser }, async (req, reply) => {
+    if (!req.user.is_admin) return httpError(reply, 403, 'Admin only');
+    const p = req.params.provider;
+    if (!PROVIDERS[p]) return httpError(reply, 404, 'Unknown provider');
+    if (oauthClient(p).source === 'env') return httpError(reply, 400, 'This server sets it in its environment (GOOGLE_CLIENT_ID / MICROSOFT_CLIENT_ID)');
+    const { clientId, clientSecret, tenant } = req.body || {};
+    if (clientId && !clientSecret) return httpError(reply, 400, 'The client secret is needed too');
+    saveOAuthClient(p, { clientId, clientSecret, tenant });
+    return { ok: true, configured: !!clientId };
   });
 
   // ---- OAuth (Google / Microsoft)

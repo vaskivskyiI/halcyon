@@ -8,6 +8,10 @@ import { Spinner } from './common.jsx';
 // Mail server / sending problems, never silent: a red indicator in the rail with a panel that offers what can be done
 // (retry, save for later as a draft, reconnect). New problems also show a toast once.
 const ACTIONS = {
+  reauth: {
+    label: 'Sign in again', icon: RefreshCw,
+    run: (p) => { window.open(api.url(`/api/oauth/${p.provider}/start?accountId=${p.accountId}`), 'oauth', 'width=520,height=680'); },
+  },
   reconnect: { label: 'Reconnect', icon: RefreshCw, run: (p) => api.post(`/api/accounts/${p.accountId}/sync`).then(() => 'Reconnecting…') },
   test: { label: 'Check settings', icon: Settings, run: () => { navigate('#/settings/accounts'); store.set({ problemsOpen: false }); } },
   'retry-op': { label: 'Retry', icon: RefreshCw, run: (p) => api.post(`/api/accounts/${p.accountId}/ops/${p.opId}/retry`).then(() => 'Retrying…') },

@@ -1,7 +1,22 @@
-// OAuth2 (XOAUTH2) for Google and Microsoft mailboxes. Client IDs come from env config.
+// OAuth2 (XOAUTH2) for Google and Microsoft mailboxes. The OAuth client comes from env config, or else from what an
+// administrator saved in Settings → Accounts (stored encrypted in app_state).
 import { config } from '../config.js';
 import { encrypt, decrypt } from '../util/crypto.js';
 import { run, get } from '../db/index.js';
+
+/** { clientId, clientSecret, tenant, source: 'env' | 'settings' | null } */
+export function oauthClient(provider) {
+  const env = config.oauth[provider] || {};
+  if (env.clientId) return { ...env, source: 'env' };
+  const saved = get('SELECT value FROM app_state WHERE key = ?', `oauth:${provider}`)?.value;
+  const v = saved ? JSON.parse(decrypt(saved) || '{}') : {};
+  return { clientId: v.clientId || '', clientSecret: v.clientSecret || '', tenant: v.tenant || env.tenant || 'common', source: v.clientId ? 'settings' : null };
+}
+
+export function saveOAuthClient(provider, { clientId, clientSecret, tenant }) {
+  if (!clientId) { run('DELETE FROM app_state WHERE key = ?', `oauth:${provider}`); return; }
+  run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', `oauth:${provider}`, encrypt(JSON.stringify({ clientId: String(clientId).trim(), clientSecret: String(clientSecret || '').trim(), tenant: tenant || undefined })));
+}
 
 export const PROVIDERS = {
   google: {
@@ -15,8 +30,8 @@ export const PROVIDERS = {
     carddav: 'https://www.googleapis.com/.well-known/carddav',
   },
   microsoft: {
-    get authUrl() { return `https://login.microsoftonline.com/${config.oauth.microsoft.tenant}/oauth2/v2.0/authorize`; },
-    get tokenUrl() { return `https://login.microsoftonline.com/${config.oauth.microsoft.tenant}/oauth2/v2.0/token`; },
+    get authUrl() { return `https://login.microsoftonline.com/${oauthClient('microsoft').tenant}/oauth2/v2.0/authorize`; },
+    get tokenUrl() { return `https://login.microsoftonline.com/${oauthClient('microsoft').tenant}/oauth2/v2.0/token`; },
     scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email profile',
     extra: { prompt: 'select_account' },
     imap: { host: 'outlook.office365.com', port: 993, secure: true },
@@ -25,24 +40,28 @@ export const PROVIDERS = {
 };
 
 export const oauthAvailable = () => ({
-  google: !!config.oauth.google.clientId,
-  microsoft: !!config.oauth.microsoft.clientId,
+  google: !!oauthClient('google').clientId,
+  microsoft: !!oauthClient('microsoft').clientId,
 });
 
 export function redirectUri(req) {
-  const base = config.publicUrl || `${req.protocol}://${req.headers.host}`;
+  // Behind a TLS-terminating proxy (nginx) the request arrives as http; the proxy's X-Forwarded-Proto tells the
+  // address the browser used (Google and Microsoft only accept https redirect addresses).
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || req.protocol;
+  const base = config.publicUrl || `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`;
   return `${base}/api/oauth/callback`;
 }
 
 export function authorizeUrl(provider, state, redirect) {
   const p = PROVIDERS[provider];
-  const q = new URLSearchParams({ client_id: config.oauth[provider].clientId, redirect_uri: redirect, response_type: 'code', scope: p.scope, state, ...p.extra });
+  const q = new URLSearchParams({ client_id: oauthClient(provider).clientId, redirect_uri: redirect, response_type: 'code', scope: p.scope, state, ...p.extra });
   return `${p.authUrl}?${q}`;
 }
 
 async function tokenRequest(provider, params) {
   const p = PROVIDERS[provider];
-  const body = new URLSearchParams({ client_id: config.oauth[provider].clientId, client_secret: config.oauth[provider].clientSecret, ...params });
+  const c = oauthClient(provider);
+  const body = new URLSearchParams({ client_id: c.clientId, client_secret: c.clientSecret, ...params });
   const r = await fetch(p.tokenUrl, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
   const data = await r.json();
   if (!r.ok) throw new Error(`OAuth error: ${data.error_description || data.error || r.status}`);

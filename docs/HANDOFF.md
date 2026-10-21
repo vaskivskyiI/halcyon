@@ -294,3 +294,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   free = light with coloured edge, info = faint dashed, "Show informational events" toggle (per device).
 - `findFreeSlots` works in the user's zone (it used the server's setHours/getDay) and offers starts every 30 min,
   at most 4 per day.
+
+### Google accounts
+- OAuth client from env (GOOGLE_/MICROSOFT_CLIENT_ID/SECRET) or, if not set, saved by an administrator in
+  Settings → Accounts (`oauthClient()` / `saveOAuthClient()` in mail/oauth.js; app_state 'oauth:<provider>', encrypted).
+  `/api/admin/oauth` (GET status + redirect URI, PUT client). The dialog explains the Google Cloud / Entra steps
+  (Google: publish the consent screen, otherwise refresh tokens expire after 7 days; enable CalDAV + CardDAV APIs).
+- Redirect URI honours X-Forwarded-Proto/Host (nginx terminating TLS) unless HALCYON_PUBLIC_URL is set.
+- Add account → Google: sign-in (mail + calendar + contacts via CalDAV/CardDAV OAuth) or app password (Gmail IMAP/SMTP
+  presets) + optional secret iCal address as a read-only calendar. OAuth accounts that fail offer "Sign in again".
+- Not tested against real Google (no client in CI): the sign-in redirect is tested; token exchange and Google
+  CalDAV/CardDAV need a real account.
