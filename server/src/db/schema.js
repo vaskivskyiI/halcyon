@@ -281,4 +281,10 @@ export const migrations = [
   `
   ALTER TABLE calendars ADD COLUMN show_as TEXT DEFAULT 'busy';
   `,
+  // 16: who actually sent a message when it is not the From address ("Ana on behalf of Director"): the Sender header,
+  //     JSON { name, address }; '' when there is none worth showing (mailing lists, bounce addresses). NULL = not
+  //     read yet (older mail; filled in when the message is opened).
+  `
+  ALTER TABLE messages ADD COLUMN sender_json TEXT;
+  `,
 ];

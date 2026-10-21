@@ -6,6 +6,7 @@ import { db, get, run, all, json, now } from '../db/index.js';
 import { config } from '../config.js';
 import { sha1 } from '../util/crypto.js';
 import { htmlToText } from './sanitize.js';
+import { parseIcs } from '../calendar/ics.js';
 import { subjectKey, isReplySubject } from '../util/subject.js';
 import { logger } from '../util/log.js';
 
@@ -13,6 +14,38 @@ const log = logger('store');
 
 const addrList = (a) => (a ? (Array.isArray(a) ? a : [a]).flatMap((x) => x.value || []).map((v) => ({ name: v.name || '', address: (v.address || '').toLowerCase() })).filter((v) => v.address) : []);
 const cleanId = (s) => (s || '').trim().replace(/^<|>$/g, '');
+
+// The Sender header names who actually sent a message when that is not the From address ("Ana on behalf of the
+// Director"). Mailing lists and bulk-mail services set it to list / bounce addresses: those are not worth showing.
+const SYSTEM_SENDER = /(^|[-_.+])(bounces?|owner|request|noreply|no-reply|donotreply|mailer-daemon|postmaster|listserv|mailman|majordomo)([-_.+@]|$)/i;
+function actingSender(headers, from) {
+  const s = addrList(headers.get('sender'))[0];
+  if (!s || s.address === String(from.address || '').toLowerCase()) return '';
+  if (headers.has('list-id') || headers.has('list-post') || SYSTEM_SENDER.test(s.address)) return '';
+  return JSON.stringify(s);
+}
+
+/** Sender of older mail (stored before sender_json existed): read once from the raw headers, then kept. */
+export async function senderOf(m) {
+  if (m.sender_json != null) return m.sender_json;
+  let v = '';
+  const raw = readRaw(m);
+  if (raw) {
+    const end = raw.indexOf('\r\n\r\n');
+    try { v = actingSender((await parseRaw(raw.subarray(0, end > 0 ? end + 4 : Math.min(raw.length, 65536)))).headers, { address: m.from_addr }); } catch { /* unreadable: nothing to show */ }
+  }
+  run('UPDATE messages SET sender_json = ? WHERE id = ?', v, m.id);
+  m.sender_json = v;
+  return v;
+}
+
+/** Text of an invitation that has no body of its own (only calendar data): its description and location. */
+export function inviteText(ics) {
+  try {
+    const e = parseIcs(ics).events[0];
+    return e ? [e.description, e.location && `Location: ${e.location}`].filter(Boolean).join('\n\n') : '';
+  } catch { return ''; }
+}
 
 export function rawPathFor(accountId, raw) {
   const dir = path.join(config.mailStoreDir, String(accountId));
@@ -99,7 +132,7 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   const from = addrList(parsed.from)[0] || { name: '', address: '' };
   const to = addrList(parsed.to), cc = addrList(parsed.cc), bcc = addrList(parsed.bcc), replyTo = addrList(parsed.replyTo);
   const html = parsed.html || null;
-  const text = parsed.text || (html ? htmlToText(html) : '');
+  let text = parsed.text || (html ? htmlToText(html) : '');
   const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 240);
   let ics = null;
   const attachments = (parsed.attachments || []).map((a, i) => {
@@ -108,6 +141,8 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   });
   // Some clients put the invitation in an alternative body part rather than an attachment.
   if (!ics && /BEGIN:VCALENDAR/.test(text) && /METHOD:/.test(text)) ics = text.slice(text.indexOf('BEGIN:VCALENDAR'));
+  // An invitation sent as calendar data only: its description is the message.
+  if (!html && !text.trim() && ics) text = inviteText(ics);
   const realAttachments = attachments.filter((a) => !a.inline);
   const unsub = parsed.headers.get('list-unsubscribe');
   const unsubStr = unsub ? (typeof unsub === 'string' ? unsub : JSON.stringify(unsub)) : null;
@@ -121,12 +156,12 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   const id = db.transaction(() => {
     const r = run(`INSERT INTO messages (user_id, account_id, folder_id, uid, message_id, in_reply_to, references_json, thread_id, subject_key,
       subject, from_name, from_addr, to_json, cc_json, bcc_json, reply_to_json, date, snippet, body_text, body_html,
-      has_attachments, attachments_json, size, is_read, is_flagged, is_answered, is_draft, is_forwarded, raw_path, list_unsubscribe, calendar_ics, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      has_attachments, attachments_json, size, is_read, is_flagged, is_answered, is_draft, is_forwarded, raw_path, list_unsubscribe, calendar_ics, sender_json, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       account.user_id, account.id, folder.id, uid, messageId, inReplyTo || null, JSON.stringify(refs), threadId, key,
       parsed.subject || '', from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), JSON.stringify(replyTo),
       date, snippet, text, html, realAttachments.length ? 1 : 0, JSON.stringify(attachments), raw.length,
-      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics, now());
+      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics, actingSender(parsed.headers, from), now());
     const mid = r.lastInsertRowid;
     run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', mid, parsed.subject || '',
       `${from.name} ${from.address}`, [...to, ...cc].map((a) => `${a.name} ${a.address}`).join(' '), text.slice(0, 30000));
@@ -185,6 +220,7 @@ export function serializeMessage(m, extra = {}) {
     subject: m.subject, from: { name: m.from_name, address: m.from_addr }, to: json(m.to_json, []), cc: json(m.cc_json, []),
     bcc: json(m.bcc_json, []), replyTo: json(m.reply_to_json, []), date: m.date, snippet: m.snippet,
     hasAttachments: !!m.has_attachments, isRead: !!m.is_read, isFlagged: !!m.is_flagged, isAnswered: !!m.is_answered, isForwarded: !!m.is_forwarded, notOnServer: !!m.local_copy && m.uid == null,
+    onBehalfOf: m.sender_json ? json(m.sender_json, null) : null,
     isDraft: !!m.is_draft, snoozedUntil: m.snoozed_until, labels: json(m.labels_json, []), aiStatus: m.ai_status,
     hasInvite: !!m.calendar_ics, ...extra,
   };

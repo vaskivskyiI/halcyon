@@ -33,8 +33,20 @@ export function parseIcs(text, defaultTz = null) {
   try { return parseIcsInner(text); } finally { floatingTz = null; }
 }
 
+// Some senders put raw line breaks inside a value (a DESCRIPTION over several lines) instead of "\n": such lines are
+// joined to the property they belong to, so the invitation is still understood.
+function repairIcs(text) {
+  const out = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    if (out.length && line && !/^[ \t]/.test(line) && !/^[A-Za-z][A-Za-z0-9-]*[;:]/.test(line)) out[out.length - 1] += `\\n${line}`;
+    else out.push(line);
+  }
+  return out.join('\r\n');
+}
+
 function parseIcsInner(text) {
-  const jcal = ICAL.parse(text);
+  let jcal;
+  try { jcal = ICAL.parse(text); } catch { jcal = ICAL.parse(repairIcs(text)); }
   const comp = new ICAL.Component(jcal);
   registerTimezones(comp);
   const method = comp.getFirstPropertyValue('method') || null;

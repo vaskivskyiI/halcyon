@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -370,8 +370,12 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
       <div className="msg-card-head" onClick={toggle}>
         <Avatar name={m.from.name} email={m.from.address} />
         <div className="grow" style={{ minWidth: 0 }}>
-          <div className="row"><span className="who truncate">{m.from.name || m.from.address}</span>{expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
+          <div className="row">{m.onBehalfOf
+            ? <span className="who truncate" title={`${addrFull(m.onBehalfOf)} sent this on behalf of ${addrFull(m.from)}`}>{m.onBehalfOf.name || m.onBehalfOf.address} <span className="behalf">on behalf of</span> {m.from.name || m.from.address}</span>
+            : <span className="who truncate">{m.from.name || m.from.address}</span>}
+            {expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
           {expanded ? <div className="addr-lines" onClick={(e) => e.stopPropagation()}>
+            {m.onBehalfOf && <div className="small addr-line"><span className="addr-label">Sent by</span><span><b>{addrFull(m.onBehalfOf)}</b> on behalf of {addrFull(m.from)} — replies go to {addrFull((m.replyTo?.length ? m.replyTo : [m.from])[0])}</span></div>}
             <AddrLine label="To" list={m.to} empty="undisclosed recipients" />
             <AddrLine label="Cc" list={m.cc} />
             <AddrLine label="Bcc" list={m.bcc} />
@@ -490,14 +494,31 @@ function PlainBody({ text }) {
 function Invitation({ messageId, onChanged }) {
   const [inv, setInv] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null); // { response, text } while a note to the organiser is being written
+  const [openMenu, menuNode] = useMenu();
   useEffect(() => { api.get(`/api/messages/${messageId}/invitation`).then(setInv).catch(() => {}); }, [messageId]);
   if (!inv?.event) return null;
   const e = inv.event;
-  const respond = async (response) => {
+  const LABEL = { accept: 'Accepted', tentative: 'Tentatively accepted', decline: 'Declined' };
+  // sendReply false: only your calendar changes, the organiser is not told.
+  const respond = async (response, { sendReply = true, comment } = {}) => {
     setBusy(true);
-    try { await api.post(`/api/messages/${messageId}/invitation/respond`, { response }); toast(response === 'decline' ? 'Declined' : 'Added to your calendar'); setInv(await api.get(`/api/messages/${messageId}/invitation`)); onChanged?.(); } catch (err) { toastError(err); } finally { setBusy(false); }
+    try {
+      await api.post(`/api/messages/${messageId}/invitation/respond`, { response, sendReply, comment: comment || undefined });
+      toast(`${LABEL[response]}${sendReply && e.organizer?.email ? ` — response sent to ${e.organizer.name || e.organizer.email}` : ' — no response sent'}${response !== 'decline' ? '; it is in your calendar' : ''}`);
+      setNote(null);
+      setInv(await api.get(`/api/messages/${messageId}/invitation`));
+      onChanged?.();
+    } catch (err) { toastError(err); } finally { setBusy(false); }
   };
+  const choose = (ev, response) => openMenu(ev, [
+    { label: 'Send the response now', icon: Send, onClick: () => respond(response) },
+    { label: 'Add a note, then send…', icon: Pencil, onClick: () => setNote({ response, text: '' }) },
+    { label: "Don't send a response", icon: BellOff, hint: 'only your calendar', onClick: () => respond(response, { sendReply: false }) },
+  ]);
   const status = inv.existingStatus || inv.myStatus;
+  const style = (r) => ({ accept: status === 'accepted' || status === 'confirmed', tentative: status === 'tentative', decline: status === 'declined' || status === 'cancelled' }[r]
+    ? { borderColor: `var(--${r === 'accept' ? 'success' : r === 'tentative' ? 'warning' : 'danger'})`, color: `var(--${r === 'accept' ? 'success' : r === 'tentative' ? 'warning' : 'danger'})` } : {});
   return (
     <div className="invite-card">
       <div className="row" style={{ alignItems: 'flex-start' }}>
@@ -511,13 +532,21 @@ function Invitation({ messageId, onChanged }) {
         </div>
       </div>
       {inv.method === 'REQUEST' && (
-        <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn sm" disabled={busy} onClick={() => respond('accept')} style={status === 'accepted' || status === 'confirmed' ? { borderColor: 'var(--success)', color: 'var(--success)' } : {}}><Check size={14} /> Accept</button>
-          <button className="btn sm" disabled={busy} onClick={() => respond('tentative')} style={status === 'tentative' ? { borderColor: 'var(--warning)', color: 'var(--warning)' } : {}}><HelpCircle size={14} /> Maybe</button>
-          <button className="btn sm" disabled={busy} onClick={() => respond('decline')} style={status === 'declined' || status === 'cancelled' ? { borderColor: 'var(--danger)', color: 'var(--danger)' } : {}}><XIcon size={14} /> Decline</button>
-          {status && status !== 'needs-action' && <span className="small faint">Your response: {status}</span>}
+        <div className="row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+          <button className="btn sm" disabled={busy} onClick={(ev) => choose(ev, 'accept')} style={style('accept')}><Check size={14} /> Accept <ChevronDown size={12} /></button>
+          <button className="btn sm" disabled={busy} onClick={(ev) => choose(ev, 'tentative')} style={style('tentative')}><HelpCircle size={14} /> Maybe <ChevronDown size={12} /></button>
+          <button className="btn sm" disabled={busy} onClick={(ev) => choose(ev, 'decline')} style={style('decline')}><XIcon size={14} /> Decline <ChevronDown size={12} /></button>
+          {status && status !== 'needs-action' && <span className="small faint">Your answer: {{ confirmed: 'accepted', accepted: 'accepted', tentative: 'maybe', declined: 'declined', cancelled: 'declined' }[status] || status}</span>}
         </div>
       )}
+      {note && (
+        <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+          <textarea className="input" rows={3} autoFocus placeholder={`Note to ${e.organizer?.name || e.organizer?.email || 'the organiser'} (sent with “${LABEL[note.response]}”)`} value={note.text} onChange={(ev) => setNote({ ...note, text: ev.target.value })} />
+          <div className="row"><span className="grow" /><button className="btn sm" onClick={() => setNote(null)}>Cancel</button>
+            <button className="btn sm primary" disabled={busy} onClick={() => respond(note.response, { comment: note.text.trim() })}><Send size={13} /> {LABEL[note.response]} and send</button></div>
+        </div>
+      )}
+      {menuNode}
     </div>
   );
 }

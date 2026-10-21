@@ -1,7 +1,7 @@
 import { db, get, all, run, json, now, update } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { ids, httpError } from './util.js';
-import { serializeMessage, readRaw, parseRaw, messageRow } from '../mail/store.js';
+import { serializeMessage, readRaw, parseRaw, messageRow, senderOf, inviteText } from '../mail/store.js';
 import { sanitizeEmailHtml, htmlToText } from '../mail/sanitize.js';
 import * as actions from '../mail/actions.js';
 import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft } from '../mail/send.js';
@@ -20,7 +20,7 @@ import { CATEGORIES } from '../ai/prompts.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
-  m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
+  m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
   i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
@@ -242,7 +242,7 @@ export default async function mailRoutes(app) {
     const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
     const folder = get('SELECT id, name, special_use FROM folders WHERE id = ?', m.folder_id);
     return serializeMessage(m, {
-      html, text: m.body_text, blockedRemote, attachments: json(m.attachments_json, []).filter((a) => !a.inline),
+      html, text: m.body_text || (!m.body_html && m.calendar_ics ? inviteText(m.calendar_ics) : m.body_text), blockedRemote, attachments: json(m.attachments_json, []).filter((a) => !a.inline),
       listUnsubscribe: m.list_unsubscribe, insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
       senderContactId: sender?.id || null,
     });
@@ -264,6 +264,7 @@ export default async function mailRoutes(app) {
   app.get('/api/messages/:id', async (req, reply) => {
     const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!m) return httpError(reply, 404, 'Not found');
+    await senderOf(m);
     return { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) };
   });
 
@@ -293,6 +294,7 @@ export default async function mailRoutes(app) {
     const seen = new Set();
     const msgs = rows.filter((m) => (seen.has(m.message_id) ? false : seen.add(m.message_id)));
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
+    for (const m of msgs) await senderOf(m);
     return { messages: msgs.map((m) => fullMessage(req.user.id, m, req.query.images === '1')), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
   });
 

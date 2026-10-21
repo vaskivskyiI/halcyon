@@ -305,3 +305,12 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   presets) + optional secret iCal address as a read-only calendar. OAuth accounts that fail offer "Sign in again".
 - Not tested against real Google (no client in CI): the sign-in redirect is tested; token exchange and Google
   CalDAV/CardDAV need a real account.
+
+### On behalf of, invitations (migration 16)
+- `messages.sender_json`: the Sender header when it differs from From and is not a list / bounce address
+  (`actingSender` in store.js); older mail is filled in when opened (`senderOf`). API `onBehalfOf`; reader header
+  "Sender on behalf of From" + "Sent by … — replies go to …"; list row "· sent by …".
+- Invitations that are only calendar data show the event description (+ location) as the message (`inviteText`, at
+  ingest and when shown). `parseIcs` repairs raw line breaks inside values before giving up.
+- Accept / Maybe / Decline each offer: send the response now, add a note then send, or don't send (calendar only);
+  the API already took `sendReply` / `comment`.

@@ -500,7 +500,8 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
       <div className="body">
         <div className="from">
           {important && <Flame size={13} className="imp-icon" title={`Important (priority ${ai.priority})`} />}
-          <span className="truncate">{m.folder?.specialUse === '\\Sent' ? `To: ${m.to.map((a) => a.name || a.address).join(', ')}` : m.from.name || m.from.address}</span>
+          <span className="truncate">{m.folder?.specialUse === '\\Sent' ? `To: ${m.to.map((a) => a.name || a.address).join(', ')}` : m.from.name || m.from.address}
+            {m.onBehalfOf && m.folder?.specialUse !== '\\Sent' && <span className="faint behalf-note"> · sent by {m.onBehalfOf.name || m.onBehalfOf.address}</span>}</span>
           {threaded && m.threadCount > 1 && <span className="faint small">{m.threadCount}</span>}
           <span className="date">{m.snoozedUntil ? <span title="Snoozed until"><Clock size={11} /> {fmtListDate(m.snoozedUntil)}</span> : fmtListDate(m.date)}</span>
         </div>
