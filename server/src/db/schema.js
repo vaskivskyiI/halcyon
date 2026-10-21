@@ -287,4 +287,9 @@ export const migrations = [
   `
   ALTER TABLE messages ADD COLUMN sender_json TEXT;
   `,
+  // 17: how a requested action was settled: 'done' or 'skipped' (the user decided not to act), when dismissed_at is set.
+  `
+  ALTER TABLE ai_insights ADD COLUMN resolution TEXT;
+  UPDATE ai_insights SET resolution = 'done' WHERE dismissed_at IS NOT NULL AND needs_action = 1;
+  `,
 ];

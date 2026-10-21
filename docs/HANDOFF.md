@@ -314,3 +314,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   ingest and when shown). `parseIcs` repairs raw line breaks inside values before giving up.
 - Accept / Maybe / Decline each offer: send the response now, add a note then send, or don't send (calendar only);
   the API already took `sendReply` / `comment`.
+- Requested actions are settled as 'done' or 'skipped' ("Not doing it"): `ai_insights.resolution` (migration 17)
+  with `dismissed_at`; reader shows which and when, with Undo; list menu "Action: done / not doing it";
+  search `is:done`, `is:skipped`.
+- round16 checks that every `api.<method>()` used in web/src exists in web/src/api.js (an `api.put` call broke the
+  OAuth setup dialog).

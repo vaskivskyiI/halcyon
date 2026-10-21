@@ -226,7 +226,13 @@ export default function Reader({ id, view }) {
 
         {settings.ai.enabled && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply}
-          onDone={async () => { await api.post(`/api/messages/${latest.id}/dismiss`, {}).catch(toastError); toast('Marked as done'); load(); }} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
+          onDone={async (resolution = 'done', undo = false) => {
+            try {
+              await api.post(`/api/messages/${latest.id}/dismiss`, undo ? { dismissed: false } : { resolution });
+              toast(undo ? 'Back in Action needed' : resolution === 'skipped' ? 'Noted: not doing it — removed from Action needed' : 'Marked as done');
+              load();
+            } catch (e) { toastError(e); }
+          }} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
             setAiWorking(true);
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
@@ -285,8 +291,13 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       {menuNode}
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
       {ins?.needsAction && !ins.expired && <div className={`notice action-needed ${ins.dismissed ? 'done' : ''}`} style={{ margin: '8px 0 0' }}>
-        <ClipboardCheck size={15} /><span className="grow"><b>Action needed{ins.needsReply ? '' : ' (no reply needed)'}:</b> {ins.actionSummary || 'see the email'}</span>
-        {!ins.dismissed && <button className="btn sm" title="Done — removes it from Action needed and the brief" onClick={() => onDone()}>✓ Done</button>}
+        <ClipboardCheck size={15} />
+        <span className="grow"><b>{ins.dismissed ? (ins.resolution === 'skipped' ? 'Not doing it' : 'Done') : `Action needed${ins.needsReply ? '' : ' (no reply needed)'}`}:</b> {ins.actionSummary || 'see the email'}
+          {ins.dismissed && ins.resolvedAt && <span className="faint"> · {ins.resolution === 'skipped' ? 'decided' : 'marked done'} {new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}</span>}</span>
+        {ins.dismissed ? <button className="btn sm ghost" title="Put it back in Action needed" onClick={() => onDone(null, true)}>Undo</button> : <>
+          <button className="btn sm" title="You did it — it leaves Action needed and the brief" onClick={() => onDone('done')}>✓ Done</button>
+          <button className="btn sm ghost" title="You decided not to act on it — it leaves Action needed and the brief, and stays recorded as not done" onClick={() => onDone('skipped')}>Not doing it</button>
+        </>}
       </div>}
       {ins?.requests?.map((rq, i) => (
         <div key={i} className="notice" style={{ display: 'block', margin: '8px 0 0' }}>

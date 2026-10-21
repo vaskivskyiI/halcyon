@@ -38,6 +38,8 @@ export function serializeInsight(r) {
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
     needsAction: !!r.needs_action, actionSummary: r.action_summary || null,
     topic: r.topic || null, dismissed: !!r.dismissed_at,
+    // How a requested action was settled ('done' | 'skipped') and when.
+    resolution: r.dismissed_at ? r.resolution || 'done' : null, resolvedAt: r.dismissed_at || null,
   };
 }
 

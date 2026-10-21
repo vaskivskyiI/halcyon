@@ -369,6 +369,17 @@ function MessageList({ view, openId, onMenu }) {
     } catch (e) { toastError(e); }
   };
 
+  // Requested actions settled from the list: done, or deliberately not acted on.
+  const settleMany = async (ids, resolution) => {
+    try {
+      for (const id of ids) await api.post(`/api/messages/${id}/dismiss`, { resolution });
+      setItems((cur) => (view === 'needsaction' ? cur.filter((x) => !ids.includes(x.id)) : cur.map((x) => (ids.includes(x.id) && x.ai ? { ...x, ai: { ...x.ai, needsAction: false } } : x))));
+      setSelected(new Set());
+      toast(resolution === 'skipped' ? `Not doing it — ${ids.length} removed from Action needed` : `Done — ${ids.length} removed from Action needed`);
+      loadFolders();
+    } catch (e) { toastError(e); }
+  };
+
   const needsReplyMany = async (ids, value) => {
     try {
       await api.post('/api/messages/needs-reply', { ids, value, threads: threaded });
@@ -389,6 +400,8 @@ function MessageList({ view, openId, onMenu }) {
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
       { label: m.isFlagged ? 'Unflag' : 'Flag', icon: Star, onClick: () => act(m.isFlagged ? 'unflag' : 'flag', {}, ids) },
       { label: 'Create task…', icon: ClipboardCheck, onClick: () => store.set({ taskDialog: m.id }) },
+      m.ai?.needsAction && { label: 'Action: done', icon: ClipboardCheck, onClick: () => settleMany(ids, 'done') },
+      m.ai?.needsAction && { label: 'Action: not doing it', icon: X, onClick: () => settleMany(ids, 'skipped') },
       { label: 'Mark as needs reply', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, true) },
       { label: 'Remove “needs reply”', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, false) },
       settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },
@@ -648,7 +661,7 @@ function SearchFilters({ query, onChange }) {
       <select className="input" value={get('newer_than')} onChange={(e) => set('newer_than', e.target.value)} title="Date">
         <option value="">Any time</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="1y">Last year</option>
       </select>
-      {[['is:needsreply', 'Needs reply'], ['is:action', 'Action needed'], ['is:unread', 'Unread'], ['has:attachment', 'Attachment']].map(([tok, label]) => (
+      {[['is:needsreply', 'Needs reply'], ['is:action', 'Action needed'], ['is:done', 'Done'], ['is:skipped', 'Not doing it'], ['is:unread', 'Unread'], ['has:attachment', 'Attachment']].map(([tok, label]) => (
         <button key={tok} type="button" className={`chip clickable ${has(tok) ? 'on' : ''}`} onClick={() => toggle(tok)}>{label}</button>))}
     </div>
   );

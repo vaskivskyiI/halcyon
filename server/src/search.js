@@ -34,7 +34,10 @@ export function buildWhere(userId, f, sc = null) {
   for (const { val, neg } of f.has || []) if (/attach/.test(val)) add(`m.has_attachments = ${neg ? 0 : 1}`);
   for (const { val, neg } of f.is || []) {
     const map = { unread: 'm.is_read = 0', read: 'm.is_read = 1', flagged: 'm.is_flagged = 1', starred: 'm.is_flagged = 1', answered: 'm.is_answered = 1', snoozed: 'm.snoozed_until IS NOT NULL', important: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.priority >= 70)', needsreply: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_reply = 1)',
-      action: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_action = 1 AND i.dismissed_at IS NULL)', needsaction: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_action = 1 AND i.dismissed_at IS NULL)' };
+      action: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_action = 1 AND i.dismissed_at IS NULL)', needsaction: 'EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.needs_action = 1 AND i.dismissed_at IS NULL)',
+      // Settled requests: done by the user, or deliberately not acted on.
+      done: "EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.dismissed_at IS NOT NULL AND COALESCE(i.resolution, 'done') = 'done')",
+      skipped: "EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id AND i.dismissed_at IS NOT NULL AND i.resolution = 'skipped')" };
     if (map[val]) where.push(neg ? `NOT (${map[val]})` : map[val]);
   }
   for (const { val } of f.in || []) {

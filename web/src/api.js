@@ -33,6 +33,7 @@ export const api = {
   get: (u) => request('GET', u),
   post: (u, b = {}) => request('POST', u, b),
   patch: (u, b = {}) => request('PATCH', u, b),
+  put: (u, b = {}) => request('PUT', u, b),
   del: (u) => request('DELETE', u),
   url: (u) => base + u,
 };

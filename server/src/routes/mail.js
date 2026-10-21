@@ -378,7 +378,10 @@ export default async function mailRoutes(app) {
   app.post('/api/messages/:id/dismiss', async (req, reply) => {
     const m = get('SELECT id, thread_id FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!m) return httpError(reply, 404, 'Not found');
-    run('UPDATE ai_insights SET dismissed_at = ? WHERE message_id = ?', req.body?.dismissed === false ? null : Date.now(), m.id);
+    // resolution: 'done' (the user did it) or 'skipped' (decided not to act); both leave Action needed and the brief.
+    const undo = req.body?.dismissed === false;
+    const resolution = req.body?.resolution === 'skipped' ? 'skipped' : 'done';
+    run('UPDATE ai_insights SET dismissed_at = ?, resolution = ? WHERE message_id = ?', undo ? null : Date.now(), undo ? null : resolution, m.id);
     notify(req.user.id, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) });
     return { ok: true };
   });
