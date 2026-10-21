@@ -79,6 +79,22 @@ export default function CalendarView() {
     if (ev.rrule && ev.occurrence) setScopeAsk({ onPick: doIt, onCancel: load }); else doIt();
   };
 
+  // Scrolling moves through time: the wheel in month view; a sideways swipe or Shift+wheel in every view (the wheel
+  // itself scrolls the hours in day/week view and the list in agenda view). Throttled so one gesture moves one step.
+  const wheel = useRef({ acc: 0, t: 0 });
+  const onWheel = (e) => {
+    if (e.ctrlKey || e.target.closest('.modal, input, select, textarea')) return;
+    const sideways = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    const d = sideways ? e.deltaX : e.shiftKey || view === 'month' ? e.deltaY : 0;
+    if (!d) return;
+    const w = wheel.current;
+    if (Date.now() - w.t < 450) return;
+    w.acc += d;
+    if (Math.abs(w.acc) < 60) return;
+    step(w.acc > 0 ? 1 : -1);
+    w.acc = 0; w.t = Date.now();
+  };
+
   const visibleCals = calendars.filter((c) => c.enabled);
   // Calendars shown "just for information" can be hidden with one click (per device) and shown when needed.
   const [hideInfo, setHideInfo] = useState(() => { try { return localStorage.getItem('cal.hideInfo') === '1'; } catch { return false; } });
@@ -97,7 +113,7 @@ export default function CalendarView() {
             <input type="checkbox" checked={!hideInfo} onChange={toggleInfo} /> Show informational events</label>}
         </div>
       </aside>
-      <section className="cal">
+      <section className="cal" onWheel={onWheel}>
         <div className="cal-head">
           <button className="btn" onClick={() => setDate(new Date())}>Today</button>
           <button className="icon-btn" onClick={() => step(-1)} aria-label="Previous"><ChevronLeft size={18} /></button>
@@ -441,7 +457,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   const [overlaps, setOverlaps] = useState([]);
   useEffect(() => {
     if (ev.allDay || !ev.start || !ev.end || readonly) { setOverlaps([]); return undefined; }
-    const t = setTimeout(() => api.get(`/api/events?from=${ev.start}&to=${ev.end}`).then((list) => setOverlaps(list.filter((o) => o.busy !== false && !o.allDay && o.end - o.start < 864e5
+    const t = setTimeout(() => api.get(`/api/events?from=${ev.start}&to=${ev.end}&allSpaces=1`).then((list) => setOverlaps(list.filter((o) => o.busy !== false && !o.allDay && o.end - o.start < 864e5
       && o.start < ev.end && o.end > ev.start && !(isExisting && o.id === ev.id && (!ev.occurrence || o.start === ev.occurrence))))).catch(() => setOverlaps([])), 250);
     return () => clearTimeout(t);
   }, [ev.start, ev.end, ev.allDay]);
@@ -498,7 +514,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
       {overlaps.length > 0 && (
         <div className="banner warn overlap">
           <AlertTriangle size={15} />
-          <span className="grow">Overlaps with {overlaps.slice(0, 3).map((o, i) => <span key={o.instanceId || o.id}>{i ? ', ' : ''}<b>{o.title || '(no title)'}</b> {fmtTime(o.start)}–{fmtTime(o.end)}{o.calendarName ? ` (${o.calendarName})` : ''}</span>)}
+          <span className="grow">Overlaps with {overlaps.slice(0, 3).map((o, i) => <span key={o.instanceId || o.id}>{i ? ', ' : ''}<b>{o.title || '(no title)'}</b> {fmtTime(o.start)}–{fmtTime(o.end)}{o.calendarName ? ` (${o.calendarName}${o.space && o.space !== store.get().space ? ` · ${o.space}` : ''})` : ''}</span>)}
             {overlaps.length > 3 ? ` and ${overlaps.length - 3} more` : ''}</span>
           {!ev.allDay && <button className="btn sm" onClick={findTimes}>Find a free time</button>}
         </div>

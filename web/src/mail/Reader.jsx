@@ -44,6 +44,7 @@ export default function Reader({ id, view }) {
       }
       const t = { ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m };
       setThread(t);
+      store.set({ focusAccountId: m.accountId }); // new mail defaults to the account of the message being read
       const last = data.messages[data.messages.length - 1];
       const ex = new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]);
       setExpanded(ex);

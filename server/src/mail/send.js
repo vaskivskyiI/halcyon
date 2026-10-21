@@ -22,7 +22,9 @@ const normAddrs = (list) => (list || []).map((a) => (typeof a === 'string' ? { n
  *            inReplyToId?, forwardOfId?, icalEvent?, requestReadReceipt?, priority? }
  */
 export async function buildMime(account, p) {
-  const fromAddr = p.from?.address || account.email;
+  // From: the account's address or one of its aliases — nothing else, whatever the client sends.
+  const allowed = [account.email, ...json(account.aliases_json, []).map((x) => x?.address || x)].filter(Boolean).map((x) => String(x).toLowerCase());
+  const fromAddr = allowed.includes(String(p.from?.address || '').toLowerCase()) ? p.from.address : account.email;
   const fromName = p.from?.name ?? account.display_name ?? '';
   const headers = {};
   let inReplyTo, references;

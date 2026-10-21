@@ -189,6 +189,11 @@ function MessageList({ view, openId, onMenu }) {
   const setSort = (s) => { setSortState(s); try { localStorage.setItem('halcyon.sort', JSON.stringify(s)); } catch { /* private mode */ } };
   const byDate = sort.key === 'date' && sort.dir === 'desc';
 
+  // A folder of one account puts that account in focus (new mail defaults to it).
+  useEffect(() => {
+    const acc = folders.accounts.find((a) => a.folders.some((f) => `f${f.id}` === view));
+    if (acc) store.set({ focusAccountId: acc.accountId });
+  }, [view, folders]);
   const isInboxView = view === 'unified' || (view.startsWith('f') && folders.accounts.some((a) => a.folders.some((f) => `f${f.id}` === view && f.specialUse === '\\Inbox')));
   // The list is mounted per view (key): the tab chosen last time in this view is kept; until folders are known, wait.
   const effectiveTab = tab || (isInboxView && settings.mail.focusedInbox ? 'focused' : 'all');

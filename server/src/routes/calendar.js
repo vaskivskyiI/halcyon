@@ -130,10 +130,16 @@ export default async function calendarRoutes(app) {
   app.get('/api/events', async (req) => {
     const from = Number(req.query.from) || Date.now() - 7 * 864e5;
     const to = Number(req.query.to) || from + 42 * 864e5;
-    const sc = scope(req.user.id, reqSpace(req));
+    // allSpaces=1: one person, one schedule — overlap checks look at every space, and say which one an event is in.
+    const all = req.query.allSpaces === '1';
+    const sc = all ? null : scope(req.user.id, reqSpace(req));
     let ids = req.query.calendars ? String(req.query.calendars).split(',').map(Number) : null;
     if (sc) ids = (ids || sc.calendarIds).filter((id) => sc.calendarIds.includes(id));
-    return ids && !ids.length ? [] : repo.listRange(req.user.id, from, to, ids);
+    if (ids && !ids.length) return [];
+    const list = repo.listRange(req.user.id, from, to, ids);
+    if (!all) return list;
+    const spaces = spaceMap(req.user.id);
+    return list.map((e) => ({ ...e, space: spaces.calendars.get(e.calendarId) || '' }));
   });
 
   app.get('/api/events/search', async (req) => {

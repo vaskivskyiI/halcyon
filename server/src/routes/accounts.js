@@ -194,7 +194,17 @@ export default async function accountRoutes(app) {
     const { state, code, error } = req.query;
     const p = pendingOAuth.get(state);
     pendingOAuth.delete(state);
-    const done = (msg) => reply.type('text/html').send(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:40px"><p>${msg}</p><script>setTimeout(()=>{ if (window.opener) { window.opener.postMessage({type:'halcyon-oauth'}, '*'); window.close(); } else location.href='/#/settings/accounts'; }, 800)</script>`);
+    // Google / Microsoft sign-in pages cut the link to the opening window (window.opener), so the result is also told
+    // through a same-origin BroadcastChannel; the window then closes itself, or asks to be closed when it may not.
+    const done = (msg, ok = false) => reply.type('text/html').send(`<!doctype html><meta charset="utf-8"><title>Halcyon</title>
+<body style="font-family:system-ui;padding:40px;line-height:1.5"><p>${msg}</p><p id="c" style="color:#5b6474;display:none">You can close this window now.</p>
+<script>
+const m = { type: 'halcyon-oauth', ok: ${ok ? 'true' : 'false'} };
+try { new BroadcastChannel('halcyon-oauth').postMessage(m); } catch (e) {}
+try { localStorage.setItem('halcyon-oauth', JSON.stringify({ ...m, t: Date.now() })); } catch (e) {}
+try { window.opener && window.opener.postMessage(m, location.origin); } catch (e) {}
+setTimeout(() => { window.close(); setTimeout(() => { document.getElementById('c').style.display = 'block'; }, 300); }, ${ok ? 600 : 2500});
+</script>`);
     if (!p || Date.now() - p.t > 15 * 60e3) return done('Sign-in session expired. Please try again.');
     if (error) return done(`Sign-in failed: ${String(error).replace(/[<>]/g, '')}`);
     try {
@@ -213,7 +223,7 @@ export default async function accountRoutes(app) {
         syncManager.start(account.id);
         if (prov.caldav || prov.carddav) syncDav(userAccount(p.userId, account.id));
       }
-      return done(`Connected ${email}. You can close this window.`);
+      return done(`Connected ${String(email).replace(/[<>]/g, '')}.`, true);
     } catch (e) {
       return done(`Sign-in failed: ${String(e.message).replace(/[<>]/g, '')}`);
     }

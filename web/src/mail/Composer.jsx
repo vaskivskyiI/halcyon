@@ -20,6 +20,21 @@ const patchComposer = (id, patch) => store.set((s) => ({ composers: s.composers.
 
 const mineSet = (accounts) => new Set(accounts.flatMap((a) => [a.email.toLowerCase(), ...(a.aliases || []).map((x) => (x.address || x).toLowerCase())]));
 
+// Every address the user can send from: each account's own address and its aliases.
+const identities = (accounts) => accounts.flatMap((a) => [{ accountId: a.id, address: a.email, name: a.displayName || '' },
+  ...(a.aliases || []).map((x) => ({ accountId: a.id, address: x.address || x, name: x.name || a.displayName || '' }))]);
+
+/** The identity a message was sent to (one of the user's addresses or aliases among its recipients) — replies go out
+ *  from it — else the account it is stored in. */
+export function receivingIdentity(msg, accounts) {
+  const ids = identities(accounts);
+  const rcpt = [...(msg.to || []), ...(msg.cc || []), ...(msg.bcc || [])].map((a) => String(a.address || '').toLowerCase());
+  const hit = rcpt.map((r) => ids.find((i) => i.address.toLowerCase() === r)).find(Boolean);
+  if (hit && (hit.accountId === msg.accountId || !ids.some((i) => i.accountId === msg.accountId && rcpt.includes(i.address.toLowerCase())))) return hit;
+  const own = accounts.find((a) => a.id === msg.accountId);
+  return own ? { accountId: own.id, address: own.email, name: own.displayName || '' } : hit || null;
+}
+
 export function replyPayload(mode, msg, accounts, extra = {}) {
   const mine = mineSet(accounts);
   const fromMe = mine.has(msg.from.address?.toLowerCase());
@@ -38,8 +53,10 @@ export function replyPayload(mode, msg, accounts, extra = {}) {
   const quote = mode === 'forward'
     ? `<div data-quote="1"><br>---------- Forwarded message ----------<br>From: ${escapeHtml(addrFull(msg.from))}<br>Date: ${fmtFull(msg.date)}<br>Subject: ${escapeHtml(msg.subject)}<br>To: ${escapeHtml(msg.to.map(addrFull).join(', '))}<br><br>${body}</div>`
     : `<div data-quote="1"><br><div>On ${fmtFull(msg.date)}, ${escapeHtml(addrFull(msg.from))} wrote:</div><blockquote>${body}</blockquote></div>`;
+  const me = receivingIdentity(msg, accounts);
   return {
-    accountId: msg.accountId, to: mode === 'forward' ? [] : dedupe(to), cc: dedupe(cc), subject,
+    accountId: me?.accountId ?? msg.accountId, from: me ? { address: me.address, name: me.name } : undefined,
+    to: mode === 'forward' ? [] : dedupe(to), cc: dedupe(cc), subject,
     quoteHtml: quote, inReplyToId: mode === 'forward' ? null : msg.id, forwardOfId: mode === 'forward' ? msg.id : null, replyToMessage: mode !== 'forward' ? msg.id : null,
     attachments: mode === 'forward' ? (msg.attachments || []).map((a) => ({ fromMessageId: msg.id, index: a.index, filename: a.filename, size: a.size })) : [],
     ...extra,
@@ -114,8 +131,14 @@ function Composer({ id, init, minimized }) {
   const settings = store.use((s) => s.settings);
   const space = store.get().space;
   const inSpace = accounts.filter((a) => !space || !a.space || a.space === space);
-  const [accountId, setAccountId] = useState(init.accountId || (inSpace.some((a) => a.id === settings.mail.defaultAccountId) ? settings.mail.defaultAccountId : inSpace[0]?.id) || accounts[0]?.id);
+  // New mail goes out from the account of the message or folder in focus (store.focusAccountId), else the default.
+  const focus = store.get().focusAccountId;
+  const [accountId, setAccountId] = useState(init.accountId || (accounts.some((a) => a.id === focus) ? focus : null)
+    || (inSpace.some((a) => a.id === settings.mail.defaultAccountId) ? settings.mail.defaultAccountId : inSpace[0]?.id) || accounts[0]?.id);
   const account = accounts.find((a) => a.id === Number(accountId)) || accounts[0];
+  const [fromAddress, setFromAddress] = useState(init.from?.address || '');
+  const myIds = identities(accounts);
+  const fromId = myIds.find((i) => i.accountId === account?.id && i.address.toLowerCase() === fromAddress.toLowerCase()) || myIds.find((i) => i.accountId === account?.id);
   const [to, setTo] = useState(init.to?.map((a) => (typeof a === 'string' ? parseAddr(a) : a)).filter(Boolean) || []);
   const [cc, setCc] = useState(init.cc?.map((a) => (typeof a === 'string' ? parseAddr(a) : a)).filter(Boolean) || []);
   const [bcc, setBcc] = useState(init.bcc?.map((a) => (typeof a === 'string' ? parseAddr(a) : a)).filter(Boolean) || []);
@@ -236,7 +259,7 @@ function Composer({ id, init, minimized }) {
   const exec = (cmd, val) => { editor.current.focus(); document.execCommand(cmd, false, val); setDirty(true); };
 
   const payload = () => ({
-    accountId: account?.id, from: { address: account?.email, name: account?.displayName || '' }, to, cc, bcc, subject,
+    accountId: account?.id, from: { address: fromId?.address || account?.email, name: fromId?.name || account?.displayName || '' }, to, cc, bcc, subject,
     html: editor.current.innerHTML, inReplyToId: init.inReplyToId || null,
     attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
     draftId,
@@ -330,11 +353,13 @@ function Composer({ id, init, minimized }) {
     input.click();
   };
 
-  const onAccountChange = (newId) => {
+  const onAccountChange = (value) => {
+    const [newId, address = ''] = String(value).split('|');
     const next = accounts.find((a) => a.id === Number(newId));
     const sig = editor.current.querySelector('.signature');
-    if (sig) sig.outerHTML = signature(next) || '';
+    if (sig && next?.id !== account?.id) sig.outerHTML = signature(next) || '';
     setAccountId(Number(newId));
+    setFromAddress(address);
   };
 
   if (minimized) {
@@ -352,7 +377,8 @@ function Composer({ id, init, minimized }) {
         <button className="icon-btn" onClick={(e) => { e.stopPropagation(); requestClose(); }} title="Close"><X size={16} /></button>
       </div>
       <div className="composer-fields">
-        {accounts.length > 1 && <div><label>From</label><select className="bare" value={account?.id} onChange={(e) => onAccountChange(e.target.value)}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.displayName ? `${a.displayName} <${a.email}>` : a.email}</option>)}</select></div>}
+        {myIds.length > 1 && <div><label>From</label><select className="bare" value={`${fromId?.accountId}|${fromId?.address}`} onChange={(e) => onAccountChange(e.target.value)}>
+          {myIds.map((i) => <option key={`${i.accountId}|${i.address}`} value={`${i.accountId}|${i.address}`}>{i.name ? `${i.name} <${i.address}>` : i.address}</option>)}</select></div>}
         <div><label>To</label><RecipientInput value={to} onChange={(v) => { setTo(v); setDirty(true); }} autoFocus={!to.length} />{!showCc && <button className="btn ghost sm" onClick={() => setShowCc(true)}>Cc/Bcc</button>}</div>
         {showCc && <div><label>Cc</label><RecipientInput value={cc} onChange={(v) => { setCc(v); setDirty(true); }} /></div>}
         {showCc && <div><label>Bcc</label><RecipientInput value={bcc} onChange={(v) => { setBcc(v); setDirty(true); }} /></div>}

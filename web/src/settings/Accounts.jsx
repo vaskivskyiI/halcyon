@@ -161,11 +161,25 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
   };
 
   const startOAuth = (provider) => {
-    const w = window.open(api.url(`/api/oauth/${provider}/start${account ? `?accountId=${account.id}` : ''}`), 'oauth', 'width=520,height=680');
-    const on = (e) => { if (e.data?.type === 'halcyon-oauth') { window.removeEventListener('message', on); loadAccounts(); loadFolders(); onClose(); } };
-    window.addEventListener('message', on);
-    const t = setInterval(() => { if (w?.closed) { clearInterval(t); loadAccounts(); loadFolders(); } }, 1000);
+    window.open(api.url(`/api/oauth/${provider}/start${account ? `?accountId=${account.id}` : ''}`), 'oauth', 'width=520,height=680');
+    // The sign-in window reports back over a BroadcastChannel (its link to this window is cut by Google's pages),
+    // with postMessage and a storage event as fallbacks.
+    let finished = false;
+    const bc = 'BroadcastChannel' in window ? new BroadcastChannel('halcyon-oauth') : null;
+    const finish = (m) => {
+      if (finished || m?.type !== 'halcyon-oauth') return;
+      finished = true;
+      bc?.close(); window.removeEventListener('message', onMsg); window.removeEventListener('storage', onStorage);
+      loadAccounts(); loadFolders();
+      if (m.ok) { toast('Account connected — syncing your mail…'); onClose(); }
+    };
+    const onMsg = (e) => { if (e.origin === location.origin) finish(e.data); };
+    const onStorage = (e) => { if (e.key === 'halcyon-oauth' && e.newValue) { try { finish(JSON.parse(e.newValue)); } catch { /* ignore */ } } };
+    if (bc) bc.onmessage = (e) => finish(e.data);
+    window.addEventListener('message', onMsg);
+    window.addEventListener('storage', onStorage);
   };
+
 
   const TestResult = () => test && (
     <div className="card" style={{ padding: 10 }}>

@@ -324,3 +324,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   `calendar_ics = ''` means checked, none; NULL (older mail) is re-checked when opened (`icsOf`). `invitationFor`
   returns `{ error }` instead of null when the data cannot be read; the card then offers "Add to calendar (read from
   the text)" and `/api/messages/:id/invitation.ics`.
+- Identities: replies go out from the address the message was sent to (`receivingIdentity` in Composer.jsx: an
+  account address or alias among the recipients, also when another account's inbox received it), else the account it
+  is stored in; the From selector lists every address incl. aliases. New mail defaults to `store.focusAccountId`
+  (message being read / folder of one account). Server: From must be the account's address or an alias.
+- Overlap check: `/api/events?allSpaces=1` (events of every space, with `space`).
+- Calendar: wheel in month view, sideways swipe / Shift+wheel in every view move through time (throttled).
+- OAuth sign-in window: BroadcastChannel / storage event / postMessage(origin) back to the app (Google's pages cut
+  window.opener), then closes itself or asks to be closed; the Add-account dialog closes on success.
