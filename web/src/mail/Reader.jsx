@@ -508,6 +508,7 @@ function Invitation({ messageId, onChanged, onExtract }) {
   const [inv, setInv] = useState(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null); // { response, text } while a note to the organiser is being written
+  const [calId, setCalId] = useState(null); // calendar chosen on the card (default: the receiving account's)
   const [openMenu, menuNode] = useMenu();
   useEffect(() => { api.get(`/api/messages/${messageId}/invitation`).then((r) => setInv(r || { error: 'The calendar data in this email could not be found' })).catch((e) => setInv({ error: e.message })); }, [messageId]);
   if (!inv) return null;
@@ -530,7 +531,8 @@ function Invitation({ messageId, onChanged, onExtract }) {
   const respond = async (response, { sendReply = true, comment } = {}) => {
     setBusy(true);
     try {
-      const r = await api.post(`/api/messages/${messageId}/invitation/respond`, { response, sendReply, comment: comment || undefined });
+      const chosen = calId && calId !== (inv.existingCalendarId || inv.defaultCalendarId) ? calId : undefined;
+      const r = await api.post(`/api/messages/${messageId}/invitation/respond`, { response, sendReply, comment: comment || undefined, calendarId: chosen });
       const sent = sendReply && e.organizer?.email ? ` — response sent to ${e.organizer.name || e.organizer.email}` : ' — no response sent';
       const where = r.calendar ? ` · in “${r.calendar.name}”${r.calendar.space ? ` (${r.calendar.space})` : ''} on ${new Date(r.start).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}` : '';
       // "Show" opens the calendar on that day, in a space where that calendar is visible.
@@ -570,6 +572,14 @@ function Invitation({ messageId, onChanged, onExtract }) {
           <button className="btn sm" disabled={busy} onClick={(ev) => choose(ev, 'accept')} style={style('accept')}><Check size={14} /> Accept <ChevronDown size={12} /></button>
           <button className="btn sm" disabled={busy} onClick={(ev) => choose(ev, 'tentative')} style={style('tentative')}><HelpCircle size={14} /> Maybe <ChevronDown size={12} /></button>
           <button className="btn sm" disabled={busy} onClick={(ev) => choose(ev, 'decline')} style={style('decline')}><XIcon size={14} /> Decline <ChevronDown size={12} /></button>
+          {inv.calendars?.length > 1 && (
+            <label className="row small muted" style={{ gap: 4 }} title="The calendar the event goes into (default: the calendar of the account that received this invitation)">
+              {inv.existingCalendarId ? 'In' : 'Add to'}
+              <select className="input" style={{ height: 28, width: 'auto', maxWidth: 220 }} value={calId || inv.existingCalendarId || inv.defaultCalendarId || ''} onChange={(ev) => setCalId(Number(ev.target.value))}>
+                {inv.calendars.map((c) => <option key={c.id} value={c.id}>{c.name}{c.space ? ` · ${c.space}` : ''}</option>)}
+              </select>
+            </label>
+          )}
           {status && status !== 'needs-action' && <span className="small faint">Your answer: {{ confirmed: 'accepted', accepted: 'accepted', tentative: 'maybe', declined: 'declined', cancelled: 'declined' }[status] || status}</span>}
         </div>
       )}

@@ -98,7 +98,7 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
   const [f, setF] = useState(() => account ? {
     email: account.email, displayName: account.displayName || '', name: account.name || '', signatureHtml: account.signatureHtml || '',
     imap: { ...account.imap, password: '' }, smtp: { ...account.smtp, password: '' }, caldavUrl: account.caldavUrl || '', carddavUrl: account.carddavUrl || '',
-    davUser: account.davUser || '', davPassword: '', syncEnabled: account.syncEnabled, aliases: account.aliases || [],
+    davUser: account.davUser || '', davPassword: '', syncEnabled: account.syncEnabled, aliases: account.aliases || [], inviteCalendarId: account.inviteCalendarId || null,
   } : { email: '', displayName: '', password: '', imap: { host: '', port: 993, secure: true, user: '' }, smtp: { host: '', port: 465, secure: true, user: '' }, caldavUrl: '', carddavUrl: '', signatureHtml: '' });
   const [disc, setDisc] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -264,6 +264,7 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
           <h3 style={{ margin: '6px 0' }}>Signature</h3>
           <div className="input editor" contentEditable suppressContentEditableWarning style={{ minHeight: 90, height: 'auto' }} dangerouslySetInnerHTML={{ __html: f.signatureHtml }} onBlur={(e) => set('signatureHtml', e.currentTarget.innerHTML)} />
           <label className="field">Aliases / send-as addresses (comma separated)<input className="input" value={(f.aliases || []).map((a) => a.address || a).join(', ')} onChange={(e) => set('aliases', e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((address) => ({ address })))} /></label>
+          <InviteCalendar value={f.inviteCalendarId} accountId={account.id} onChange={(v) => set('inviteCalendarId', v)} />
           <Switch label="Sync this account" checked={f.syncEnabled} onChange={(v) => set('syncEnabled', v)} />
         </>}
       </>}
@@ -330,5 +331,19 @@ function OAuthSetup({ provider, onClose }) {
         {provider === 'microsoft' && <label className="field">Tenant<input className="input" value={f.tenant} onChange={(e) => setF({ ...f, tenant: e.target.value })} /></label>}
       </div>
     </Modal>
+  );
+}
+
+/** Where accepted invitations to this account go: automatic (the account's own calendar) or a chosen calendar. */
+function InviteCalendar({ value, accountId, onChange }) {
+  const [cals, setCals] = useState([]);
+  useEffect(() => { api.get('/api/calendars?allSpaces=1').then((l) => setCals(l.filter((c) => !c.readonly))).catch(() => {}); }, []);
+  const own = cals.filter((c) => c.accountId === accountId);
+  return (
+    <label className="field">Calendar for accepted invitations
+      <select className="input" value={value || ''} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
+        <option value="">Automatic{own.length ? ` (${own[0].name}, this account's calendar)` : " (this account's calendar, else the default)"}</option>
+        {cals.map((c) => <option key={c.id} value={c.id}>{c.name}{c.space ? ` · ${c.space}` : ''}</option>)}
+      </select></label>
   );
 }

@@ -12,11 +12,17 @@ const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899
 function upsertFromIcs(calId, href, etag, ics) {
   let parsed;
   try { parsed = parseIcs(ics); } catch (e) { log.warn(`bad ics at ${href}: ${e.message}`); return; }
-  run('DELETE FROM events WHERE calendar_id = ? AND href = ? AND dirty = 0', calId, href);
+  // Updated in place where the event is already known (same UID and occurrence), so its id stays the same for an open
+  // editor, links and reminders; new ones are added, and what the server no longer has in this object is removed.
+  const cols = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty'];
+  const kept = new Set();
   for (const e of parsed.events) {
-    const r = run('INSERT INTO events (calendar_id, uid, start, end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', calId, e.uid, e.start, e.end, now(), now());
-    update('events', r.lastInsertRowid, { ...toRow(e), calendar_id: calId, href, etag, dirty: 0 }, ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty']);
+    const existing = get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND COALESCE(recurrence_id, 0) = ? AND deleted = 0 AND dirty = 0', calId, e.uid, e.recurrenceId || 0);
+    const id = existing?.id || Number(run('INSERT INTO events (calendar_id, uid, start, end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', calId, e.uid, e.start, e.end, now(), now()).lastInsertRowid);
+    update('events', id, { ...toRow(e), calendar_id: calId, href, etag, dirty: 0, updated_at: now() }, [...cols, 'updated_at']);
+    kept.add(id);
   }
+  for (const r of all('SELECT id FROM events WHERE calendar_id = ? AND href = ? AND dirty = 0', calId, href)) if (!kept.has(r.id)) run('DELETE FROM events WHERE id = ?', r.id);
 }
 
 /** account: a mail account with caldav_url, or a read-only source ({ id: null, user_id, caldav_url, dav_user, dav_pass_enc }). */

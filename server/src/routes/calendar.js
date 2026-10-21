@@ -20,7 +20,7 @@ export default async function calendarRoutes(app) {
   app.addHook('preHandler', requireUser);
 
   app.get('/api/calendars', async (req) => {
-    const sc = scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
+    const sc = req.query.allSpaces === '1' ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
     return all(`SELECT * FROM calendars WHERE user_id = ? AND ${inIds('id', sc?.calendarIds)} ORDER BY is_default DESC, name`, req.user.id).map((c) => calOut(c, spaces));
   });
 
@@ -202,7 +202,7 @@ export default async function calendarRoutes(app) {
   });
 
   app.post('/api/messages/:id/invitation/respond', async (req, reply) => {
-    try { return respondToInvitation(req.user.id, Number(req.params.id), req.body?.response, { comment: req.body?.comment, sendReply: req.body?.sendReply !== false }); } catch (e) { return httpError(reply, 400, e.message); }
+    try { return respondToInvitation(req.user.id, Number(req.params.id), req.body?.response, { comment: req.body?.comment, sendReply: req.body?.sendReply !== false, calendarId: req.body?.calendarId }); } catch (e) { return httpError(reply, 400, e.message); }
   });
 }
 

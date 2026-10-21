@@ -56,16 +56,41 @@ export function createEvent(userId, e, extra = {}) {
   return get('SELECT * FROM events WHERE id = ?', r.lastInsertRowid);
 }
 
+/** Moves an event and its changed occurrences to another calendar; returns the id of the moved master event. */
+function moveToCalendar(ev, to) {
+  const from = get('SELECT source FROM calendars WHERE id = ?', ev.calendar_id);
+  let masterId = null;
+  tx(() => {
+    for (const r of all('SELECT * FROM events WHERE calendar_id = ? AND uid = ? AND deleted = 0', ev.calendar_id, ev.uid)) {
+      const { id: oldId, ...row } = r;
+      const copy = { ...row, calendar_id: to.id, href: null, etag: null, dirty: to.source === 'caldav' ? 1 : 0, updated_at: now() };
+      const cols = Object.keys(copy);
+      const newId = Number(run(`INSERT INTO events (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, ...cols.map((k) => copy[k])).lastInsertRowid);
+      if (!r.recurrence_id) masterId = newId;
+      // Server copy in the old calendar: deleted there by the next sync; a local-only copy is simply removed.
+      if (from?.source === 'caldav' && r.href) run('UPDATE events SET deleted = 1, dirty = 1 WHERE id = ?', oldId);
+      else run('DELETE FROM events WHERE id = ?', oldId);
+    }
+  });
+  return masterId || get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? ORDER BY recurrence_id IS NOT NULL LIMIT 1', to.id, ev.uid).id;
+}
+
 export function updateEvent(userId, id, patch, extra = {}) {
   const ev = eventOf(userId, id);
   if (!ev) return null;
   if (ev.readonly) throw readOnly();
-  if (patch.calendarId) {
+  if (patch.calendarId && Number(patch.calendarId) !== ev.calendar_id) {
     const to = userCalendar(userId, patch.calendarId);
     if (!to) throw new Error('Calendar not found');
     if (to.readonly) throw readOnly();
+    // Another calendar: the event (with its changed occurrences) moves there — on a server calendar it is created
+    // anew, and removed from the old server calendar on the next sync. Then the rest of the change is applied.
+    id = moveToCalendar(ev, to);
+    const { calendarId: _c, ...rest } = patch;
+    patch = rest;
   }
-  update('events', id, { ...toRow(patch), dirty: ev.source === 'caldav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
+  const cur = get('SELECT e.*, c.source FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ?', id);
+  update('events', id, { ...toRow(patch), dirty: cur.source === 'caldav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   notify(userId, 'calendar:changed', {});
   queueMemory(userId, 'event', id);
   return get('SELECT * FROM events WHERE id = ?', id);

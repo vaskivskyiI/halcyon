@@ -7,6 +7,24 @@ import { queueSend } from '../mail/send.js';
 import { userAccounts } from '../accounts.js';
 import { calendarForAccount, spaceMap } from '../spaces.js';
 
+const writable = (userId) => all('SELECT * FROM calendars WHERE user_id = ? AND readonly = 0 AND enabled = 1 ORDER BY name', userId);
+
+/**
+ * The calendar an accepted invitation goes to: the one chosen for the receiving account in Settings, else that
+ * account's own calendar (its default one, else its main one — not "Birthdays" & co.), else its space's calendar.
+ */
+export function inviteCalendar(userId, accountId) {
+  const cals = writable(userId);
+  const acc = get('SELECT invite_calendar_id FROM accounts WHERE id = ? AND user_id = ?', accountId, userId);
+  const chosen = acc?.invite_calendar_id && cals.find((c) => c.id === acc.invite_calendar_id);
+  if (chosen) return chosen;
+  const own = cals.filter((c) => c.account_id === Number(accountId));
+  const main = /^(calendar|calendars|default|personal|primary|home|work|koledar|kalender|calendrier|calendario|agenda)$/i;
+  const ranked = own.sort((a, b) => (b.is_default - a.is_default) || (main.test(b.name) - main.test(a.name))
+    || (/birthday|rojstn|holiday|praznik|task|contacts/i.test(a.name) - /birthday|rojstn|holiday|praznik|task|contacts/i.test(b.name)) || a.id - b.id);
+  return ranked[0] || calendarForAccount(userId, accountId) || defaultCalendar(userId);
+}
+
 export function invitationFor(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m?.calendar_ics) return null;
@@ -18,10 +36,13 @@ export function invitationFor(userId, messageId) {
   const mine = userAccounts(userId).map((a) => a.email.toLowerCase());
   const me = ev.attendees.find((a) => mine.includes(a.email));
   const local = get('SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.uid = ? AND e.recurrence_id IS NULL', userId, ev.uid);
-  return { method: parsed.method || 'REQUEST', event: ev, myStatus: me?.status || null, myEmail: me?.email || null, existingEventId: local?.id || null, existingStatus: local?.status || null };
+  const spaces = spaceMap(userId);
+  return { method: parsed.method || 'REQUEST', event: ev, myStatus: me?.status || null, myEmail: me?.email || null, existingEventId: local?.id || null, existingStatus: local?.status || null,
+    existingCalendarId: local?.calendar_id || null, defaultCalendarId: inviteCalendar(userId, m.account_id)?.id || null,
+    calendars: writable(userId).map((c) => ({ id: c.id, name: c.name, color: c.color, space: spaces.calendars.get(c.id) || '', accountId: c.account_id })) };
 }
 
-export function respondToInvitation(userId, messageId, response, { comment, sendReply = true } = {}) {
+export function respondToInvitation(userId, messageId, response, { comment, sendReply = true, calendarId } = {}) {
   const inv = invitationFor(userId, messageId);
   if (!inv?.event) throw new Error(inv?.error || 'No invitation in this message');
   const m = get('SELECT * FROM messages WHERE id = ?', messageId);
@@ -36,10 +57,13 @@ export function respondToInvitation(userId, messageId, response, { comment, send
   const evData = { ...inv.event, attendees, status: response === 'decline' ? 'cancelled' : (response === 'tentative' ? 'tentative' : 'confirmed'), sourceMessageId: messageId };
   if (response === 'decline') {
     if (eventId) updateEvent(userId, eventId, { status: 'cancelled', attendees });
-  } else if (eventId) {
-    updateEvent(userId, eventId, evData);
   } else {
-    eventId = createEvent(userId, { ...evData, calendarId: (calendarForAccount(userId, account.id) || defaultCalendar(userId))?.id }).id;
+    // A calendar chosen on the card (writable, the user's own), else the receiving account's calendar.
+    const target = (calendarId && writable(userId).find((c) => c.id === Number(calendarId))) || inviteCalendar(userId, account.id);
+    if (eventId) {
+      // Already in a calendar: updated there, or moved when another calendar was chosen.
+      eventId = updateEvent(userId, eventId, { ...evData, calendarId: calendarId ? target?.id : undefined })?.id || eventId;
+    } else eventId = createEvent(userId, { ...evData, calendarId: target?.id }).id;
   }
   if (sendReply && inv.event.organizer?.email) {
     const me = attendees.find((a) => a.email === myEmail);

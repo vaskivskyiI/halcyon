@@ -64,3 +64,15 @@ test('an event the server never received is saved again, not removed', opts, asy
   await api('POST', `/api/calendars/${cal.id}/refresh`, {});
   assert.ok((await davList()).some((h) => h.includes(ev.uid.replace(/[^A-Za-z0-9_.-]/g, '_'))), 'now on the server');
 });
+
+test('an event moved out of a server calendar is removed from that server', opts, async () => {
+  const ev = await api('POST', '/api/events', { calendarId: cal.id, title: 'To be moved', start: Date.UTC(2026, 10, 5, 9), end: Date.UTC(2026, 10, 5, 10) });
+  await api('POST', `/api/calendars/${cal.id}/refresh`, {});
+  const file = ev.uid.replace(/[^A-Za-z0-9_.-]/g, '_');
+  assert.ok((await davList()).some((h) => h.includes(file)), 'saved on the server first');
+  const local = await api('POST', '/api/calendars', { name: 'Local only' });
+  await api('PATCH', `/api/events/${ev.id}`, { calendarId: local.id });
+  await api('POST', `/api/calendars/${cal.id}/refresh`, {});
+  assert.ok(!(await davList()).some((h) => h.includes(file)), 'gone from the server calendar');
+  assert.equal(db.prepare('SELECT calendar_id FROM events WHERE uid = ?').get(ev.uid).calendar_id, local.id, 'kept in the new calendar');
+});

@@ -343,3 +343,12 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (`{…,deb}` in a flow mapping) and failed on every push.
 - Radicale for local runs without root: pip --user (see scratch notes); Dovecot needs root, so e2e has not been run
   locally.
+- First CI annotations: only e2e "flags, move, archive and trash propagate" failed — it expected a second "trash" to
+  delete permanently, which the safety rules forbid; it now checks that, then uses the explicit "delete".
+- Invitations: `inviteCalendar()` (invites.js) = account's chosen calendar (`accounts.invite_calendar_id`, migration
+  18, Settings → Accounts) else the account's own writable calendar (default, else main name, not Birthdays & co.),
+  else its space's / the default. The card has an "Add to / In" calendar picker (`calendarId` on respond; answering
+  again with another calendar moves the event).
+- Moving events between calendars (`moveToCalendar` in repo.js): master + overrides copied (new server copy created),
+  old server copy marked deleted+dirty so the next sync deletes it there. Right-click on an event → "Move to calendar".
+- CalDAV pull updates events in place (same UID/occurrence keep their id) instead of delete + insert.

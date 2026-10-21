@@ -292,4 +292,8 @@ export const migrations = [
   ALTER TABLE ai_insights ADD COLUMN resolution TEXT;
   UPDATE ai_insights SET resolution = 'done' WHERE dismissed_at IS NOT NULL AND needs_action = 1;
   `,
+  // 18: the calendar accepted invitations go to, per mail account (NULL = automatic: the account's own calendar).
+  `
+  ALTER TABLE accounts ADD COLUMN invite_calendar_id INTEGER;
+  `,
 ];

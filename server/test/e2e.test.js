@@ -154,7 +154,12 @@ test('flags, move, archive and trash propagate to IMAP', async () => {
   await api('POST', '/api/messages/actions', { ids: [news.id], action: 'trash' });
   await waitFor(async () => (await listUids('alice@test.local', 'Trash')).length === 1, { label: 'trashed on server' });
   await waitFor(async () => { const m = await api('GET', `/api/messages/${news.id}`); return m.uid && m.folder.specialUse === '\\Trash'; }, { label: 'trash uid' });
-  await api('POST', '/api/messages/actions', { ids: [news.id], action: 'trash' }); // permanent from Trash
+  // "Trash" again never deletes for good (no accidental permanent deletion) …
+  await api('POST', '/api/messages/actions', { ids: [news.id], action: 'trash' });
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal((await listUids('alice@test.local', 'Trash')).length, 1, 'still in Trash on the server');
+  // … only the explicit "delete" (confirmed in the app) does.
+  await api('POST', '/api/messages/actions', { ids: [news.id], action: 'delete' });
   await waitFor(async () => (await listUids('alice@test.local', 'Trash')).length === 0, { label: 'expunged' });
 });
 

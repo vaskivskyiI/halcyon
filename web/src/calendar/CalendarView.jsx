@@ -70,6 +70,23 @@ export default function CalendarView() {
     setEditing({ start: s, end: allDay ? s + 864e5 : s + (settings.calendar.defaultDurationMin || 30) * 60e3, allDay, reminders: [settings.calendar.defaultReminderMin ?? 15] });
   };
 
+  // Right-click on an event: move it to another (writable) calendar — the whole series for a recurring event.
+  const [openEvMenu, evMenuNode] = useMenu();
+  const eventMenu = (e, ev) => {
+    if (ev.readonly) return;
+    e.preventDefault();
+    openEvMenu(e, [
+      { label: 'Open', icon: Clock, onClick: () => setEditing(ev) },
+      { section: 'Move to calendar' },
+      ...calendars.filter((c) => !c.readonly && c.id !== ev.calendarId).map((c) => ({
+        label: c.name, hint: c.space || undefined,
+        onClick: async () => {
+          try { await api.patch(`/api/events/${ev.seriesId || ev.id}`, { calendarId: c.id }); toast(`Moved to “${c.name}”${ev.rrule ? ' (the whole series)' : ''}`); load(); } catch (err) { toastError(err); }
+        },
+      })),
+    ]);
+  };
+
   const moveEvent = async (ev, start, end) => {
     const doIt = async (scope) => {
       try {
@@ -125,9 +142,10 @@ export default function CalendarView() {
           <button className="icon-btn mobile-only" onClick={() => newEvent()}><Plus size={18} /></button>
           <select className="input" style={{ width: 'auto' }} value={view} onChange={(e) => setView(e.target.value)}>{VIEWS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
         </div>
-        {view === 'month' && <MonthView from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={setEditing} onDay={(d) => { setDate(d); setView('day'); }} />}
-        {['week', 'workweek', 'day'].includes(view) && <TimeGrid from={from} days={Math.round((to - from) / 864e5)} events={shown} settings={settings} onNew={newEvent} onOpen={setEditing} onMove={moveEvent} />}
-        {view === 'agenda' && <Agenda events={shown} onOpen={setEditing} />}
+        {view === 'month' && <MonthView onMenu={eventMenu} from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={setEditing} onDay={(d) => { setDate(d); setView('day'); }} />}
+        {['week', 'workweek', 'day'].includes(view) && <TimeGrid onMenu={eventMenu} from={from} days={Math.round((to - from) / 864e5)} events={shown} settings={settings} onNew={newEvent} onOpen={setEditing} onMove={moveEvent} />}
+        {evMenuNode}
+        {view === 'agenda' && <Agenda events={shown} onOpen={setEditing} onMenu={eventMenu} />}
       </section>
       {editing && <EventEditor initial={editing} calendars={calendars} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {scopeAsk && <ScopeModal title="Change recurring event" onClose={() => { scopeAsk.onCancel?.(); setScopeAsk(null); }} onPick={(s) => { scopeAsk.onPick(s); setScopeAsk(null); }} />}
@@ -247,7 +265,7 @@ function MiniMonth({ date, onPick, weekStart }) {
   );
 }
 
-function MonthView({ from, date, events, onNew, onOpen, onDay }) {
+function MonthView({ from, date, events, onNew, onOpen, onDay, onMenu }) {
   const today = startOfDay(new Date()).getTime();
   const days = [...Array(42)].map((_, i) => addDays(from, i));
   return (
@@ -261,7 +279,7 @@ function MonthView({ from, date, events, onNew, onOpen, onDay }) {
             <div key={i} className={`month-cell ${d.getMonth() !== date.getMonth() ? 'other' : ''} ${s === today ? 'today' : ''}`} onDoubleClick={() => onNew(d)}>
               <span className="num" style={{ cursor: 'pointer' }} onClick={() => onDay(d)}>{d.getDate()}</span>
               {evs.slice(0, 4).map((ev) => (
-                <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={ev.allDay ? { background: ev.color, color: '#fff' } : { color: 'var(--text)' }} onClick={() => onOpen(ev)} title={ev.title}>
+                <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={ev.allDay ? { background: ev.color, color: '#fff' } : { color: 'var(--text)' }} onClick={() => onOpen(ev)} onContextMenu={(e) => onMenu?.(e, ev)} title={ev.title}>
                   {!ev.allDay && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 4, background: ev.color, marginRight: 4 }} />}
                   {!ev.allDay && <span className="faint">{fmtTime(ev.start)} </span>}{ev.title}
                 </div>
@@ -299,7 +317,7 @@ function layoutDay(evs) {
   return out;
 }
 
-function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
+function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu }) {
   const scroller = useRef();
   const [drag, setDrag] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -315,6 +333,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
 
   // Drag to move / resize with 15-minute snapping.
   const startDrag = (e, ev, mode) => {
+    if (e.button !== 0) return; // right-click opens the event menu instead
     e.stopPropagation(); e.preventDefault();
     // Events of read-only (subscribed) calendars only open; they cannot be moved.
     if (ev.readonly) { const up = () => { window.removeEventListener('mouseup', up); onOpen(ev); }; window.addEventListener('mouseup', up); return; }
@@ -345,7 +364,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
         {dayList.map((d, i) => {
           const s = d.getTime(), e = s + 864e5;
           return <div key={i} className="day-col" style={{ padding: 2, display: 'flex', flexDirection: 'column', gap: 2 }} onDoubleClick={() => onNew(s, true)}>
-            {allDay.filter((x) => x.start < e && x.end > s).map((ev) => <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={{ background: ev.color, color: '#fff' }} onClick={() => onOpen(ev)}>{ev.title}</div>)}
+            {allDay.filter((x) => x.start < e && x.end > s).map((ev) => <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={{ background: ev.color, color: '#fff' }} onClick={() => onOpen(ev)} onContextMenu={(e) => onMenu?.(e, ev)}>{ev.title}</div>)}
           </div>;
         })}
       </div>
@@ -362,7 +381,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
                   const top = ((Math.max(ev.start, s) - s) / 3600e3) * HOUR_PX;
                   const height = Math.max(18, ((Math.min(ev.end, e) - Math.max(ev.start, s)) / 3600e3) * HOUR_PX - 2);
                   return (
-                    <div key={ev.instanceId} className={`ev-block ${ev.status} show-${ev.showAs || 'busy'}`} style={{ top, height, '--ev': ev.color, background: ev.color, left: `calc(${(col / n) * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)`, right: 'auto' }}
+                    <div key={ev.instanceId} onContextMenu={(e) => onMenu?.(e, ev)} className={`ev-block ${ev.status} show-${ev.showAs || 'busy'}`} style={{ top, height, '--ev': ev.color, background: ev.color, left: `calc(${(col / n) * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)`, right: 'auto' }}
                       onMouseDown={(m) => startDrag(m, ev, 'move')} title={`${ev.title}\n${fmtTime(ev.start)}–${fmtTime(ev.end)}${ev.location ? `\n${ev.location}` : ''}`}>
                       <div style={{ fontWeight: 600 }} className="truncate">{ev.title}</div>
                       {height > 30 && <div style={{ opacity: 0.9 }}>{fmtTime(ev.start)}–{fmtTime(ev.end)}{ev.location ? ` · ${ev.location}` : ''}</div>}
@@ -380,7 +399,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove }) {
   );
 }
 
-function Agenda({ events, onOpen }) {
+function Agenda({ events, onOpen, onMenu }) {
   const groups = useMemo(() => {
     const m = new Map();
     for (const e of events) { const k = startOfDay(e.start).getTime(); if (!m.has(k)) m.set(k, []); m.get(k).push(e); }
@@ -392,7 +411,7 @@ function Agenda({ events, onOpen }) {
         <div key={day} style={{ marginBottom: 14 }}>
           <div className="small" style={{ fontWeight: 700, color: startOfDay(new Date()).getTime() === day ? 'var(--accent)' : 'var(--text-2)', padding: '6px 0' }}>{new Date(day).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           {evs.map((e) => (
-            <div key={e.instanceId} className="list-row" style={{ borderRadius: 8, opacity: e.showAs === 'info' ? 0.6 : 1 }} onClick={() => onOpen(e)}>
+            <div key={e.instanceId} className="list-row" style={{ borderRadius: 8, opacity: e.showAs === 'info' ? 0.6 : 1 }} onClick={() => onOpen(e)} onContextMenu={(ev) => onMenu?.(ev, e)}>
               <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, background: e.color }} />
               <span className="small muted" style={{ width: 96 }}>{e.allDay ? 'All day' : `${fmtTime(e.start)} – ${fmtTime(e.end)}`}</span>
               <span className="grow truncate"><b>{e.title}</b>{e.location && <span className="faint"> · {e.location}</span>}</span>
