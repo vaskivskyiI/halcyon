@@ -11,6 +11,7 @@ import { senderPreference } from '../ai/learning.js';
 import { spamMessages } from './actions.js';
 import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
+import { noteCorrespondence } from '../ai/profiles.js';
 
 const log = logger('pipeline');
 const NEVER_ANALYZE = ['\\Trash', '\\Junk', '\\Drafts'];
@@ -22,6 +23,9 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
   const isInbox = folder.special_use === '\\Inbox';
   const isSent = folder.special_use === '\\Sent';
   const messages = ids.map((id) => get('SELECT id, date, from_addr, from_name, to_json, cc_json, subject, is_read, snippet, calendar_ics FROM messages WHERE id = ?', id)).filter(Boolean);
+
+  // Who the user corresponds with: counted for contact profiles (built in the background, ai/profiles.js).
+  for (const m of messages) noteCorrespondence(account.user_id, isSent ? [...json(m.to_json, []), ...json(m.cc_json, [])].map((a) => a.address) : isInbox ? [m.from_addr] : [], m.date);
 
   if (settings.mail.autoCollectContacts && isSent) {
     for (const m of messages) collectAddresses(account.user_id, [...json(m.to_json, []), ...json(m.cc_json, [])], m.date, true, account.id);

@@ -4,6 +4,7 @@ import { api, onEvent } from '../api.js';
 import { Avatar, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError, navigate, fmtListDate } from '../util.js';
 import { openComposer } from '../mail/Composer.jsx';
+import PersonProfile from '../components/PersonProfile.jsx';
 
 export default function ContactsView({ route }) {
   const selId = route[1] ? Number(route[1]) : null;
@@ -91,6 +92,7 @@ function ContactDetail({ id, onEdit, onChanged }) {
         {c.emails[0] && <button className="btn primary" onClick={() => openComposer({ to: [{ name: c.displayName, address: c.emails[0].value }] })}><Mail size={15} /> Email</button>}
         {c.phones[0] && <a className="btn" href={`tel:${c.phones[0].value}`}><Phone size={15} /> Call</a>}
       </div>
+      {c.emails[0] && <><h3 style={{ margin: '14px 0 0', fontSize: 14 }}>What the AI knows</h3><PersonProfile email={c.emails[0].value} name={c.displayName} /></>}
       <dl className="kv">
         {c.emails.map((e, i) => <Fragment key={`e${i}`}><dt><Mail size={13} /> {e.type}</dt><dd><a href="#" onClick={(x) => { x.preventDefault(); openComposer({ to: [{ name: c.displayName, address: e.value }] }); }}>{e.value}</a></dd></Fragment>)}
         {c.phones.map((p, i) => <Fragment key={`p${i}`}><dt><Phone size={13} /> {p.type}</dt><dd><a href={`tel:${p.value}`}>{p.value}</a></dd></Fragment>)}

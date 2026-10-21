@@ -3,8 +3,18 @@ import crypto from 'node:crypto';
 
 export function mock() {
   return {
-    async chat({ messages, json, onToken }) {
+    async chat({ system = '', messages, json, onToken }) {
       const last = messages[messages.length - 1]?.content || '';
+      // Contact profile (ai/profiles.js): derived from the transcript, so tests can check what reaches the prompt.
+      if (json && /build a short profile of a person/.test(system)) {
+        const mine = last.split('\n\n').find((b) => /USER → them/.test(b)) || '';
+        const greeting = (mine.split('\n')[1] || '').trim();
+        const subjects = [...last.matchAll(/(?:USER → them|them → USER) · (.+)/g)].map((m) => m[1]);
+        const text = JSON.stringify({ who: `Works with the user on ${subjects[0] || 'mail'}`, relationship: 'colleague', organisation: '', topics: [...new Set(subjects)].slice(0, 3),
+          language: 'English', user_writing: greeting ? `Opens with "${greeting.slice(0, 40)}"` : '', their_style: 'brief', notes: [] });
+        return { text, usage: { input: 1, output: 1 } };
+      }
+      if (!json && /describe who they are professionally/.test(system)) return { text: '- Works on the projects named in the sent mail\n- Writes in English', usage: { input: 1, output: 1 } };
       // The email itself (after the "Sender…/Recipients…" notes), so the notes are not mistaken for content.
       const email = last.slice(Math.max(0, last.indexOf('From:')));
       let text;

@@ -50,7 +50,8 @@ function addMessage(acc, folder, { subject, from = 'someone@example.org', to = a
   return id;
 }
 const memRows = (kind, ref) => db.prepare('SELECT COUNT(*) AS n FROM memory WHERE kind = ? AND ref_id = ?').get(kind, String(ref)).n;
-const idle = () => waitFor(() => db.prepare("SELECT COUNT(*) AS n FROM ai_jobs WHERE status IN ('queued', 'running')").get().n === 0);
+// Work due now is done (jobs deliberately scheduled for later, e.g. contact profiles, do not count).
+const idle = () => waitFor(() => db.prepare("SELECT COUNT(*) AS n FROM ai_jobs WHERE status = 'running' OR (status = 'queued' AND run_after <= ?)").get(Date.now()).n === 0);
 
 function makeAccount(userId, email) {
   const a = db.prepare("INSERT INTO accounts (user_id, email, imap_host, imap_port, sync_enabled, created_at) VALUES (?, ?, '127.0.0.1', 1, 0, ?)").run(userId, email, Date.now());

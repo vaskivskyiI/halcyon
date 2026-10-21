@@ -13,6 +13,7 @@ import { getSettings } from '../settings.js';
 import { stripQuoted } from '../ai/prompts.js';
 import { backfillAnalysis } from '../mail/pipeline.js';
 import { listApprovals, decideApproval, pendingApprovalCount } from '../rules.js';
+import { contactProfile, setProfileNotes } from '../ai/profiles.js';
 
 // Plain HTTP to a host outside this machine/LAN sends email content readable by anyone on the path.
 const insecure = (p) => /^http:/i.test(p.base_url || '') && !isLocalEndpoint(p.type, p.base_url);
@@ -141,6 +142,12 @@ export default async function aiRoutes(app) {
 
   // Learn the writing style from sent mail now (normally weekly).
   app.post('/api/ai/style/refresh', async (req) => { enqueue(req.user.id, 'style', 'style', 60, { force: true }); return { ok: true }; });
+  app.post('/api/ai/about-me/refresh', async (req) => { enqueue(req.user.id, 'aboutme', 'aboutme', 60, { force: true }); return { ok: true }; });
+
+  // ---- what the AI knows about a person (contact profiles): read, correct with own notes, rebuild
+  app.get('/api/people/:email', async (req) => contactProfile(req.user.id, req.params.email) || { email: String(req.params.email).toLowerCase(), profile: null, notes: '', messages: 0 });
+  app.put('/api/people/:email/notes', async (req) => { setProfileNotes(req.user.id, req.params.email, req.body?.notes); return contactProfile(req.user.id, req.params.email); });
+  app.post('/api/people/:email/refresh', async (req) => { enqueue(req.user.id, 'profile', String(req.params.email).toLowerCase(), 70, { force: true }); return { ok: true }; });
 
   // Stop bulk work: drops queued (not yet started) analysis / indexing jobs; new mail is still handled.
   app.post('/api/ai/cancel', async (req) => {

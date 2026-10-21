@@ -352,3 +352,21 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Moving events between calendars (`moveToCalendar` in repo.js): master + overrides copied (new server copy created),
   old server copy marked deleted+dirty so the next sync deletes it there. Right-click on an event → "Move to calendar".
 - CalDAV pull updates events in place (same UID/occurrence keep their id) instead of delete + insert.
+
+### AI context: people, the user, direct summaries (migration 19)
+- `ai/profiles.js`: `contact_profiles` per correspondent (who / relationship / organisation / topics / language /
+  how the user writes to them / their style / notes) built by job 'profile' from the mail exchanged (the user's own mails
+  with greeting and sign-off) + facts; `user_notes` are the user's corrections, always first and authoritative.
+  Counted on ingest (`noteCorrespondence`, robots and the user's own addresses skipped); built when ≥2 mails, rebuilt
+  after 5 new or monthly; `seedCorrespondents` + `scheduleProfiles` for existing mail. Used in analysis (sender /
+  recipients), draft replies and new mail ("how the user writes to them"), and the assistant (PEOPLE section for
+  people named in the question and senders of the found emails). API `/api/people/:email` (+ `/notes`, `/refresh`);
+  UI `components/PersonProfile.jsx` in the AI card and in Contacts.
+- Job 'aboutme' (monthly): `settings.ai.learnedAboutMe` from sent mail + facts, in every request after the user's own
+  "About you"; editable in Settings → AI. Settings `contactProfiles`, `learnAboutMe`.
+- Summaries: prompt asks for the substance (no subject restatement, no "X writes…"); `ai/summary.js cleanSummary`
+  removes the openings models still produce. Thread summaries likewise.
+- Composer: AI changes can be undone step by step ("Undo AI", toast with Undo).
+- Mark as read moved to the Reader (all unread messages shown in the conversation, after markReadAfterMs); the list
+  updates through `halcyon:read`. Selected rows stay highlighted when unread (CSS order bug).
+- Test helpers that wait for an idle AI queue ignore jobs scheduled for later (profile builds are delayed 5 min).

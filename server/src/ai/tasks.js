@@ -15,8 +15,10 @@ import { scope, inIds } from '../spaces.js';
 import { localToEpoch, normalizeEvent } from '../util/time.js';
 import { senderPreference, applyPreference, preferenceExamples } from './learning.js';
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
+import { profileText } from './profiles.js';
+import { cleanSummary } from './summary.js';
 
-const LANG_NAMES = { en: 'English', sl: 'Slovenian', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', hr: 'Croatian', sr: 'Serbian', uk: 'Ukrainian', pl: 'Polish', pt: 'Portuguese', nl: 'Dutch', cs: 'Czech', ru: 'Russian', ja: 'Japanese', zh: 'Chinese' };
+const LANG_NAMES = P.LANG_NAMES;
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
 
 function ctxFor(userId) {
@@ -70,7 +72,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_reply_user,
     needs_action, action_summary)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,?,?,?,?)`,
-    messageId, String(d.summary || '').slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
+    messageId, cleanSummary(d.summary, { fromName: m.from_name, fromAddr: m.from_addr, subject: m.subject }).slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
     priority, String(d.priority_reason || '').slice(0, 200), needsReply,
     JSON.stringify((Array.isArray(d.action_items) ? d.action_items : []).slice(0, 10).map((a) => (typeof a === 'string' ? { text: a, due: null } : { text: String(a.text || ''), due: a.due || null })).filter((a) => a.text)),
     JSON.stringify((Array.isArray(d.suggested_replies) ? d.suggested_replies : []).slice(0, 3).map(String)),
@@ -213,10 +215,12 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       ? `Sender is a known contact (${contact.contact_count} previous exchanges${contact.favorite ? ', marked as favorite/VIP' : ''}).`
       : 'Sender is not in the user\'s contacts.';
     const recipientInfo = addressing ? `\n${addressing.text}` : '';
+    const about = (fromMe ? json(m.to_json, []).slice(0, 2).map((a) => a.address) : [m.from_addr]).map((a) => profileText(userId, a)).filter(Boolean);
+    const peopleInfo = about.length ? `\n${fromMe ? 'About the recipients' : 'About the sender'} (from earlier mail): ${about.join('\n')}` : '';
     const tz = settings.calendar.timezone;
     const pref = fromMe ? { importance: null, category: null } : senderPreference(userId, m.from_addr);
     const topics = recentTopics(userId);
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo: senderInfo + recipientInfo, timezone: tz, fromMe, topics, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
       language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
@@ -407,8 +411,9 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
   }
   const { ctx, settings, user, accounts } = ctxFor(userId);
   const acc = accounts.find((a) => a.id === m.account_id);
-  const prompt = P.draftReplyPrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, [m.reply_to_json && json(m.reply_to_json, [])[0]?.address || m.from_addr]),
-    thread: threadText(userId, m), intent, language: replyLanguage(settings), signatureName: acc?.display_name || user.name });
+  const to = m.reply_to_json && json(m.reply_to_json, [])[0]?.address || m.from_addr;
+  const prompt = P.draftReplyPrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, [to]),
+    people: profileText(userId, to, { writing: true }), thread: threadText(userId, m), intent, language: replyLanguage(settings), signatureName: acc?.display_name || user.name });
   const res = await chat(userId, task, { ...prompt, temperature: 0.5, maxTokens: 900, onToken });
   return res.text.trim();
 }
@@ -418,7 +423,7 @@ export async function composeNew(userId, { instruction, to }, onToken) {
   const lang = settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : `${uiLanguage} (unless the instruction implies another language)`;
   const addrs = String(to || '').match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || [];
   const res = await chat(userId, 'compose', { ...P.composePrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, addrs),
-    instruction, recipients: to, language: lang, signatureName: user.name }), temperature: 0.6, maxTokens: 1200, onToken });
+    instruction, recipients: to, language: lang, signatureName: user.name, people: addrs.slice(0, 3).map((a) => profileText(userId, a, { writing: true })).filter(Boolean).join('\n') }), temperature: 0.6, maxTokens: 1200, onToken });
   const m = res.text.match(/^\s*Subject:\s*(.+)\n+([\s\S]*)$/i);
   return m ? { subject: m[1].trim(), body: m[2].trim() } : { subject: '', body: res.text.trim() };
 }

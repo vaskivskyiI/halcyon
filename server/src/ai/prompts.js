@@ -32,9 +32,12 @@ Subject: ${m.subject}${atts.length ? `\nAttachments: ${atts.join(', ')}` : ''}
 ${body}`;
 }
 
+export const LANG_NAMES = { en: 'English', sl: 'Slovenian', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', hr: 'Croatian', sr: 'Serbian', uk: 'Ukrainian', pl: 'Polish', pt: 'Portuguese', nl: 'Dutch', cs: 'Czech', ru: 'Russian', ja: 'Japanese', zh: 'Chinese' };
+
 export function userContext(user, settings, accounts) {
   const lines = [`The user is ${user.name || 'the mailbox owner'} (${accounts.map((a) => a.email).join(', ')}).`];
-  if (settings.ai.aboutMe) lines.push(`About the user: ${settings.ai.aboutMe}`);
+  if (settings.ai.aboutMe) lines.push(`About the user (their own words, authoritative): ${settings.ai.aboutMe}`);
+  if (settings.ai.learnedAboutMe) lines.push(`What the user's mail shows about them (learned; the user's own words win): ${settings.ai.learnedAboutMe.replace(/\s*\n\s*/g, ' ')}`);
   // The model has no clock: state "now" explicitly, in the user's time zone (the server may run in UTC).
   lines.push(`Now: ${localStamp(Date.now(), settings.calendar.timezone)} (${settings.calendar.timezone}). Anything dated before now is in the past.`);
   return lines.join('\n');
@@ -44,7 +47,7 @@ export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fr
   return {
     system: `You are an email triage assistant. ${ctx}
 ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}Analyze the email and return a JSON object with exactly these keys:
-- "summary": 1-2 sentence summary of what the email is about and what is asked (written in ${language}).
+- "summary": the substance in 1-2 short sentences (${language}): what the user is asked to do, what was decided or changed, or the key information — with the concrete details (amounts, dates, times, places, names of others, document names). Do NOT repeat or paraphrase the subject line, do NOT start with the sender's name or with "The email", "This message", "The sender", "X writes/informs/asks"; mention the sender only when it matters (e.g. who must act). Write it as a direct statement or an imperative, e.g. "Send the signed contract by Friday; the client accepted the 8% discount." not "Ana Novak sends an email about the contract."
 - "category": one of ${CATEGORIES.join(', ')}.
 - "priority": integer 0-100 for how important it is that the USER sees this soon (personal requests from real people, deadlines, money, security = high; newsletters, promotions, automated notifications = low). Weigh how the user is addressed (see "Recipients"): the only direct recipient = most important; one of many in To = less; only in CC = usually informational unless the user is named or asked to act; not addressed at all (mailing list / BCC) = low unless clearly relevant to the user.
 - "priority_reason": short reason (max 12 words, ${language}).
@@ -69,24 +72,24 @@ ${preferences ? `\nThe user's own past corrections (follow them for similar mail
 export function threadSummaryPrompt({ ctx, messages, language }) {
   return {
     system: `You summarize email conversations. ${ctx}
-Write a concise summary in ${language} as 2-5 bullet points ("- "): what was discussed, decisions made, open questions, and who is waiting on whom. No preamble.`,
+Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions made, open questions, and who is waiting on whom, with concrete details (dates, amounts, names). Do not restate the subject; no preamble.`,
     messages: [{ role: 'user', content: messages.map((m, i) => `### Message ${i + 1}\n${m}`).join('\n\n') }],
   };
 }
 
-export function draftReplyPrompt({ ctx, style, learned, examples, thread, intent, language, signatureName }) {
+export function draftReplyPrompt({ ctx, style, learned, examples, thread, intent, language, signatureName, people = '' }) {
   return {
     system: `You write email replies on behalf of the user. ${ctx}
-${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
+${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${people ? `About the recipient (what the user's mail shows; follow "how the user writes to them" for greeting, form of address, formality, language and sign-off):\n${people}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
 Reply in ${language}. Keep it natural, concise and appropriate in tone. Sign off as ${signatureName || 'the user'}.`,
     messages: [{ role: 'user', content: `Conversation (most recent last):\n\n${thread}\n\n${intent ? `The reply should: ${intent}` : 'Write the most appropriate reply.'}` }],
   };
 }
 
-export function composePrompt({ ctx, style, learned, examples, instruction, recipients, language, signatureName }) {
+export function composePrompt({ ctx, style, learned, examples, instruction, recipients, language, signatureName, people = '' }) {
   return {
     system: `You draft new emails on behalf of the user. ${ctx}
-${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Output format exactly:
+${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${people ? `About the recipients (what the user's mail shows; follow "how the user writes to them"):\n${people}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Output format exactly:
 Subject: <subject line>
 
 <email body>
@@ -157,5 +160,33 @@ export function extractEventPrompt({ ctx, message, timezone }) {
 Return JSON: {"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" or null, "end_time": "HH:MM" or null, "tz": string|null, "all_day": boolean, "location": string|null, "description": short string, "attendees": [emails]}.
 Copy times exactly as written in the email (24-hour clock), never convert them; "tz" is the time zone the email states for them (e.g. "UTC", "CET", "GMT+1"), or null when none is stated (the user's zone ${timezone} is then assumed). Resolve relative dates from the email's date. If no date is mentioned, propose the next reasonable working-day slot.`,
     messages: [{ role: 'user', content: message }],
+  };
+}
+
+/** Profile of one correspondent from the mail exchanged with them (ai/profiles.js). */
+export function contactProfilePrompt({ ctx, name, email, transcript, facts = [], notes = '', language }) {
+  return {
+    system: `You build a short profile of a person the user exchanges email with, to help the user and an AI assistant later. ${ctx}
+Use only what the emails show; do not guess. Return JSON with exactly these keys (texts in ${language}):
+- "who": one sentence: who the person is, their role and organisation, and their relation to the user (e.g. "Head of procurement at Acme; the user's main contact for the Helios order").
+- "relationship": one of colleague, manager, report, student, supervisor, client, supplier, partner, friend, family, service, other.
+- "organisation": their organisation or "" if unknown.
+- "topics": up to 6 short names of what they and the user write about.
+- "language": the language(s) the user and this person use with each other.
+- "user_writing": how THE USER writes to this person: greeting and form of address (first name / title / formal vs. informal "you", e.g. tikanje or vikanje), formality, typical length, sign-off — concrete, quoting short phrases.
+- "their_style": how this person writes (brief).
+- "notes": up to 5 durable facts worth remembering (preferences, agreements, recurring requests, deadlines that recur). [] if none.
+${notes ? `The user's own notes about this person (authoritative — never contradict them): ${notes}\n` : ''}Output JSON only.`,
+    messages: [{ role: 'user', content: `Person: ${name ? `${name} <${email}>` : email}\n${facts.length ? `Remembered facts:\n- ${facts.join('\n- ')}\n` : ''}\nEmails (oldest first):\n\n${transcript}` }],
+  };
+}
+
+/** What the user's own sent mail shows about them (role, organisation, projects, people, languages). */
+export function aboutMePrompt({ name, samples, facts = [], language }) {
+  return {
+    system: `From a person's own sent emails (and facts remembered from their mail), describe who they are professionally so that an email assistant can help them better.
+Write 4-8 short bullet points in ${language}: role and organisation, main projects and responsibilities, the people and groups they work with most, recurring tasks, languages they write in.
+Only what the emails show; no private or sensitive details (health, finances, passwords), no email addresses.`,
+    messages: [{ role: 'user', content: `${name ? `Name: ${name}\n` : ''}${facts.length ? `Remembered facts:\n- ${facts.join('\n- ')}\n\n` : ''}Sent emails:\n\n${samples.map((s, i) => `### ${i + 1}. To ${s.to} · ${s.subject}\n${s.text}`).join('\n\n')}` }],
   };
 }

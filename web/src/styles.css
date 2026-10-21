@@ -394,3 +394,8 @@ div.provider { cursor: default; background: var(--panel-2); }
 @media (max-width: 600px) { .provider-row { grid-template-columns: 1fr; } }
 .behalf { font-weight: 400; color: var(--text-2); }
 .behalf-note { font-weight: 400; font-size: 12px; }
+/* Selected rows stay visibly selected, also when unread (the unread rule above sets a transparent background). */
+.msg-row.selected, .msg-row.unread.selected { background: var(--accent-soft); }
+.msg-row.selected:hover { background: color-mix(in srgb, var(--accent-soft) 80%, var(--hover)); }
+.person-profile { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: var(--panel-2); line-height: 1.45; }
+.person-profile.compact { background: transparent; padding: 2px 0; }

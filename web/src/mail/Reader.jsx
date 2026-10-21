@@ -11,6 +11,7 @@ import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { openComposer, replyPayload } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
+import PersonProfile from '../components/PersonProfile.jsx';
 import { loadFolders, setSpace } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 import { topicView, categoryView } from './MailView.jsx';
@@ -56,6 +57,20 @@ export default function Reader({ id, view }) {
       if (e.status === 404) window.dispatchEvent(new Event('halcyon:poll')); else toastError(e);
     } finally { setLoading(false); }
   }, [id, conv, allowImages]);
+
+  // Opened = read (after the configured delay, if it is still the message shown): every unread message shown here.
+  useEffect(() => {
+    const unread = (thread?.messages || []).filter((x) => !x.isRead).map((x) => x.id);
+    const delay = settings.mail.markReadAfterMs;
+    if (!unread.length || delay < 0 || thread?.current?.id !== Number(id)) return undefined;
+    const t = setTimeout(() => {
+      if (!location.hash.endsWith(`/${id}`)) return;
+      api.post('/api/messages/actions', { ids: unread, action: 'read' }).then(() => loadFolders()).catch(() => {});
+      setThread((th) => th && { ...th, messages: th.messages.map((x) => (unread.includes(x.id) ? { ...x, isRead: true } : x)) });
+      window.dispatchEvent(new CustomEvent('halcyon:read', { detail: { ids: unread, threadId: thread.current.threadId } }));
+    }, delay);
+    return () => clearTimeout(t);
+  }, [thread?.current?.id, thread?.messages?.length]);
 
   useEffect(() => {
     setAllowImages(false); setShowAll(false);
@@ -292,6 +307,8 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       </div>
       {menuNode}
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
+      {/* Who the sender is and how the user writes with them (contact profile; editable). */}
+      {requester?.address && <PersonProfile email={requester.address} name={requester.name} compact />}
       {ins?.needsAction && !ins.expired && <div className={`notice action-needed ${ins.dismissed ? 'done' : ''}`} style={{ margin: '8px 0 0' }}>
         <ClipboardCheck size={15} />
         <span className="grow"><b>{ins.dismissed ? (ins.resolution === 'skipped' ? 'Not doing it' : 'Done') : `Action needed${ins.needsReply ? '' : ' (no reply needed)'}`}:</b> {ins.actionSummary || 'see the email'}

@@ -27,6 +27,10 @@ export const DEFAULT_SETTINGS = {
     learnStyle: true,             // learn how the user writes from sent mail (weekly)
     learnedStyle: '',             // generated description (see ai/tasks.js learnStyleJob)
     learnedStyleAt: 0,
+    contactProfiles: true,        // profiles of the people the user writes with (ai/profiles.js)
+    learnAboutMe: true,           // learn the user's role, projects, people from their sent mail (monthly)
+    learnedAboutMe: '',
+    learnedAboutMeAt: 0,
     aboutMe: '',                  // context given to the assistant (role, company, ...)
     maxConcurrency: 2,
     privacyMode: false,           // when true, only local providers (ollama / custom base URLs on LAN) are used

@@ -296,4 +296,14 @@ export const migrations = [
   `
   ALTER TABLE accounts ADD COLUMN invite_calendar_id INTEGER;
   `,
+  // 19: what the AI knows about each person the user corresponds with (ai/profiles.js): who they are, what is discussed,
+  //     how the user writes to them; user_notes are the user's own corrections and always win.
+  `
+  CREATE TABLE contact_profiles (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, email TEXT NOT NULL, name TEXT,
+    profile_json TEXT, user_notes TEXT, msg_count INTEGER DEFAULT 0, built_count INTEGER DEFAULT 0, last_message_at INTEGER,
+    built_at INTEGER, PRIMARY KEY (user_id, email)
+  );
+  CREATE INDEX idx_messages_user_from ON messages(user_id, from_addr, date DESC);
+  `,
 ];

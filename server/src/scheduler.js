@@ -10,6 +10,7 @@ import { enqueue } from './ai/queue.js';
 import { backfillAnalysis, purgeMemory } from './mail/pipeline.js';
 import { listSpaces } from './spaces.js';
 import { expireInsights } from './ai/tasks.js';
+import { seedCorrespondents, scheduleProfiles } from './ai/profiles.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
@@ -59,6 +60,14 @@ function checkReminders() {
 function scheduleStyle() {
   for (const u of all('SELECT id FROM users')) {
     const s = getSettings(u.id).ai;
+    // What the AI knows about the people the user writes with, and about the user (ai/profiles.js).
+    if (s.enabled) {
+      try { seedCorrespondents(u.id); scheduleProfiles(u.id); } catch (e) { log.error(e); }
+      if (s.learnAboutMe !== false && now() - (s.learnedAboutMeAt || 0) > 30 * 864e5
+        && !get("SELECT 1 AS x FROM ai_jobs WHERE user_id = ? AND type = 'aboutme' AND (status IN ('queued', 'running') OR updated_at > ?)", u.id, now() - 864e5)) {
+        enqueue(u.id, 'aboutme', 'aboutme', 3, { force: true });
+      }
+    }
     if (!s.enabled || !s.learnStyle || now() - (s.learnedStyleAt || 0) < 7 * 864e5) continue;
     // At most one attempt a day (e.g. while there is too little sent mail to learn from).
     if (get("SELECT 1 AS x FROM ai_jobs WHERE user_id = ? AND type = 'style' AND (status IN ('queued', 'running') OR updated_at > ?)", u.id, now() - 864e5)) continue;

@@ -11,6 +11,7 @@ import { listRange, findFreeSlots } from '../calendar/repo.js';
 import { userAccounts } from '../accounts.js';
 import { scope, inIds, cleanSpace } from '../spaces.js';
 import { rememberFact, briefLive } from './tasks.js';
+import { profileText, profilesMentioned } from './profiles.js';
 
 const STOP = new Set('a an the and or but of to in on at for with from by about what which who whom when where why how is are was were be been do does did have has had i me my we our you your it this that these those any some all can could would should will shall may might please tell show find give list email emails mail mails message messages me us last recent recently latest'.split(' '));
 const REMEMBER = /^\s*(?:please\s+)?(?:remember|note)(?:\s+that)?\s*[:,]?\s+([\s\S]{4,})$/i;
@@ -123,8 +124,14 @@ Today's events:\n${live.events.map((e) => `- ${e.allDay ? 'all day' : `${localSt
     for (const m of [...live.attention, ...live.awaiting, ...live.actions]) if (!msgs.some((x) => x.id === m.id)) msgs.push({ id: m.id, subject: m.subject, from_name: m.from, from_addr: '', date: m.date });
   }
 
+  // People: those the question names, then the senders of the emails found — who they are and how the user writes
+  // with them (contact profiles, ai/profiles.js).
+  const people = [...new Set([...profilesMentioned(userId, question, 3),
+    ...[...new Set(msgs.map((m) => m.from_addr).filter(Boolean))].slice(0, 4).map((a) => profileText(userId, a, { writing: true }))].filter(Boolean))].slice(0, 5);
+
   const sections = [
     open,
+    people.length && `PEOPLE (what the user's mail shows about them; the user's own notes are authoritative):\n${people.map((p) => `- ${p}`).join('\n')}`,
     facts.length && `THINGS YOU REMEMBER ABOUT THE USER'S WORLD (with the date they were noted):\n${facts.map((f) => `- ${f.text} (noted ${localStamp(f.created_at, tz).slice(4, 14)})`).join('\n')}`,
     `EMAILS:\n${emailPart.join('\n\n') || '(none found)'}`,
     threads.length && `CONVERSATION SUMMARIES:\n${threads.join('\n\n')}`,

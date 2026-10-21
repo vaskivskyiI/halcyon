@@ -131,7 +131,7 @@ test('the AI learns from "important", "not important", category and spam correct
 });
 
 test('search: keyword results come without AI; meaning-based results come separately', async () => {
-  await waitFor(() => db.prepare("SELECT COUNT(*) AS n FROM ai_jobs WHERE status IN ('queued','running')").get().n === 0);
+  await waitFor(() => db.prepare("SELECT COUNT(*) AS n FROM ai_jobs WHERE status = 'running' OR (status = 'queued' AND run_after <= ?)").get(Date.now()).n === 0);
   const kw = await api('GET', '/api/messages?q=shipping&semantic=0');
   assert.ok(kw.items.length >= 1);
   const ai = await api('GET', `/api/search/semantic?q=${encodeURIComponent('bill of lading packing list order')}&exclude=${kw.items.map((m) => m.id).join(',')}`);

@@ -148,7 +148,17 @@ function Composer({ id, init, minimized }) {
   const [max, setMax] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
-  const [undoHtml, setUndoHtml] = useState(null);
+  // AI changes can be undone step by step (body and subject as they were before each change).
+  const aiHist = useRef([]);
+  const [aiSteps, setAiSteps] = useState(0);
+  const beforeAi = () => { aiHist.current = [...aiHist.current.slice(-19), { html: editor.current.innerHTML, subject }]; setAiSteps(aiHist.current.length); };
+  const undoAi = () => {
+    const last = aiHist.current.pop();
+    setAiSteps(aiHist.current.length);
+    if (!last || !editor.current) return;
+    editor.current.innerHTML = last.html; setSubject(last.subject); setDirty(true);
+  };
+  const doneAi = (what) => toast(what, { duration: 8000, action: { label: 'Undo', onClick: undoAi } });
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [draftId, setDraftId] = useState(init.draftId || null);
   const [dirty, setDirty] = useState(false);
@@ -208,7 +218,7 @@ function Composer({ id, init, minimized }) {
   };
 
   async function runAiReply(intent) {
-    setAiBusy(true); setUndoHtml(editor.current.innerHTML);
+    setAiBusy(true); beforeAi();
     const ctl = new AbortController(); abort.current = ctl;
     try {
       if (intent === null) {
@@ -218,6 +228,7 @@ function Composer({ id, init, minimized }) {
         let out = '';
         await stream('/api/ai/draft-reply', { messageId: init.inReplyToId, intent: intent || null, stream: true }, { signal: ctl.signal, onToken: (t) => { out += t; setBodyText(out); } });
       }
+      doneAi('Reply drafted by AI');
     } catch (e) { if (e.name !== 'AbortError') toastError(e); } finally { setAiBusy(false); }
   }
 
@@ -225,7 +236,7 @@ function Composer({ id, init, minimized }) {
     const instruction = aiPrompt.trim();
     if (!instruction) return;
     if (isReply) { setAiPrompt(''); return runAiReply(instruction); }
-    setAiBusy(true); setUndoHtml(editor.current.innerHTML);
+    setAiBusy(true); beforeAi();
     const ctl = new AbortController(); abort.current = ctl;
     try {
       let out = '';
@@ -236,6 +247,7 @@ function Composer({ id, init, minimized }) {
       if (r.subject && !subject) setSubject(r.subject);
       setBodyText(r.body);
       setAiPrompt('');
+      doneAi('Email written by AI');
     } catch (e) { if (e.name !== 'AbortError') toastError(e); } finally { setAiBusy(false); }
   };
 
@@ -245,7 +257,7 @@ function Composer({ id, init, minimized }) {
     const range = inEditor ? sel.getRangeAt(0).cloneRange() : null;
     const text = inEditor ? sel.toString() : userText();
     if (!text.trim()) return toast('Write something first, or select text to rewrite');
-    setAiBusy(true); setUndoHtml(editor.current.innerHTML);
+    setAiBusy(true); beforeAi();
     try {
       let out = '';
       let node;
@@ -253,6 +265,7 @@ function Composer({ id, init, minimized }) {
       const result = await stream('/api/ai/rewrite', { text, mode, language }, { onToken: (t) => { out += t; if (node) node.innerText = out; else setBodyText(out); } });
       if (node) node.innerText = result; else setBodyText(result);
       setDirty(true);
+      doneAi(mode === 'translate' ? `Translated to ${language}` : 'Rewritten by AI');
     } catch (e) { toastError(e); } finally { setAiBusy(false); }
   };
 
@@ -403,6 +416,7 @@ function Composer({ id, init, minimized }) {
           { section: 'Translate to' },
           ...LANGS.map((l) => ({ label: l, icon: Languages, onClick: () => runRewrite('translate', l) })),
         ])}><Wand2 size={14} /> Rewrite <ChevronDown size={12} /></button>}
+        {settings.ai.enabled && aiSteps > 0 && !aiBusy && <button className="btn sm" title="Undo the last AI change" onClick={undoAi}><Undo2 size={13} /> Undo AI</button>}
       </div>
       <div ref={editor} className="editor" contentEditable suppressContentEditableWarning onInput={() => setDirty(true)}
         onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); } }} />
@@ -417,7 +431,7 @@ function Composer({ id, init, minimized }) {
           {aiBusy ? <button className="btn sm" onClick={() => abort.current?.abort()}><Spinner size={13} /> Stop</button>
             : <button className="btn sm ai" onClick={runAiCompose} disabled={!aiPrompt.trim() && !isReply}>{isReply && !aiPrompt.trim() ? 'Draft reply' : 'Write'}</button>}
           {isReply && !aiPrompt && !aiBusy && <button className="btn sm ghost" onClick={() => runAiReply('')}>Auto-draft</button>}
-          {undoHtml && !aiBusy && <button className="btn sm ghost" title="Undo AI change" onClick={() => { editor.current.innerHTML = undoHtml; setUndoHtml(null); }}><Undo2 size={13} /></button>}
+          {aiSteps > 0 && !aiBusy && <button className="btn sm" title="Undo the last AI change (step by step)" onClick={undoAi}><Undo2 size={13} /> Undo AI{aiSteps > 1 ? ` (${aiSteps})` : ''}</button>}
         </div>
       )}
       <div className="composer-foot">

@@ -83,6 +83,14 @@ export default function AISettings() {
 
       <h3>Personalisation</h3>
       <label className="field">About you (role, company, what matters — helps prioritisation)<textarea className="input" defaultValue={ai.aboutMe} onBlur={(e) => setAi({ aboutMe: e.target.value })} placeholder="e.g. I'm a researcher at the Jožef Stefan Institute; emails from students and grant agencies are important." /></label>
+      <Switch label="Learn about me from my mail" hint="Your role, organisation, projects and the people you work with, from your sent mail and remembered facts (monthly). Used in every AI request; your own words above win." checked={ai.learnAboutMe !== false} onChange={(v) => setAi({ learnAboutMe: v })} />
+      {ai.learnAboutMe !== false && <div className="card" style={{ padding: 10 }}>
+        <div className="row"><b className="grow small">What the AI learned about you</b><span className="small faint">{ai.learnedAboutMeAt ? `updated ${new Date(ai.learnedAboutMeAt).toLocaleDateString()}` : 'not learned yet'}</span>
+          <button className="btn sm" onClick={async () => { try { await api.post('/api/ai/about-me/refresh'); toast('Learning about you in the background…'); } catch (e) { toastError(e); } }}><RefreshCw size={13} /> Learn now</button></div>
+        <textarea className="input" rows={ai.learnedAboutMe ? 6 : 2} style={{ marginTop: 6 }} defaultValue={ai.learnedAboutMe} key={ai.learnedAboutMeAt || 0}
+          placeholder="Nothing learned yet (needs at least 5 sent emails). You can also write or correct it here." onBlur={(e) => e.target.value !== (ai.learnedAboutMe || '') && setAi({ learnedAboutMe: e.target.value })} />
+      </div>}
+      <Switch label="Profiles of the people I write with" hint="Who each person is, what you discuss and how you write to them, built in the background from your mail; used for analysis, drafts and the assistant. See and correct them in Contacts or next to an email." checked={ai.contactProfiles !== false} onChange={(v) => setAi({ contactProfiles: v })} />
       <Switch label="Learn my writing style from sent mail" hint="Drafts use your earlier emails to the same person as examples, and a short description of how you write (refreshed weekly)." checked={ai.learnStyle} onChange={(v) => setAi({ learnStyle: v })} />
       {ai.learnStyle && <div className="card" style={{ padding: 10 }}>
         <div className="row"><b className="grow small">Learned from your sent mail</b><span className="small faint">{ai.learnedStyleAt ? `updated ${new Date(ai.learnedStyleAt).toLocaleDateString()}` : 'not learned yet'}</span>

@@ -296,17 +296,13 @@ function MessageList({ view, openId, onMenu }) {
     if (e.type === 'ai:draft') setItems((cur) => cur.map((m) => (m.id === e.payload.messageId && m.ai ? { ...m, ai: { ...m.ai, hasDraft: true } } : m)));
   }), [params]);
 
-  const open = (m) => {
-    navigate(`#/mail/${view}/${m.id}`);
-    if (!m.isRead && settings.mail.markReadAfterMs >= 0) {
-      setTimeout(() => {
-        if (location.hash.endsWith(`/${m.id}`)) {
-          api.post('/api/messages/actions', { ids: [m.id], action: 'read', threads: threaded }).then(() => loadFolders());
-          setItems((cur) => cur.map((x) => (x.id === m.id ? { ...x, isRead: true, threadUnread: 0 } : x)));
-        }
-      }, settings.mail.markReadAfterMs);
-    }
-  };
+  // Marking as read happens in the reader (it knows every message shown, also in a conversation); the list follows.
+  const open = (m) => navigate(`#/mail/${view}/${m.id}`);
+  useEffect(() => {
+    const h = (e) => setItems((cur) => cur.map((x) => (e.detail.ids.includes(x.id) || e.detail.threadId === x.threadId ? { ...x, isRead: true, threadUnread: 0 } : x)));
+    window.addEventListener('halcyon:read', h);
+    return () => window.removeEventListener('halcyon:read', h);
+  }, []);
 
   const selIds = selected.size ? [...selected] : openId ? [openId] : [];
   const act = (requested, extra = {}, ids = selIds) => {
