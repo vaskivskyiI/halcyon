@@ -1,7 +1,7 @@
 import { db, get, all, run, json, now, update } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { ids, httpError } from './util.js';
-import { serializeMessage, readRaw, parseRaw, messageRow, senderOf, inviteText } from '../mail/store.js';
+import { serializeMessage, readRaw, parseRaw, messageRow, senderOf, inviteText, icsOf } from '../mail/store.js';
 import { sanitizeEmailHtml, htmlToText } from '../mail/sanitize.js';
 import * as actions from '../mail/actions.js';
 import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft } from '../mail/send.js';
@@ -265,6 +265,7 @@ export default async function mailRoutes(app) {
     const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!m) return httpError(reply, 404, 'Not found');
     await senderOf(m);
+    await icsOf(m);
     return { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) };
   });
 
@@ -294,7 +295,7 @@ export default async function mailRoutes(app) {
     const seen = new Set();
     const msgs = rows.filter((m) => (seen.has(m.message_id) ? false : seen.add(m.message_id)));
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
-    for (const m of msgs) await senderOf(m);
+    for (const m of msgs) { await senderOf(m); await icsOf(m); }
     return { messages: msgs.map((m) => fullMessage(req.user.id, m, req.query.images === '1')), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
   });
 
@@ -425,6 +426,13 @@ export default async function mailRoutes(app) {
   });
 
   app.get('/api/messages/:id/invitation', async (req) => invitationFor(req.user.id, Number(req.params.id)));
+  // The calendar data as a file (open it in another calendar app when it cannot be read here).
+  app.get('/api/messages/:id/invitation.ics', async (req, reply) => {
+    const m = get('SELECT calendar_ics FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!m?.calendar_ics) return httpError(reply, 404, 'No calendar data in this message');
+    reply.header('content-type', 'text/calendar; charset=utf-8').header('content-disposition', 'attachment; filename="invitation.ics"');
+    return m.calendar_ics;
+  });
 
   // ---- sending
   app.post('/api/send', async (req, reply) => {

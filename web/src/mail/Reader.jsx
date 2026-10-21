@@ -247,7 +247,8 @@ export default function Reader({ id, view }) {
             return <button key={`fold${m.id}`} className="thread-fold" onClick={() => setShowAll(true)}>{n} earlier message{n > 1 ? 's' : ''}</button>;
           }
           return <MessageCard key={m.id} m={m} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const x = new Set(s); x.has(m.id) ? x.delete(m.id) : x.add(m.id); return x; })}
-            onReply={(mode) => reply(mode, m)} onShowImages={() => { setAllowImages(true); load(true); }} translation={thread.translations?.[m.id]} onInviteChanged={load} />;
+            onReply={(mode) => reply(mode, m)} onShowImages={() => { setAllowImages(true); load(true); }} translation={thread.translations?.[m.id]} onInviteChanged={load}
+            onExtractEvent={async () => { try { setEventDraft(await api.post('/api/ai/extract-event', { messageId: m.id })); } catch (e) { toastError(e); } }} />;
         })}
 
         <QuickReply latest={latest} onSent={() => load()} hasDraft={!!ins?.draftReply} />
@@ -374,7 +375,7 @@ function AddrLine({ label, list, empty }) {
   );
 }
 
-function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged }) {
+function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`}>
@@ -405,7 +406,7 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
         </div>}
       </div>
       {expanded && <>
-        {m.hasInvite && <Invitation messageId={m.id} onChanged={onInviteChanged} />}
+        {m.hasInvite && <Invitation messageId={m.id} onChanged={onInviteChanged} onExtract={onExtractEvent} />}
         {m.blockedRemote > 0 && <div className="notice"><ImageIcon size={15} /> Remote images were blocked to protect your privacy.<span className="grow" /><button className="btn sm" onClick={onShowImages}>Show images</button></div>}
         {translation && <div className="notice" style={{ display: 'block' }}><div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Languages size={13} /> Translation</div><div style={{ whiteSpace: 'pre-wrap' }}>{translation}</div></div>}
         <div className="msg-body">{m.html ? <HtmlFrame html={m.html} /> : <PlainBody text={m.text} />}</div>
@@ -502,13 +503,26 @@ function PlainBody({ text }) {
   </>;
 }
 
-function Invitation({ messageId, onChanged }) {
+function Invitation({ messageId, onChanged, onExtract }) {
   const [inv, setInv] = useState(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null); // { response, text } while a note to the organiser is being written
   const [openMenu, menuNode] = useMenu();
-  useEffect(() => { api.get(`/api/messages/${messageId}/invitation`).then(setInv).catch(() => {}); }, [messageId]);
-  if (!inv?.event) return null;
+  useEffect(() => { api.get(`/api/messages/${messageId}/invitation`).then((r) => setInv(r || { error: 'The calendar data in this email could not be found' })).catch((e) => setInv({ error: e.message })); }, [messageId]);
+  if (!inv) return null;
+  // Not readable: say so, and offer to read the time from the text or to open the calendar file elsewhere.
+  if (!inv.event) return (
+    <div className="invite-card">
+      <div className="row" style={{ alignItems: 'flex-start' }}>
+        <CalendarPlus size={20} color="var(--warning)" />
+        <div className="grow"><div style={{ fontWeight: 650 }}>Calendar invitation</div><div className="small muted">{inv.error}</div></div>
+      </div>
+      <div className="row" style={{ marginTop: 10 }}>
+        {onExtract && <button className="btn sm" onClick={onExtract}><Sparkles size={13} /> Add to calendar (read from the text)</button>}
+        <a className="btn sm" href={api.url(`/api/messages/${messageId}/invitation.ics`)}><Download size={13} /> Calendar file (.ics)</a>
+      </div>
+    </div>
+  );
   const e = inv.event;
   const LABEL = { accept: 'Accepted', tentative: 'Tentatively accepted', decline: 'Declined' };
   // sendReply false: only your calendar changes, the organiser is not told.

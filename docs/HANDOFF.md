@@ -319,3 +319,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   search `is:done`, `is:skipped`.
 - round16 checks that every `api.<method>()` used in web/src exists in web/src/api.js (an `api.put` call broke the
   OAuth setup dialog).
+- Invitation detection (`findIcs` in store.js): text/calendar, application/ics, .ics/.vcs names, calendar data
+  recognised by content in text / octet-stream parts, and inside forwarded messages (message/rfc822, 2 levels).
+  `calendar_ics = ''` means checked, none; NULL (older mail) is re-checked when opened (`icsOf`). `invitationFor`
+  returns `{ error }` instead of null when the data cannot be read; the card then offers "Add to calendar (read from
+  the text)" and `/api/messages/:id/invitation.ics`.

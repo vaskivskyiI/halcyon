@@ -11,9 +11,10 @@ export function invitationFor(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m?.calendar_ics) return null;
   let parsed;
-  try { parsed = parseIcs(m.calendar_ics, getSettings(userId).calendar.timezone); } catch { return null; }
-  const ev = parsed.events[0];
-  if (!ev) return null;
+  // An invitation that cannot be read is reported (the card says so and offers alternatives), not hidden.
+  try { parsed = parseIcs(m.calendar_ics, getSettings(userId).calendar.timezone); } catch (e) { return { error: `The calendar data in this email could not be read (${e.message})` }; }
+  const ev = parsed.events.find((x) => x.start) || parsed.events[0];
+  if (!ev) return { error: 'This email contains calendar data without an event' };
   const mine = userAccounts(userId).map((a) => a.email.toLowerCase());
   const me = ev.attendees.find((a) => mine.includes(a.email));
   const local = get('SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.uid = ? AND e.recurrence_id IS NULL', userId, ev.uid);
@@ -22,7 +23,7 @@ export function invitationFor(userId, messageId) {
 
 export function respondToInvitation(userId, messageId, response, { comment, sendReply = true } = {}) {
   const inv = invitationFor(userId, messageId);
-  if (!inv) throw new Error('No invitation in this message');
+  if (!inv?.event) throw new Error(inv?.error || 'No invitation in this message');
   const m = get('SELECT * FROM messages WHERE id = ?', messageId);
   const account = get('SELECT * FROM accounts WHERE id = ?', m.account_id);
   const myEmail = inv.myEmail || account.email.toLowerCase();

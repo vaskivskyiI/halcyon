@@ -39,6 +39,40 @@ export async function senderOf(m) {
   return v;
 }
 
+// Calendar data in a message: a text/calendar or .ics part (any type name senders use), calendar data recognised by its
+// content in other text parts, or inside a forwarded message (the original invitation attached as message/rfc822).
+const ICS_BLOCK = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/;
+export async function findIcs(parsed, depth = 0) {
+  const atts = parsed.attachments || [];
+  const typed = atts.find((a) => /^(text\/calendar|text\/x-vcalendar|application\/ics|application\/x-ics)/i.test(a.contentType || '') || /\.(ics|vcs)$/i.test(a.filename || ''));
+  const block = (s) => { const m = String(s || '').match(ICS_BLOCK); return m && /BEGIN:VEVENT/.test(m[0]) ? m[0] : null; };
+  if (typed) return block(typed.content.toString('utf8')) || typed.content.toString('utf8');
+  for (const a of atts) {
+    if (a.size > 5e6) continue;
+    if (/^message\/rfc822/i.test(a.contentType || '') && depth < 2) {
+      const inner = await findIcs(await parseRaw(a.content), depth + 1).catch(() => null);
+      if (inner) return inner;
+    } else if (/^(text\/|application\/octet-stream)/i.test(a.contentType || '')) {
+      const b = block(a.content.toString('utf8'));
+      if (b) return b;
+    }
+  }
+  // Some clients put the invitation in a text body part.
+  return block(parsed.text);
+}
+
+/** Invitations in older mail (stored before detection improved): looked for once when the message is opened. */
+export async function icsOf(m) {
+  if (m.calendar_ics != null) return m.calendar_ics;
+  let ics = '';
+  const raw = readRaw(m);
+  if (raw) { try { ics = (await findIcs(await parseRaw(raw))) || ''; } catch { /* unreadable */ } }
+  run('UPDATE messages SET calendar_ics = ? WHERE id = ?', ics, m.id);
+  m.calendar_ics = ics;
+  if (ics && !String(m.body_text || '').trim() && !m.body_html) run('UPDATE messages SET body_text = ? WHERE id = ?', (m.body_text = inviteText(ics)), m.id);
+  return ics;
+}
+
 /** Text of an invitation that has no body of its own (only calendar data): its description and location. */
 export function inviteText(ics) {
   try {
@@ -134,13 +168,9 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   const html = parsed.html || null;
   let text = parsed.text || (html ? htmlToText(html) : '');
   const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 240);
-  let ics = null;
-  const attachments = (parsed.attachments || []).map((a, i) => {
-    if (a.contentType === 'text/calendar' || /\.ics$/i.test(a.filename || '')) ics = a.content.toString('utf8');
-    return { index: i, filename: a.filename || `attachment-${i + 1}`, contentType: a.contentType, size: a.size, cid: a.cid || null, inline: a.contentDisposition === 'inline' && !!a.cid };
-  });
-  // Some clients put the invitation in an alternative body part rather than an attachment.
-  if (!ics && /BEGIN:VCALENDAR/.test(text) && /METHOD:/.test(text)) ics = text.slice(text.indexOf('BEGIN:VCALENDAR'));
+  const attachments = (parsed.attachments || []).map((a, i) => (
+    { index: i, filename: a.filename || `attachment-${i + 1}`, contentType: a.contentType, size: a.size, cid: a.cid || null, inline: a.contentDisposition === 'inline' && !!a.cid }));
+  const ics = await findIcs(parsed);
   // An invitation sent as calendar data only: its description is the message.
   if (!html && !text.trim() && ics) text = inviteText(ics);
   const realAttachments = attachments.filter((a) => !a.inline);
@@ -161,7 +191,7 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
       account.user_id, account.id, folder.id, uid, messageId, inReplyTo || null, JSON.stringify(refs), threadId, key,
       parsed.subject || '', from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), JSON.stringify(replyTo),
       date, snippet, text, html, realAttachments.length ? 1 : 0, JSON.stringify(attachments), raw.length,
-      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics, actingSender(parsed.headers, from), now());
+      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics || '', actingSender(parsed.headers, from), now());
     const mid = r.lastInsertRowid;
     run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', mid, parsed.subject || '',
       `${from.name} ${from.address}`, [...to, ...cc].map((a) => `${a.name} ${a.address}`).join(' '), text.slice(0, 30000));
