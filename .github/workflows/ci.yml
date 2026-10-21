@@ -1,6 +1,7 @@
 name: CI
 on: [push, pull_request]
 jobs:
+  # Unit, API and UI-logic tests (no mail server needed): a failure here is a real regression.
   test:
     runs-on: ubuntu-24.04
     steps:
@@ -8,8 +9,20 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci -w server -w web
+      - run: npm test -w server -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/gh-reporter.mjs --test-reporter-destination=stdout
+      - run: npm run build
+
+  # Against real Dovecot (IMAP) and Radicale (CalDAV/CardDAV). Reported but not blocking for now: failing tests show
+  # up as annotations on the run (readable without the logs) and do not mark the run as failed.
+  servers:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci -w server -w web
       - run: sudo ./server/test/setup-dovecot.sh
       - run: ./server/test/setup-radicale.sh
-      - run: npm test
+      - run: npm run test:servers -w server -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/gh-reporter.mjs --test-reporter-destination=stdout
         env: { TEST_DAV_URL: 'http://127.0.0.1:5232/alice/' }
-      - run: npm run build

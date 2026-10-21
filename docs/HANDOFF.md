@@ -332,3 +332,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Calendar: wheel in month view, sideways swipe / Shift+wheel in every view move through time (throttled).
 - OAuth sign-in window: BroadcastChannel / storage event / postMessage(origin) back to the app (Google's pages cut
   window.opener), then closes itself or asks to be closed; the Add-account dialog closes on success.
+- CalDAV push: tsdav returns the HTTP response instead of throwing; refused writes used to count as saved, and the next
+  sync then deleted the local event (accepted invitations "disappeared"). Now: non-2xx (except 404 on delete) → stays
+  dirty, `calendars.sync_error` → problems panel; events with href but no etag that the server does not list (by href
+  or UID) are re-saved, not deleted; file names are sanitised UIDs. Accepting returns calendar/space/start → toast
+  with "Show" (opens the calendar on that day, switching space if needed).
+- CI: `npm test` = all offline tests (round16 checks every test file is in a script); `npm run test:servers` = e2e
+  (Dovecot) + dav + round19 (Radicale), a separate job with continue-on-error; failures become ::error annotations
+  (server/test/gh-reporter.mjs), readable via the public API without the logs. desktop.yml had invalid YAML
+  (`{…,deb}` in a flow mapping) and failed on every push.
+- Radicale for local runs without root: pip --user (see scratch notes); Dovecot needs root, so e2e has not been run
+  locally.

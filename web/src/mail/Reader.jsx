@@ -10,8 +10,8 @@ import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, tex
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { openComposer, replyPayload } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
-import { EventEditor } from '../calendar/CalendarView.jsx';
-import { loadFolders } from '../data.js';
+import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
+import { loadFolders, setSpace } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 import { topicView, categoryView } from './MailView.jsx';
 
@@ -530,8 +530,16 @@ function Invitation({ messageId, onChanged, onExtract }) {
   const respond = async (response, { sendReply = true, comment } = {}) => {
     setBusy(true);
     try {
-      await api.post(`/api/messages/${messageId}/invitation/respond`, { response, sendReply, comment: comment || undefined });
-      toast(`${LABEL[response]}${sendReply && e.organizer?.email ? ` — response sent to ${e.organizer.name || e.organizer.email}` : ' — no response sent'}${response !== 'decline' ? '; it is in your calendar' : ''}`);
+      const r = await api.post(`/api/messages/${messageId}/invitation/respond`, { response, sendReply, comment: comment || undefined });
+      const sent = sendReply && e.organizer?.email ? ` — response sent to ${e.organizer.name || e.organizer.email}` : ' — no response sent';
+      const where = r.calendar ? ` · in “${r.calendar.name}”${r.calendar.space ? ` (${r.calendar.space})` : ''} on ${new Date(r.start).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}` : '';
+      // "Show" opens the calendar on that day, in a space where that calendar is visible.
+      const show = () => {
+        const cur = store.get().space;
+        if (cur && r.calendar?.space !== cur) setSpace(r.calendar?.space || '');
+        showCalendarDate(r.start); navigate('#/calendar');
+      };
+      toast(`${LABEL[response]}${sent}${response !== 'decline' ? where : ''}`, response !== 'decline' && r.calendar ? { duration: 10000, action: { label: 'Show', onClick: show } } : {});
       setNote(null);
       setInv(await api.get(`/api/messages/${messageId}/invitation`));
       onChanged?.();

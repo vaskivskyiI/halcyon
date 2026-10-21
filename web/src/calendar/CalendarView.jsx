@@ -25,6 +25,8 @@ function rangeFor(view, date, weekStart) {
 }
 
 let shownDate = Date.now();
+/** Opens the calendar on a given day next time it is shown (e.g. "Show" after accepting an invitation). */
+export const showCalendarDate = (t) => { shownDate = t; };
 
 export default function CalendarView() {
   const settings = store.use((s) => s.settings);

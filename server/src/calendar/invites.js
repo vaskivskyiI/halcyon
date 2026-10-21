@@ -5,7 +5,7 @@ import { parseIcs, buildIcs } from './ics.js';
 import { createEvent, updateEvent, serializeEvent, defaultCalendar } from './repo.js';
 import { queueSend } from '../mail/send.js';
 import { userAccounts } from '../accounts.js';
-import { calendarForAccount } from '../spaces.js';
+import { calendarForAccount, spaceMap } from '../spaces.js';
 
 export function invitationFor(userId, messageId) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
@@ -51,7 +51,9 @@ export function respondToInvitation(userId, messageId, response, { comment, send
       icalEvent: { method: 'REPLY', content: ics },
     });
   }
-  return { eventId, status: partstat };
+  // Where it went, so the user can find it (the calendar may belong to another space).
+  const placed = eventId && get('SELECT e.start, c.id AS calendar_id, c.name FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ?', eventId);
+  return { eventId, status: partstat, start: placed?.start || inv.event.start, calendar: placed ? { id: placed.calendar_id, name: placed.name, space: spaceMap(userId).calendars.get(placed.calendar_id) || '' } : null };
 }
 
 /** Process METHOD:REPLY / CANCEL automatically when such messages arrive. */

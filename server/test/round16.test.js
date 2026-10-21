@@ -80,3 +80,10 @@ test('every api.<method>() the web app calls exists in its API client', () => {
   for (const [m, file] of used) assert.ok(methods.has(m), `api.${m}() is used in ${file} but not defined in api.js`);
   assert.ok(methods.has('put'));
 });
+
+test('every test file is run by an npm script (new tests are not left out of CI)', () => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)));
+  const scripts = JSON.parse(fs.readFileSync(path.join(dir, '../package.json'), 'utf8')).scripts;
+  const listed = `${scripts.test} ${scripts['test:servers']}`;
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.test.js'))) assert.ok(listed.includes(`test/${f}`), `${f} is not in "test" or "test:servers"`);
+});

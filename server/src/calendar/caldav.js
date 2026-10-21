@@ -35,28 +35,42 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
     }
     // Push dirty events grouped by UID (never for read-only calendars).
     const dirtyUids = cal.readonly ? [] : [...new Set(all('SELECT uid FROM events WHERE calendar_id = ? AND dirty = 1', cal.id).map((r) => r.uid))];
+    let pushFailed = false;
     for (const uid of dirtyUids) {
       const family = all('SELECT * FROM events WHERE calendar_id = ? AND uid = ?', cal.id, uid);
       const master = family.find((e) => !e.recurrence_id) || family[0];
+      // tsdav returns the server's answer instead of throwing: a refused write (403, 412, 415, …) must not be taken
+      // for success — the event would be marked as saved and then removed by the next sync as "gone on the server".
+      const ok = (res, what) => {
+        if (res && res.ok === false && res.status !== 404) throw new Error(`the calendar server refused to ${what} it (${res.status} ${res.statusText || ''})`.trim());
+        return res;
+      };
       try {
         if (master.deleted) {
-          if (master.href) await client.deleteCalendarObject({ calendarObject: { url: master.href, etag: master.etag } });
+          if (master.href) ok(await client.deleteCalendarObject({ calendarObject: { url: master.href, etag: master.etag } }), 'delete');
           run('DELETE FROM events WHERE calendar_id = ? AND uid = ?', cal.id, uid);
           continue;
         }
         const live = family.filter((e) => !e.deleted);
         const ics = buildIcs(live.map(serializeEvent));
         if (master.href) {
-          await client.updateCalendarObject({ calendarObject: { url: master.href, data: ics, etag: master.etag } });
+          ok(await client.updateCalendarObject({ calendarObject: { url: master.href, data: ics, etag: master.etag } }), 'update');
           run('UPDATE events SET dirty = 0 WHERE calendar_id = ? AND uid = ?', cal.id, uid);
         } else {
-          const filename = `${uid}.ics`;
-          await client.createCalendarObject({ calendar: remote, filename, iCalString: ics });
+          // A plain file name: UIDs from Outlook / Google contain characters some servers refuse in a URL.
+          const filename = `${uid.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 120)}.ics`;
+          ok(await client.createCalendarObject({ calendar: remote, filename, iCalString: ics }), 'save');
           run('UPDATE events SET dirty = 0, href = ? WHERE calendar_id = ? AND uid = ?', new URL(filename, remote.url).href, cal.id, uid);
         }
         run('DELETE FROM events WHERE calendar_id = ? AND uid = ? AND deleted = 1', cal.id, uid);
-      } catch (e) { log.warn(`push ${uid}: ${e.message}`); }
+      } catch (e) {
+        log.warn(`push ${uid}: ${e.message}`);
+        // Kept locally (still marked to be saved); the problems panel shows why.
+        run('UPDATE calendars SET sync_error = ? WHERE id = ?', `“${master.title || 'Event'}” could not be saved to the server calendar: ${e.message}`.slice(0, 300), cal.id);
+        pushFailed = true;
+      }
     }
+    if (!pushFailed) run('UPDATE calendars SET sync_error = NULL WHERE id = ? AND sync_error IS NOT NULL', cal.id);
     if (cal.ctag && remote.ctag && cal.ctag === remote.ctag) continue;
     const objects = await client.fetchCalendarObjects({ calendar: remote });
     const seen = new Set();
@@ -68,8 +82,14 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
         if (local && local.etag && local.etag === o.etag) continue;
         if (o.data) upsertFromIcs(cal.id, o.url, o.etag, o.data);
       }
-      for (const e of all('SELECT DISTINCT href FROM events WHERE calendar_id = ? AND href IS NOT NULL AND dirty = 0', cal.id)) {
-        if (!seen.has(e.href)) run('DELETE FROM events WHERE calendar_id = ? AND href = ?', cal.id, e.href);
+      // Gone on the server → gone here. Except events this app saved that the server never listed (no etag yet): if the
+      // server has the same event under another address it was just renamed (the server copy was taken above);
+      // otherwise it is saved again instead of silently disappearing.
+      const remoteUids = new Set(objects.map((o) => (String(o.data || '').match(/^UID:(.+?)\r?$/m) || [])[1]).filter(Boolean));
+      for (const e of all('SELECT href, uid, MAX(etag IS NOT NULL) AS confirmed FROM events WHERE calendar_id = ? AND href IS NOT NULL AND dirty = 0 GROUP BY href', cal.id)) {
+        if (seen.has(e.href)) continue;
+        if (!e.confirmed && !remoteUids.has(e.uid)) run('UPDATE events SET dirty = 1, href = NULL WHERE calendar_id = ? AND href = ?', cal.id, e.href);
+        else run('DELETE FROM events WHERE calendar_id = ? AND href = ?', cal.id, e.href);
       }
       run('UPDATE calendars SET ctag = ? WHERE id = ?', remote.ctag || null, cal.id);
     });
