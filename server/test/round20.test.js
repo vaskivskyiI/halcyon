@@ -91,3 +91,15 @@ test('an event moves to another calendar (with its changed occurrences), also ou
   assert.ok(list.filter((e) => e.uid === ev.uid).every((e) => e.calendarId === cal.other));
   assert.equal(list.filter((e) => e.uid === ev.uid).length, 3, 'all three occurrences shown once');
 });
+
+test('reading an email also marks its copies in other folders of the account as read', async () => {
+  const inbox = db.prepare("SELECT * FROM folders WHERE account_id = ? AND path = 'INBOX'").get(acc.private.id);
+  const archive = db.prepare('SELECT * FROM folders WHERE id = ?').get(db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'Archive', 'Archive', '\Archive')").run(acc.private.id).lastInsertRowid);
+  const mk = (folder) => Number(db.prepare("INSERT INTO messages (user_id, account_id, folder_id, uid, message_id, thread_id, subject, from_addr, to_json, cc_json, date, is_read, created_at) VALUES (?, ?, ?, ?, 'copy-1@x', 'tc', 'Copy', 'a@x.example', '[]', '[]', ?, 0, ?)")
+    .run(uid, acc.private.id, folder.id, ++n, Date.now(), Date.now()).lastInsertRowid);
+  const a = mk(inbox), b = mk(archive);
+  await api('POST', '/api/messages/actions', { ids: [a], action: 'read' });
+  assert.deepEqual(db.prepare('SELECT is_read FROM messages WHERE id IN (?, ?) ORDER BY id').all(a, b).map((r) => r.is_read), [1, 1]);
+  await api('POST', '/api/messages/actions', { ids: [b], action: 'unread' });
+  assert.deepEqual(db.prepare('SELECT is_read FROM messages WHERE id IN (?, ?) ORDER BY id').all(a, b).map((r) => r.is_read), [0, 0]);
+});

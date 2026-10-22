@@ -59,18 +59,22 @@ export default function Reader({ id, view }) {
   }, [id, conv, allowImages]);
 
   // Opened = read (after the configured delay, if it is still the message shown): every unread message shown here.
+  // Runs again whenever what is unread changes (a cached copy is shown first, then the fresh one), and always includes
+  // the message that was opened (the conversation may show another copy of it, e.g. the one in Archive).
+  const unreadKey = thread?.current?.id === Number(id)
+    ? [...new Set([...(thread.messages || []).filter((x) => !x.isRead).map((x) => x.id), ...(thread.current.isRead ? [] : [thread.current.id])])].join(',') : '';
   useEffect(() => {
-    const unread = (thread?.messages || []).filter((x) => !x.isRead).map((x) => x.id);
+    const unread = unreadKey ? unreadKey.split(',').map(Number) : [];
     const delay = settings.mail.markReadAfterMs;
-    if (!unread.length || delay < 0 || thread?.current?.id !== Number(id)) return undefined;
+    if (!unread.length || delay < 0) return undefined;
     const t = setTimeout(() => {
-      if (!location.hash.endsWith(`/${id}`)) return;
+      if (location.hash.replace(/[?].*$/, '').split('/').pop() !== String(id)) return; // still the message shown
       api.post('/api/messages/actions', { ids: unread, action: 'read' }).then(() => loadFolders()).catch(() => {});
-      setThread((th) => th && { ...th, messages: th.messages.map((x) => (unread.includes(x.id) ? { ...x, isRead: true } : x)) });
-      window.dispatchEvent(new CustomEvent('halcyon:read', { detail: { ids: unread, threadId: thread.current.threadId } }));
+      setThread((th) => th && { ...th, current: { ...th.current, isRead: true }, messages: th.messages.map((x) => (unread.includes(x.id) ? { ...x, isRead: true } : x)) });
+      window.dispatchEvent(new CustomEvent('halcyon:read', { detail: { ids: unread, threadId: thread?.current?.threadId } }));
     }, delay);
     return () => clearTimeout(t);
-  }, [thread?.current?.id, thread?.messages?.length]);
+  }, [unreadKey]);
 
   useEffect(() => {
     setAllowImages(false); setShowAll(false);

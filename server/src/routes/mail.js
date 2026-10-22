@@ -349,6 +349,13 @@ export default async function mailRoutes(app) {
       target = [...new Set([...target, ...list])];
     }
     const u = req.user.id;
+    // Read / unread: the same email in other folders of the account (a copy in Archive, Gmail labels) follows, so it
+    // does not stay unread elsewhere after it was read.
+    if ((action === 'read' || action === 'unread') && target.length) {
+      const copies = all(`SELECT c.id FROM messages c JOIN messages m ON m.account_id = c.account_id AND m.message_id = c.message_id
+        WHERE m.user_id = ? AND m.id IN (${target.map(() => '?').join(',')}) AND c.id != m.id AND c.is_read = ?`, u, ...target, action === 'read' ? 0 : 1).map((r) => r.id);
+      target = [...new Set([...target, ...copies])];
+    }
     // Everything that moves mail can be undone: remember where it was.
     const undo = ['archive', 'trash', 'spam', 'notspam', 'move'].includes(action) ? actions.folderSnapshot(u, target) : null;
     switch (action) {
