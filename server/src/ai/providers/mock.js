@@ -36,6 +36,7 @@ export function mock() {
           requested_items: /forward|posreduj|send me|pošlji/i.test(last)
             ? [{ description: 'requested email', keywords: [...new Set((last.split(/\n\n/).pop().match(/\p{L}{7,}/gu) || []).map((w) => w.toLowerCase()))].slice(0, 6) }] : [],
           subject: `Re: ${subject}`, body: 'Thanks for your message. I will follow up shortly.',
+          resolves: [...(system.includes('OPEN REQUESTS') ? system.split('OPEN REQUESTS').pop() : '').matchAll(/\[(\d+)\][^·\n]*· ([^—→\n]+)/g)].filter((r) => email.toLowerCase().includes(r[2].trim().toLowerCase())).map((r) => Number(r[1])),
         });
       } else {
         text = `Here is a helpful response based on your request.\n\n${last.slice(0, 80).replace(/\n/g, ' ')}...`;

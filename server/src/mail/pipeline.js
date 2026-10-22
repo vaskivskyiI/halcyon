@@ -12,6 +12,7 @@ import { spamMessages } from './actions.js';
 import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
 import { noteCorrespondence } from '../ai/profiles.js';
+import { markReplied } from '../ai/open-items.js';
 
 const log = logger('pipeline');
 const NEVER_ANALYZE = ['\\Trash', '\\Junk', '\\Drafts'];
@@ -26,6 +27,8 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
 
   // Who the user corresponds with: counted for contact profiles (built in the background, ai/profiles.js).
   for (const m of messages) noteCorrespondence(account.user_id, isSent ? [...json(m.to_json, []), ...json(m.cc_json, [])].map((a) => a.address) : isInbox ? [m.from_addr] : [], m.date);
+  // Mail from the user (sent here, from the phone, webmail or another account): what it answers no longer waits.
+  for (const m of messages) { try { markReplied(account.user_id, m.id); } catch (e) { log.warn(`replied ${m.id}: ${e.message}`); } }
 
   if (settings.mail.autoCollectContacts && isSent) {
     for (const m of messages) collectAddresses(account.user_id, [...json(m.to_json, []), ...json(m.cc_json, [])], m.date, true, account.id);

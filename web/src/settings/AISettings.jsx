@@ -70,6 +70,12 @@ export default function AISettings() {
       <h3>Background processing</h3>
       <div className="small muted" style={{ marginTop: -6 }}>New mail is analysed as it arrives so summaries, priorities, action items and reply drafts are ready the moment you open it.</div>
       <Switch label="Analyse new mail automatically" checked={ai.autoAnalyze} onChange={(v) => setAi({ autoAnalyze: v })} />
+      <div className="form-grid" title="The AI is sometimes wrong: its guesses only stay in Needs reply / Action needed while they are recent and the mail matters. What you mark yourself stays twice as long.">
+        <label className="field">“Needs reply” and “Action needed” from the AI — keep for (days)
+          <input className="input" type="number" min={1} max={90} defaultValue={ai.openItemsDays ?? 14} onBlur={(e) => setAi({ openItemsDays: Math.max(1, Number(e.target.value) || 14) })} /></label>
+        <label className="field">…only for mail with AI priority at least (0–100)
+          <input className="input" type="number" min={0} max={100} defaultValue={ai.openMinPriority ?? 40} onBlur={(e) => setAi({ openMinPriority: Math.min(100, Math.max(0, Number(e.target.value) || 0)) })} /></label>
+      </div>
       <div className="form-grid">
         <label className="field">Analyse messages newer than (days)<input className="input" type="number" min="1" value={ai.analyzeDays} onChange={(e) => setAi({ analyzeDays: Number(e.target.value) })} /></label>
         <label className="field">Folders to analyse<select className="input" value={ai.analyzeFolders} onChange={(e) => setAi({ analyzeFolders: e.target.value })}><option value="inbox">Inbox and Sent</option><option value="all">All folders (except trash/spam)</option></select></label>

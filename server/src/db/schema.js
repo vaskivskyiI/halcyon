@@ -306,4 +306,9 @@ export const migrations = [
   );
   CREATE INDEX idx_messages_user_from ON messages(user_id, from_addr, date DESC);
   `,
+  // 20: the user's email that answered / completed an open request (set by the conversation rule or by the AI when it
+  //     analyses sent mail, which may be a new conversation, another subject or more people) — shown, and undoable.
+  `
+  ALTER TABLE ai_insights ADD COLUMN resolved_by INTEGER;
+  `,
 ];

@@ -17,12 +17,13 @@ import { notify } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
 import { recordFeedback, correctInsight } from '../ai/learning.js';
 import { CATEGORIES } from '../ai/prompts.js';
+import { openReplySql, openActionSql, openChecker, NOISE as OPEN_NOISE } from '../ai/open-items.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
-  i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
+  i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_reply_user AS ai_needs_reply_user, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
 
@@ -36,11 +37,12 @@ const SORTS = {
   flagged: (t) => `${t}is_flagged`,
 };
 
-function listItem(r) {
+// open: openChecker(userId) — "reply needed" / "action" only while still open (same rules as the views).
+function listItem(r, open) {
   return serializeMessage(r, {
-    ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
+    ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: open ? open(r).reply : !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
       topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()),
-      needsAction: !!r.ai_needs_action && !r.ai_dismissed, actionSummary: r.ai_action_summary || null } : null,
+      needsAction: open ? open(r).action : !!r.ai_needs_action && !r.ai_dismissed, actionSummary: r.ai_action_summary || null } : null,
     hasDraft: !!r.has_user_draft,
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
@@ -53,9 +55,10 @@ function scopeFor(userId, q, sc) {
   else if (view === 'unified') where.push("m.folder_id IN (SELECT f.id FROM folders f WHERE f.special_use = '\\Inbox')");
   else if (view === 'flagged') where.push("m.is_flagged = 1 AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))");
   else if (view === 'snoozed') where.push('m.snoozed_until IS NOT NULL');
-  else if (view === 'needsreply') where.push("m.is_answered = 0 AND m.id IN (SELECT message_id FROM ai_insights WHERE needs_reply = 1 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
-  else if (view === 'needsaction') where.push("m.id IN (SELECT message_id FROM ai_insights WHERE needs_action = 1 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
-  else if (view === 'important') where.push("m.id IN (SELECT message_id FROM ai_insights WHERE priority >= 70 AND dismissed_at IS NULL) AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')");
+  // Open items: one definition for lists, counts, search and the brief (ai/open-items.js).
+  else if (view === 'needsreply') where.push(`${openReplySql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
+  else if (view === 'needsaction') where.push(`${openActionSql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
+  else if (view === 'important') where.push(`i.priority >= 70 AND i.dismissed_at IS NULL AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} AND m.date >= ${Date.now() - 30 * 864e5} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
   else if (view === 'topic' && q.topic) { where.push('lower(i.topic) = lower(?)'); params.push(String(q.topic)); }
   else if (view === 'category' && q.category) { where.push("i.category = ? AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))"); params.push(String(q.category)); }
   else if (view === 'label' && q.labelId) { where.push('EXISTS (SELECT 1 FROM json_each(m.labels_json) j WHERE j.value = ?)'); params.push(Number(q.labelId)); }
@@ -189,7 +192,7 @@ export default async function mailRoutes(app) {
       if (!found.length) return { items: [], hasMore: false };
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
       const byId = new Map(rows.map((r) => [r.id, r]));
-      return { items: found.map((id) => byId.get(id)).filter(Boolean).map(listItem), hasMore: false };
+      return { items: found.map((id) => byId.get(id)).filter(Boolean).map((r) => listItem(r, openChecker(req.user.id))), hasMore: false };
     }
     const { where, params } = scopeFor(req.user.id, q, sc);
     const threaded = q.threads !== '0' && getSettings(req.user.id).ui.conversationView;
@@ -231,7 +234,7 @@ export default async function mailRoutes(app) {
       rows = all(`SELECT ${LIST_COLS}, m.size AS size FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.date < ?
         ORDER BY ${order('m.')} LIMIT ? OFFSET ?`, ...params, cursor, limit + 1, offset);
     }
-    return { items: rows.slice(0, limit).map(listItem), hasMore: rows.length > limit };
+    return { items: rows.slice(0, limit).map((r) => listItem(r, openChecker(req.user.id))), hasMore: rows.length > limit };
   });
 
   function fullMessage(userId, m, allowRemote) {
@@ -273,6 +276,9 @@ export default async function mailRoutes(app) {
   app.post('/api/messages/needs-reply', async (req) => {
     const value = req.body?.value ? 1 : 0;
     let own = ids(req.body?.ids).filter((id) => get('SELECT 1 AS x FROM messages WHERE id = ? AND user_id = ?', id, req.user.id));
+    // The user's own verdict on the messages they chose — also taught to the AI for those senders (two "needs no
+    // reply" in a row from a sender → not suggested again for them). Not for the rest of a conversation.
+    for (const id of own) recordFeedback(req.user.id, get('SELECT * FROM messages WHERE id = ?', id), value ? 'reply' : 'noreply');
     // In conversation view a row stands for its conversation: "no reply needed" clears every message in it
     // (marking stays on the message itself).
     if (!value && req.body?.threads && own.length) {
@@ -281,7 +287,8 @@ export default async function mailRoutes(app) {
       own = [...new Set(own)];
     }
     for (const id of own) {
-      if (get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', id)) run('UPDATE ai_insights SET needs_reply = ?, needs_reply_user = ?, dismissed_at = CASE WHEN ? = 1 THEN NULL ELSE dismissed_at END WHERE message_id = ?', value, value, value, id);
+      if (get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', id)) run(`UPDATE ai_insights SET needs_reply = ?, needs_reply_user = ?, dismissed_at = CASE WHEN ? = 1 THEN NULL ELSE dismissed_at END,
+        resolution = CASE WHEN ? = 1 AND resolution = 'replied' THEN NULL ELSE resolution END WHERE message_id = ?`, value, value, value, value, id);
       else run("INSERT INTO ai_insights (message_id, priority, needs_reply, needs_reply_user, category, model, created_at) VALUES (?, 50, ?, ?, 'other', 'user', ?)", id, value, value, Date.now());
       const m = get('SELECT thread_id FROM messages WHERE id = ?', id);
       notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', id)) });
@@ -388,7 +395,9 @@ export default async function mailRoutes(app) {
     if (!m) return httpError(reply, 404, 'Not found');
     // resolution: 'done' (the user did it) or 'skipped' (decided not to act); both leave Action needed and the brief.
     const undo = req.body?.dismissed === false;
-    const resolution = req.body?.resolution === 'skipped' ? 'skipped' : 'done';
+    // 'wrong': the AI was wrong — not an action for the user (learned for this sender, see ai/learning.js).
+    const resolution = ['skipped', 'wrong'].includes(req.body?.resolution) ? req.body.resolution : 'done';
+    if (!undo && resolution === 'wrong') recordFeedback(req.user.id, get('SELECT * FROM messages WHERE id = ?', m.id), 'noaction');
     run('UPDATE ai_insights SET dismissed_at = ?, resolution = ? WHERE message_id = ?', undo ? null : Date.now(), undo ? null : resolution, m.id);
     notify(req.user.id, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) });
     return { ok: true };
@@ -561,7 +570,7 @@ export default async function mailRoutes(app) {
     const { where, params } = buildWhere(req.user.id, { ...f, terms: [] }, sc);
     const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
     const byId = new Map(rows.map((r) => [r.id, r]));
-    return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map(listItem) };
+    return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map((r) => listItem(r, openChecker(req.user.id))) };
   });
 }
 

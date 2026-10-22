@@ -43,7 +43,7 @@ export function userContext(user, settings, accounts) {
   return lines.join('\n');
 }
 
-export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '', topics = [] }) {
+export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '', topics = [], openRequests = '', related = '' }) {
   return {
     system: `You are an email triage assistant. ${ctx}
 ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}Analyze the email and return a JSON object with exactly these keys:
@@ -64,7 +64,10 @@ ${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "act
 - "requested_items": if the sender asks the user to send or forward an earlier email, document or attachment, an array of {"description": short description in English, "keywords": 3-6 search words in the email's language and in English}; else [].
 - "topic": short name (1-4 words) of the ongoing project, event, case or activity this email belongs to, e.g. "Helios grant", "NQW 2026 conference", "Order 4471", "Flat renovation"; null for one-off mail, newsletters and notifications.${topics.length ? ` Reuse one of these existing topics when it fits: ${topics.map((t) => `"${t}"`).join(', ')}.` : ''}
 - "facts": 0-3 short, self-contained facts worth remembering for months (who someone is and their role, agreements, commitments, deadlines, project names), written in ${language} with full names, e.g. "Ana Novak is the user's PhD student". Use [] for newsletters, notifications, promotions and routine mail — usually [].
-${preferences ? `\nThe user's own past corrections (follow them for similar mail):\n${preferences}\n` : ''}Output JSON only.`,
+${fromMe && openRequests ? `- "resolves": the ids (numbers) of the OPEN REQUESTS below that this email by the user clearly answers or completes — also when it is a new conversation, has another subject or goes to more people (e.g. the user sends the asked-for document, confirms the date, gives the requested answer). [] when unsure: a wrong id hides a request the user still has to handle.
+OPEN REQUESTS to the user (from these recipients or this conversation):
+${openRequests}
+` : ''}${related ? `\nRECENT MAIL WITH THE SAME PEOPLE in other conversations (context only — e.g. this email may answer or continue one of them; do not summarise these):\n${related}\n` : ''}${preferences ? `\nThe user's own past corrections (follow them for similar mail):\n${preferences}\n` : ''}Output JSON only.`,
     messages: [{ role: 'user', content: `${senderInfo}\n\n${message}` }],
   };
 }

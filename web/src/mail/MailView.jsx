@@ -376,7 +376,7 @@ function MessageList({ view, openId, onMenu }) {
       for (const id of ids) await api.post(`/api/messages/${id}/dismiss`, { resolution });
       setItems((cur) => (view === 'needsaction' ? cur.filter((x) => !ids.includes(x.id)) : cur.map((x) => (ids.includes(x.id) && x.ai ? { ...x, ai: { ...x.ai, needsAction: false } } : x))));
       setSelected(new Set());
-      toast(resolution === 'skipped' ? `Not doing it — ${ids.length} removed from Action needed` : `Done — ${ids.length} removed from Action needed`);
+      toast(resolution === 'skipped' ? `Not doing it — ${ids.length} removed from Action needed` : resolution === 'wrong' ? `Not an action — the AI will learn from this` : `Done — ${ids.length} removed from Action needed`);
       loadFolders();
     } catch (e) { toastError(e); }
   };
@@ -403,6 +403,7 @@ function MessageList({ view, openId, onMenu }) {
       { label: 'Create task…', icon: ClipboardCheck, onClick: () => store.set({ taskDialog: m.id }) },
       m.ai?.needsAction && { label: 'Action: done', icon: ClipboardCheck, onClick: () => settleMany(ids, 'done') },
       m.ai?.needsAction && { label: 'Action: not doing it', icon: X, onClick: () => settleMany(ids, 'skipped') },
+      m.ai?.needsAction && { label: 'Action: not an action (AI was wrong)', icon: X, hint: 'AI learns', onClick: () => settleMany(ids, 'wrong') },
       { label: 'Mark as needs reply', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, true) },
       { label: 'Remove “needs reply”', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, false) },
       settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },

@@ -14,6 +14,7 @@ import { seedCorrespondents, scheduleProfiles } from './ai/profiles.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
+import { markRepliedHistory } from './ai/open-items.js';
 
 const log = logger('scheduler');
 const davBusy = new Set();
@@ -103,6 +104,7 @@ export function startScheduler() {
   const backfillAll = () => { for (const u of all('SELECT id FROM users')) { try { backfillAnalysis(u.id); } catch (e) { log.error(e); } } };
   setTimeout(backfillAll, 15e3).unref();
   setTimeout(() => regroupConversations().catch((e) => log.error(e)), 20e3).unref();
+  setTimeout(() => { try { markRepliedHistory(); } catch (e) { log.error(e); } }, 40e3).unref();
   setInterval(() => { try { db.pragma('optimize'); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(() => { try { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); } catch (e) { log.error(e); } }, 3600e3).unref();

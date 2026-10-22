@@ -249,7 +249,7 @@ export default function Reader({ id, view }) {
           onDone={async (resolution = 'done', undo = false) => {
             try {
               await api.post(`/api/messages/${latest.id}/dismiss`, undo ? { dismissed: false } : { resolution });
-              toast(undo ? 'Back in Action needed' : resolution === 'skipped' ? 'Noted: not doing it — removed from Action needed' : 'Marked as done');
+              toast(undo ? 'Back in Action needed' : resolution === 'skipped' ? 'Noted: not doing it — removed from Action needed' : resolution === 'wrong' ? 'Noted: not an action — the AI will learn from this' : 'Marked as done');
               load();
             } catch (e) { toastError(e); }
           }} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
@@ -313,13 +313,18 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
       {/* Who the sender is and how the user writes with them (contact profile; editable). */}
       {requester?.address && <PersonProfile email={requester.address} name={requester.name} compact />}
+      {ins?.resolution === 'replied' && !ins.needsAction && <div className="notice action-needed done" style={{ margin: '8px 0 0' }}>
+        <CornerUpLeft size={15} /><span className="grow"><b>Answered</b>{ins.resolvedBy ? <> by <a href={`#/mail/unified/${ins.resolvedBy}`}>your email</a></> : ''}{ins.resolvedAt ? ` of ${new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}` : ''}</span>
+        <button className="btn sm ghost" title="Your email did not answer it: put it back in Needs reply" onClick={() => onNeedsReply(true)}>Still needs a reply</button>
+      </div>}
       {ins?.needsAction && !ins.expired && <div className={`notice action-needed ${ins.dismissed ? 'done' : ''}`} style={{ margin: '8px 0 0' }}>
         <ClipboardCheck size={15} />
-        <span className="grow"><b>{ins.dismissed ? (ins.resolution === 'skipped' ? 'Not doing it' : 'Done') : `Action needed${ins.needsReply ? '' : ' (no reply needed)'}`}:</b> {ins.actionSummary || 'see the email'}
-          {ins.dismissed && ins.resolvedAt && <span className="faint"> · {ins.resolution === 'skipped' ? 'decided' : 'marked done'} {new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}</span>}</span>
-        {ins.dismissed ? <button className="btn sm ghost" title="Put it back in Action needed" onClick={() => onDone(null, true)}>Undo</button> : <>
+        <span className="grow"><b>{ins.dismissed ? ({ skipped: 'Not doing it', wrong: 'Not an action', replied: 'Answered' }[ins.resolution] || 'Done') : `Action needed${ins.needsReply ? '' : ' (no reply needed)'}`}:</b> {ins.actionSummary || 'see the email'}
+          {ins.dismissed && ins.resolvedAt && <span className="faint"> · {ins.resolvedBy ? <a href={`#/mail/unified/${ins.resolvedBy}`}>by your email</a> : ins.resolution === 'skipped' ? 'decided' : 'marked'} {new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}</span>}</span>
+        {ins.dismissed ? <button className="btn sm ghost" title="Put it back in Action needed" onClick={() => onDone(null, true)}>{ins.resolvedBy ? 'Still open' : 'Undo'}</button> : <>
           <button className="btn sm" title="You did it — it leaves Action needed and the brief" onClick={() => onDone('done')}>✓ Done</button>
           <button className="btn sm ghost" title="You decided not to act on it — it leaves Action needed and the brief, and stays recorded as not done" onClick={() => onDone('skipped')}>Not doing it</button>
+          <button className="link-btn small" title="The AI was wrong: this is not something for you to do (it learns this for the sender)" onClick={() => onDone('wrong')}>Not an action</button>
         </>}
       </div>}
       {ins?.requests?.map((rq, i) => (

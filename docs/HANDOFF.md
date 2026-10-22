@@ -370,3 +370,17 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Mark as read moved to the Reader (all unread messages shown in the conversation, after markReadAfterMs); the list
   updates through `halcyon:read`. Selected rows stay highlighted when unread (CSS order bug).
 - Test helpers that wait for an idle AI queue ignore jobs scheduled for later (profile builds are delayed 5 min).
+
+### Open items you can trust (audit, migration 20)
+- `ai/open-items.js` is the single definition of "needs reply" / "action needed" for views, counts, tab counts, list
+  labels (`openChecker`), search (`is:needsreply`, `is:action`) and the brief: not handled, not expired, recent
+  (`ai.openItemsDays`, default 14; the user's own marks 2×), and for AI guesses: priority ≥ `ai.openMinPriority`
+  (40; actions 60% of it) and not newsletter/promotion/social/notification. "Important" view: last 30 days, no noise.
+- Replies: `markReplied` on every ingested mail from the user (any client/account): earlier messages from others in
+  the conversation → resolution 'replied', `resolved_by`; the message replied to gets \Answered. One-time history
+  pass (`app_state` 'replied:v1'). Across conversations: when sent mail is analysed, `openRequestsFor` (open items from
+  its recipients / its conversation, 30 days) go into the prompt and the model returns `resolves` → `resolveByAi`.
+  Incoming mail is analysed with recent mail with the same people from other conversations (`relatedMail`).
+- AI can be wrong: everything closed automatically shows why ("Answered by your email …") with "Still needs a reply"
+  / "Still open"; "Not an action" (resolution 'wrong'). Corrections are feedback kinds reply/noreply/action/noaction;
+  two in a row for a sender → applyPreference clears needs_reply / needs_action for that sender's new mail.

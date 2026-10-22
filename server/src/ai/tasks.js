@@ -17,6 +17,7 @@ import { senderPreference, applyPreference, preferenceExamples } from './learnin
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
+import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, resolveByAi } from './open-items.js';
 
 const LANG_NAMES = P.LANG_NAMES;
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
@@ -41,7 +42,7 @@ export function serializeInsight(r) {
     needsAction: !!r.needs_action, actionSummary: r.action_summary || null,
     topic: r.topic || null, dismissed: !!r.dismissed_at,
     // How a requested action was settled ('done' | 'skipped') and when.
-    resolution: r.dismissed_at ? r.resolution || 'done' : null, resolvedAt: r.dismissed_at || null,
+    resolution: r.dismissed_at ? r.resolution || 'done' : null, resolvedAt: r.dismissed_at || null, resolvedBy: r.resolved_by || null,
   };
 }
 
@@ -94,18 +95,18 @@ export function briefLive(userId, space = '') {
   const row = (m) => ({ id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, date: m.date, priority: m.priority, isRead: !!m.is_read, needsReply: !!m.needs_reply, category: m.category, topic: m.topic });
   const attention = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
-    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL AND i.priority >= 60 AND ${live}
+    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL AND i.priority >= 60 AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} AND ${live}
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 48 * 3600e3).map(row);
   const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
-    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND i.needs_reply = 1 AND m.is_answered = 0 AND m.date >= ? AND ${live}
+    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND ${openReplySql(userId)} AND m.date >= ? AND m.snoozed_until IS NULL
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 7 * 864e5).map(row).filter((m) => !attention.some((a) => a.id === m.id));
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const events = sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), start.getTime() + 864e5, sc?.calendarIds, { includeInfo: false })
     .map((e) => ({ id: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location, onlineMeeting: e.onlineMeeting, color: e.color }));
   const actions = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic, i.action_summary
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
-    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND i.needs_action = 1 AND m.date >= ? AND ${live}
+    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND ${openActionSql(userId)} AND m.date >= ? AND m.snoozed_until IS NULL
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 21 * 864e5).map((m) => ({ ...row(m), action: m.action_summary }))
     .filter((m) => !attention.some((a) => a.id === m.id));
   const tasks = all(`SELECT id, title, due, priority, source_message_id FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
@@ -194,6 +195,17 @@ export async function findRequestedEmails(userId, m, items) {
 
 // ---------- background handlers ----------
 
+/** Up to 4 recent emails with the same person in OTHER conversations (last 30 days), with their summaries. */
+function relatedMail(userId, m, fromMe) {
+  const people = (fromMe ? json(m.to_json, []).map((a) => a.address) : [m.from_addr]).filter(Boolean).map((a) => String(a).toLowerCase()).slice(0, 3);
+  if (!people.length) return [];
+  const mine = new Set(userAccounts(userId).map((a) => a.email.toLowerCase()));
+  const like = people.map(() => '(lower(x.from_addr) = ? OR lower(x.to_json) LIKE ?)').join(' OR ');
+  return all(`SELECT x.id, x.date, x.subject, x.from_name, x.from_addr, i.summary FROM messages x LEFT JOIN ai_insights i ON i.message_id = x.id
+    WHERE x.user_id = ? AND x.thread_id != ? AND x.date BETWEEN ? AND ? AND (${like}) ORDER BY x.date DESC LIMIT 4`,
+  userId, m.thread_id || '', m.date - 30 * 864e5, m.date + 864e5, ...people.flatMap((p) => [p, `%"${p}"%`])).map((r) => ({ ...r, mine: mine.has(String(r.from_addr || '').toLowerCase()) }));
+}
+
 export async function analyzeMessage(userId, messageId, { interactive = false, quiet = false } = {}) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw skip('message gone');
@@ -220,7 +232,12 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const tz = settings.calendar.timezone;
     const pref = fromMe ? { importance: null, category: null } : senderPreference(userId, m.from_addr);
     const topics = recentTopics(userId);
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    // Broader than the conversation: requests the user's email may close (fromMe), and recent mail with the same
+    // people in other conversations (a reply may come as a new email, with another subject or more people).
+    const candidates = fromMe && !quiet ? openRequestsFor(userId, m) : [];
+    const openRequests = candidates.map((c) => `[${c.id}] ${P.localStamp(c.date, tz).slice(0, 10)} from ${c.from_name || c.from_addr} · ${c.subject}${c.action_summary ? ` → ${c.action_summary}` : ''}${c.summary ? ` — ${c.summary}` : ''}`).join('\n');
+    const related = relatedMail(userId, m, fromMe).map((r) => `- ${P.localStamp(r.date, tz).slice(0, 10)} ${r.mine ? 'the user →' : `${r.from_name || r.from_addr} →`} ${r.subject}${r.summary ? ` — ${r.summary}` : ''}`).join('\n');
+    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
       language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
@@ -237,6 +254,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
     saveInsight(m, res.data, model, tz, { quiet });
+    if (candidates.length && Array.isArray(res.data.resolves) && res.data.resolves.length) resolveByAi(userId, m, res.data.resolves, candidates);
     if (settings.ai.embeddings) saveFacts(userId, m, res.data.facts, res.data.category);
   }
   const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
