@@ -69,14 +69,23 @@ export async function stream(url, body, { onToken, onStatus, signal } = {}) {
 
 // ---- real-time events
 const listeners = new Set();
+const otherListeners = new Set();
 let ws, retry = 1000, closedByUser = false;
+// Events of the mail being worked in (own, or the shared space entered) go to onEvent; events of the other one (a
+// shared space, or the own mail while in a shared space) go to onOtherEvent — e.g. to notify about new mail there.
+let activeAs = null;
+export const setApiActing = (id) => { activeAs = id || null; };
 
 export function connectEvents() {
   closedByUser = false;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const target = base ? base.replace(/^http/, 'ws') : `${proto}://${location.host}`;
   ws = new WebSocket(`${target}/api/ws`);
-  ws.onmessage = (e) => { const msg = JSON.parse(e.data); listeners.forEach((fn) => fn(msg)); };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if ((msg.as ?? null) === activeAs || ['connected', 'hello', 'shared:changed'].includes(msg.type)) listeners.forEach((fn) => fn(msg));
+    else otherListeners.forEach((fn) => fn(msg));
+  };
   ws.onopen = () => { retry = 1000; listeners.forEach((fn) => fn({ type: 'connected' })); };
   ws.onclose = () => {
     listeners.forEach((fn) => fn({ type: 'disconnected' }));
@@ -85,3 +94,4 @@ export function connectEvents() {
 }
 export function disconnectEvents() { closedByUser = true; ws?.close(); }
 export function onEvent(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+export function onOtherEvent(fn) { otherListeners.add(fn); return () => otherListeners.delete(fn); }

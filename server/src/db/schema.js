@@ -315,4 +315,15 @@ export const migrations = [
   `
   ALTER TABLE sessions ADD COLUMN read_only INTEGER DEFAULT 0;
   `,
+  // 22: shared spaces (shared.js): a user of kind 'shared' owns the shared mail account, calendar, contacts and tasks;
+  //     nobody signs in as it — its members act as it (cookie halcyon_as), so its data is synced and analysed once.
+  `
+  ALTER TABLE users ADD COLUMN kind TEXT DEFAULT 'person';
+  CREATE TABLE shared_members (
+    shared_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT DEFAULT 'member', created_at INTEGER, PRIMARY KEY (shared_id, user_id)
+  );
+  CREATE INDEX idx_shared_members_user ON shared_members(user_id);
+  ALTER TABLE chats ADD COLUMN author_id INTEGER;
+  `,
 ];

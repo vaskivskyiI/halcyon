@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
-import { User, Sparkles, Mail, Calendar, Filter, Tag, FileText, Palette, Shield, Info, Users as UsersIcon, Bell, Layers, Activity } from 'lucide-react';
+import { User, Sparkles, Mail, Calendar, Filter, Tag, FileText, Palette, Shield, Info, Users as UsersIcon, Bell, Layers, Activity, Share2 } from 'lucide-react';
 import { store } from '../store.js';
 import { navigate } from '../util.js';
 import Accounts from './Accounts.jsx';
 import AISettings from './AISettings.jsx';
 import Rules from './Rules.jsx';
 import Spaces from './Spaces.jsx';
+import Sharing from './Sharing.jsx';
 import { MailPrefs, CalendarPrefs, Appearance, Notifications, Templates, Labels, Security, AdminUsers, About, Diagnostics } from './Prefs.jsx';
 
 const SECTIONS = [
-  ['accounts', User, 'Accounts'], ['spaces', Layers, 'Spaces'], ['ai', Sparkles, 'AI & assistant'], ['mail', Mail, 'Mail'], ['notifications', Bell, 'Notifications'],
+  ['accounts', User, 'Accounts'], ['spaces', Layers, 'Spaces'], ['sharing', Share2, 'Sharing'], ['ai', Sparkles, 'AI & assistant'], ['mail', Mail, 'Mail'], ['notifications', Bell, 'Notifications'],
   ['calendar', Calendar, 'Calendar'], ['rules', Filter, 'Rules'], ['labels', Tag, 'Labels'], ['templates', FileText, 'Templates'],
   ['appearance', Palette, 'Appearance'], ['security', Shield, 'Security'], ['diagnostics', Activity, 'Diagnostics'], ['users', UsersIcon, 'Users', true], ['about', Info, 'About & shortcuts'],
 ];
@@ -17,7 +18,7 @@ const SECTIONS = [
 export default function SettingsView({ route }) {
   const section = route[1] || 'accounts';
   const user = store.use((s) => s.user);
-  const C = { accounts: Accounts, spaces: Spaces, ai: AISettings, mail: MailPrefs, notifications: Notifications, calendar: CalendarPrefs, rules: Rules, labels: Labels, templates: Templates, appearance: Appearance, security: Security, diagnostics: Diagnostics, users: AdminUsers, about: About }[section] || Accounts;
+  const C = { accounts: Accounts, spaces: Spaces, sharing: Sharing, ai: AISettings, mail: MailPrefs, notifications: Notifications, calendar: CalendarPrefs, rules: Rules, labels: Labels, templates: Templates, appearance: Appearance, security: Security, diagnostics: Diagnostics, users: AdminUsers, about: About }[section] || Accounts;
   return (
     <div className="settings">
       <nav className="settings-nav">

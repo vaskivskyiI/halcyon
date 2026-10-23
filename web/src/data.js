@@ -1,5 +1,5 @@
 // Shared data loaders kept in the global store.
-import { api, setApiSpace } from './api.js';
+import { api, setApiSpace, setApiActing } from './api.js';
 import { store } from './store.js';
 
 // The chosen space is a per-device choice (a work laptop can stay in "Work").
@@ -7,6 +7,22 @@ const SPACE_KEY = 'halcyon.space';
 const readSpace = () => { try { return localStorage.getItem(SPACE_KEY) || ''; } catch { return ''; } };
 setApiSpace(readSpace());
 store.set({ space: readSpace() });
+
+/** Shared spaces the user belongs to (with unread counts), for the space switcher and Settings → Sharing. */
+export async function loadShared() {
+  const shared = await api.get('/api/shared').catch(() => []);
+  store.set({ shared });
+  return shared;
+}
+
+/** Work in a shared space (id) or in one's own mail (null). The whole app reloads: every list, cache and setting
+ *  belongs to the mail being worked in. */
+export async function enterShared(id) {
+  await api.post(id ? `/api/shared/${id}/enter` : '/api/shared/leave');
+  setApiActing(id);
+  location.hash = '#/mail/unified';
+  location.reload();
+}
 
 export async function loadSpaces() {
   const spaces = (await api.get('/api/spaces')).spaces;

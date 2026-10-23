@@ -429,3 +429,21 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Event mail (automated or calendar/notification/security/social/promotion/shopping) expires 1 h after its last event.
 - Web: `loadFolders` coalesced (one in flight, ≥2 s apart); folders/problems reload on sync only when it is idle/error;
   problems at most every 5 s. Tab counts in one query. cleanSummary strips "X asks you/<user> to" only (needs "to").
+
+### Shared spaces (migration 22)
+- A shared space is a user of kind 'shared' (nobody signs in as it; not listed in Settings → Users) that owns the
+  shared mail account, calendar, address book and tasks. Members (`shared_members`, role owner|member) act as it:
+  `POST /api/shared/:id/enter` sets the `halcyon_as` cookie; `requireUser` (auth.js `actingAs`) then sets
+  `req.user` = the shared user and `req.person` = the member, after checking membership on every request.
+  `/api/auth|admin|shared` always act as the person. So all existing user-scoped code works unchanged, the data is
+  synced and analysed once, and the AI context there is built only from shared data (no personal aboutMe / style).
+- shared.js: createShared (copies AI providers + AI/calendar/mail settings, not personal ones), members, and moving
+  between owners keeping all derived data: `moveAccount` (messages, insights, thread summaries if the whole thread
+  moves, memory/facts by owner key, feedback, approvals, tasks from its mail, drafts, outbox, rules, labels remapped,
+  its CalDAV/CardDAV calendars & books; sync worker restarted), `moveCalendar`, `moveAddressBook`, `moveTasks`;
+  `fixDefaults` keeps a default calendar on both sides and drops the space's empty starters.
+- Per person inside a space: `ui` and `notifications` settings (routes/settings.js), assistant chats (`chats.author_id`).
+- WebSocket: a member's socket also gets the space's events, tagged `as`; the web app routes them to `onOtherEvent`
+  (desktop notification for new mail there, unread count on the space switcher). Switching reloads the app.
+- Web: space switcher lists "My mail" and shared spaces; pill "Shared: <name>"; Settings → Sharing (create, members,
+  move in / out); task menu "Share in …".

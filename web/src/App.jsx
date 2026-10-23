@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, Layers } from 'lucide-react';
-import { api, connectEvents, onEvent } from './api.js';
+import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
-import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace } from './data.js';
+import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace, loadShared, enterShared } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
 import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
@@ -26,10 +26,12 @@ export default function App() {
     try {
       const st = await api.get('/api/auth/status');
       setStatus(st);
-      store.set({ readOnly: !!st.readOnly });
+      store.set({ readOnly: !!st.readOnly, acting: st.acting || null });
+      setApiActing(st.acting?.id || null);
       if (st.user) {
         await loadMe();
         await loadSpaces().catch(() => {});
+        await loadShared();
         await Promise.all([loadFolders(), loadAccounts(), loadLabels(), loadProviders()]);
         connectEvents();
       }
@@ -56,6 +58,7 @@ function Shell() {
   const accounts = store.use((s) => s.accounts);
   const accountsLoaded = store.use((s) => s.accountsLoaded);
   const readOnly = store.use((s) => s.readOnly);
+  const acting = store.use((s) => s.acting);
   const reloadTimer = useRef();
   const insightTimer = useRef();
 
@@ -90,7 +93,19 @@ function Shell() {
         default: break;
       }
     });
-    return () => { off(); window.removeEventListener('halcyon:mutated', mutated); };
+    // The other mail (a shared space, or one's own while in a shared space): notify about new mail there and keep its
+    // unread count in the space switcher current.
+    let sharedTimer = null;
+    const offOther = onOtherEvent((e) => {
+      const s = store.get().settings;
+      if (e.type === 'mail:new') {
+        const where = e.as ? (store.get().shared || []).find((x) => x.id === e.as)?.name || 'Shared' : 'My mail';
+        if (s?.notifications.newMail && !s.notifications.onlyImportant) for (const m of e.payload.messages) notifyDesktop(`${where}: ${m.from}`, `${m.subject}\n${m.snippet || ''}`, () => enterShared(e.as || null));
+      }
+      if (['mail:new', 'mail:changed', 'folder:synced'].includes(e.type) && !sharedTimer) sharedTimer = setTimeout(() => { sharedTimer = null; loadShared(); }, 3000);
+    });
+    const offShared = onEvent((e) => { if (e.type === 'shared:changed') loadShared(); });
+    return () => { off(); offOther(); offShared(); clearTimeout(sharedTimer); window.removeEventListener('halcyon:mutated', mutated); };
   }, []);
 
   // Unread count in the title and (desktop) taskbar badge.
@@ -108,7 +123,8 @@ function Shell() {
   }, [section]);
 
   useEffect(() => {
-    if (accountsLoaded && !accounts.length && section === 'mail') navigate('#/settings/accounts');
+    // No mail account yet: set one up — unless there is a shared space to work in.
+    if (accountsLoaded && !accounts.length && section === 'mail' && !(store.get().shared || []).length) navigate('#/settings/accounts');
   }, [accountsLoaded, accounts.length]);
 
   const nav = [
@@ -167,7 +183,8 @@ function Shell() {
   });
   return (
     <div className="app">
-      {readOnly && <div className="readonly-pill" title="This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.">Read-only session</div>}
+      {(readOnly || acting) && <div className={`readonly-pill ${acting && !readOnly ? 'shared' : ''}`} title={readOnly ? 'This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.' : `You are working in the shared space “${acting.name}” — its mail, calendar, contacts and tasks are shared with its members.`}>
+        {[acting && `Shared: ${acting.name}`, readOnly && 'Read-only session'].filter(Boolean).join(' · ')}</div>}
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (
@@ -204,14 +221,24 @@ function Shell() {
 function SpaceSwitcher() {
   const spaces = store.use((s) => s.spaces);
   const space = store.use((s) => s.space);
+  const shared = store.use((s) => s.shared) || [];
+  const acting = store.use((s) => s.acting);
   const [openMenu, menuNode] = useMenu();
-  if (!spaces.length) return null;
-  const items = [{ section: 'Show' }, { label: `All spaces${!space ? ' ✓' : ''}`, onClick: () => setSpace('') },
-    ...spaces.map((s) => ({ label: `${s}${space === s ? ' ✓' : ''}`, onClick: () => setSpace(s) })), 'sep',
-    { label: 'Manage spaces…', icon: Settings, onClick: () => navigate('#/settings/spaces') }];
+  if (!spaces.length && !shared.length) return null;
+  const unread = shared.filter((s) => s.id !== acting?.id).reduce((n, s) => n + (s.unread || 0), 0);
+  const items = [
+    ...(shared.length ? [{ section: 'Mail' }, { label: `My mail${!acting ? ' ✓' : ''}`, onClick: () => acting && enterShared(null) },
+      ...shared.map((s) => ({ label: `${s.name} (shared)${acting?.id === s.id ? ' ✓' : ''}`, hint: s.unread && acting?.id !== s.id ? `${s.unread} unread` : '', onClick: () => acting?.id !== s.id && enterShared(s.id) })), 'sep'] : []),
+    ...(spaces.length ? [{ section: 'Show' }, { label: `All spaces${!space ? ' ✓' : ''}`, onClick: () => setSpace('') },
+      ...spaces.map((s) => ({ label: `${s}${space === s ? ' ✓' : ''}`, onClick: () => setSpace(s) })), 'sep'] : []),
+    { label: 'Manage spaces…', icon: Settings, onClick: () => navigate('#/settings/spaces') },
+    ...(shared.length || !acting ? [{ label: 'Sharing…', icon: Users, onClick: () => navigate('#/settings/sharing') }] : []),
+  ];
+  const label = acting ? acting.name : space;
   return <>
-    <button className={`space-btn ${space ? 'active' : ''}`} title={space ? `Space: ${space}` : 'All spaces'} aria-label="Switch space" onClick={(e) => openMenu(e, items)}>
-      {space ? <span className="space-initial">{space.slice(0, 2)}</span> : <Layers size={19} />}
+    <button className={`space-btn ${label ? 'active' : ''} ${acting ? 'shared' : ''}`} title={acting ? `Shared space: ${acting.name}` : space ? `Space: ${space}` : 'All spaces'} aria-label="Switch space" onClick={(e) => openMenu(e, items)}>
+      {label ? <span className="space-initial">{label.slice(0, 2)}</span> : <Layers size={19} />}
+      {unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}
     </button>
     {menuNode}
   </>;

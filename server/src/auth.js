@@ -43,7 +43,7 @@ export function sessionFromRequest(req) {
  */
 export function readOnlyBlocks(req) {
   const path = req.url.split('?')[0];
-  if (['/api/auth/logout', '/api/auth/login', '/api/auth/read-only'].includes(path)) return false;
+  if (['/api/auth/logout', '/api/auth/login', '/api/auth/read-only', '/api/shared/leave'].includes(path) || /^\/api\/shared\/\d+\/enter$/.test(path)) return false;
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return true;
   return /^\/api\/oauth\//.test(path) || req.query?.wait === '1' || req.query?.refresh === '1';
 }
@@ -64,11 +64,27 @@ export function userFromRequest(req) {
   return null;
 }
 
+export const AS_COOKIE = 'halcyon_as';
+const PERSON_ONLY = /^\/api\/(auth|admin|shared)(\/|$|\?)/;
+
+/** The shared-space user this request acts as: a user row, null (acting as oneself) or false (not a member). */
+export function actingAs(req, person, path = req.url) {
+  const id = Number(req.cookies?.[AS_COOKIE]) || 0;
+  if (!id || id === person.id || PERSON_ONLY.test(path)) return null;
+  const m = get(`SELECT u.* FROM shared_members m JOIN users u ON u.id = m.shared_id WHERE m.shared_id = ? AND m.user_id = ? AND u.kind = 'shared'`, id, person.id);
+  return m || false;
+}
+
 // Fastify preHandler: attaches req.user or rejects.
 export async function requireUser(req, reply) {
   const u = userFromRequest(req);
   if (!u) return reply.code(401).send({ error: 'Not authenticated' });
   req.user = u;
+  // Working in a shared space (shared.js): the request acts as the space's own user — only for members. Signing in,
+  // passwords, user administration and managing shared spaces always act as the person.
+  const as = actingAs(req, u);
+  if (as) { req.person = u; req.user = as; }
+  else if (as === false) return reply.code(403).send({ error: 'You are not a member of this shared space', code: 'not-member' });
   const tz = req.headers['x-halcyon-tz'];
   if (tz && !req.readOnly) { try { noteClientTimezone(u.id, decodeURIComponent(String(tz))); } catch { /* ignore a bad header */ } }
 }
@@ -86,7 +102,9 @@ export default async function authRoutes(app) {
   app.get('/api/auth/status', async (req) => {
     const count = get('SELECT COUNT(*) AS n FROM users').n;
     const u = userFromRequest(req);
-    return { needsSetup: count === 0 && !config.singleUser, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup, readOnly: !!sessionFromRequest(req)?.read_only };
+    const as = u && actingAs(req, u, '/api/me');
+    return { needsSetup: count === 0 && !config.singleUser, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup, readOnly: !!sessionFromRequest(req)?.read_only,
+      acting: as ? { id: as.id, name: as.name } : null };
   });
 
   app.post('/api/auth/setup', async (req, reply) => {
@@ -148,7 +166,7 @@ export default async function authRoutes(app) {
   // Admin user management
   app.get('/api/admin/users', { preHandler: requireUser }, async (req, reply) => {
     if (!req.user.is_admin) return reply.code(403).send({ error: 'Admin only' });
-    return all('SELECT id, email, name, is_admin, created_at FROM users ORDER BY id');
+    return all("SELECT id, email, name, is_admin, created_at FROM users WHERE COALESCE(kind, 'person') = 'person' ORDER BY id");
   });
   app.post('/api/admin/users', { preHandler: requireUser }, async (req, reply) => {
     if (!req.user.is_admin) return reply.code(403).send({ error: 'Admin only' });

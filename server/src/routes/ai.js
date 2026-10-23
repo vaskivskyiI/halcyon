@@ -201,19 +201,21 @@ export default async function aiRoutes(app) {
   app.post('/api/ai/ask', async (req, reply) => {
     const { chatId, question } = req.body || {};
     if (!question?.trim()) return httpError(reply, 400, 'Question required');
-    return streamNdjson(req, reply, (onToken, signal, onStatus) => ask(req.user.id, { chatId, question: question.trim(), space: reqSpace(req) }, onToken, { signal, onStatus }));
+    return streamNdjson(req, reply, (onToken, signal, onStatus) => ask(req.user.id, { chatId, question: question.trim(), space: reqSpace(req), author: req.person?.id }, onToken, { signal, onStatus }));
   });
+  // In a shared space each member sees only their own assistant chats (author_id; NULL = the user's own chats).
+  const MINE = '(author_id IS NULL OR author_id = ?)';
   // In a space only that space's chats are listed; "all spaces" lists every chat.
   app.get('/api/ai/chats', async (req) => {
     const space = scope(req.user.id, reqSpace(req))?.space;
-    return all(`SELECT id, title, space, updated_at AS updatedAt FROM chats WHERE user_id = ? ${space ? 'AND space = ?' : ''} ORDER BY updated_at DESC LIMIT 50`, req.user.id, ...(space ? [space] : []));
+    return all(`SELECT id, title, space, updated_at AS updatedAt FROM chats WHERE user_id = ? AND ${MINE} ${space ? 'AND space = ?' : ''} ORDER BY updated_at DESC LIMIT 50`, req.user.id, req.person?.id ?? -1, ...(space ? [space] : []));
   });
   app.get('/api/ai/chats/:id', async (req, reply) => {
-    const c = get('SELECT * FROM chats WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const c = get(`SELECT * FROM chats WHERE id = ? AND user_id = ? AND ${MINE}`, req.params.id, req.user.id, req.person?.id ?? -1);
     if (!c) return httpError(reply, 404, 'Not found');
     return { id: c.id, title: c.title, messages: all('SELECT role, content, sources_json, created_at FROM chat_messages WHERE chat_id = ? ORDER BY id', c.id).map((m) => ({ role: m.role, content: m.content, sources: json(m.sources_json, []), createdAt: m.created_at })) };
   });
-  app.delete('/api/ai/chats/:id', async (req) => { run('DELETE FROM chats WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+  app.delete('/api/ai/chats/:id', async (req) => { run(`DELETE FROM chats WHERE id = ? AND user_id = ? AND ${MINE}`, req.params.id, req.user.id, req.person?.id ?? -1); return { ok: true }; });
 
   // ---- what the AI learned from the user's corrections, per sender
   app.get('/api/ai/preferences', async (req) => listPreferences(req.user.id));

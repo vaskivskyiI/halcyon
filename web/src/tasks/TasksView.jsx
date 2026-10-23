@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight, Share2 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, useMenu } from '../components/common.jsx';
+import { store } from '../store.js';
 import { dueOptions, fmtDue, DueField } from './TaskDialog.jsx';
 
 export default function TasksView() {
@@ -48,6 +49,11 @@ export default function TasksView() {
     { label: 'Edit…', icon: Pencil, onClick: () => setEditing(t) },
     { label: t.priority ? 'Not important' : 'Mark important', icon: Flag, onClick: () => patch(t, { priority: t.priority ? 0 : 1 }) },
     t.sourceMessageId && { label: 'Open the email', icon: Mail, onClick: () => navigate(`#/mail/unified/${t.sourceMessageId}`) },
+    // From one's own tasks into a shared space (only from one's own mail; it then disappears from here).
+    ...(!store.get().acting ? (store.get().shared || []).map((s) => ({ label: `Share in “${s.name}”`, icon: Share2, onClick: async () => {
+      if (!confirm(`Move “${t.title}” into the shared space “${s.name}”? Its members will see it there.`)) return;
+      try { await api.post(`/api/shared/${s.id}/move-in`, { taskIds: [t.id] }); toast(`Moved to “${s.name}”`); load(); } catch (err) { toastError(err); }
+    } })) : []),
     'sep',
     { label: 'Delete', icon: Trash2, danger: true, onClick: () => remove(t) },
   ]);

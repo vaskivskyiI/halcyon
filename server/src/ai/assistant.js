@@ -143,10 +143,11 @@ Today's events:\n${live.events.map((e) => `- ${e.allDay ? 'all day' : `${localSt
 
 const FIRST_TOKEN_MS = 90e3;
 
-export async function ask(userId, { chatId, question, space = '' }, onToken, { signal, onStatus } = {}) {
-  let chatRow = chatId && get('SELECT * FROM chats WHERE id = ? AND user_id = ?', chatId, userId);
+export async function ask(userId, { chatId, question, space = '', author = null }, onToken, { signal, onStatus } = {}) {
+  // author: the member asking in a shared space — only they see the chat.
+  let chatRow = chatId && get('SELECT * FROM chats WHERE id = ? AND user_id = ? AND (author_id IS NULL OR author_id = ?)', chatId, userId, author ?? -1);
   if (!chatRow) {
-    const r = run('INSERT INTO chats (user_id, title, space, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', userId, question.slice(0, 80), cleanSpace(space), now(), now());
+    const r = run('INSERT INTO chats (user_id, title, space, author_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', userId, question.slice(0, 80), cleanSpace(space), author, now(), now());
     chatRow = get('SELECT * FROM chats WHERE id = ?', r.lastInsertRowid);
   }
   run('INSERT INTO chat_messages (chat_id, role, content, created_at) VALUES (?, ?, ?, ?)', chatRow.id, 'user', question, now());

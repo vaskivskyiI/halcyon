@@ -10,6 +10,8 @@ import './db/index.js';
 import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from './auth.js';
 import { recordTiming } from './util/metrics.js';
 import diagnosticsRoutes from './routes/diagnostics.js';
+import sharedRoutes from './routes/shared.js';
+import { sharedOf } from './shared.js';
 import mailRoutes from './routes/mail.js';
 import accountRoutes from './routes/accounts.js';
 import calendarRoutes, { startSubscriptionRefresh } from './routes/calendar.js';
@@ -65,7 +67,19 @@ export async function buildServer({ background = true } = {}) {
   app.get('/api/ws', { websocket: true }, (socket, req) => {
     const user = userFromRequest(req);
     if (!user) { socket.close(4001, 'unauthorized'); return; }
-    const onEvent = (e) => { if (e.userId === user.id && socket.readyState === 1) socket.send(JSON.stringify({ type: e.type, payload: e.payload })); };
+    // Events of the person and of their shared spaces; those of a shared space carry `as` (its user id), so the app
+    // can tell new mail in the business mailbox from its own.
+    let spaces = new Set(), checked = 0;
+    const mine = (uid) => {
+      if (Date.now() - checked > 30e3) { spaces = new Set(sharedOf(user.id).map((s) => s.id)); checked = Date.now(); }
+      return spaces.has(uid);
+    };
+    const onEvent = (e) => {
+      if (socket.readyState !== 1) return;
+      if (e.type === 'shared:changed' && e.userId === user.id) checked = 0;
+      if (e.userId === user.id) socket.send(JSON.stringify({ type: e.type, payload: e.payload }));
+      else if (mine(e.userId)) socket.send(JSON.stringify({ type: e.type, payload: e.payload, as: e.userId }));
+    };
     bus.on('user-event', onEvent);
     const ping = setInterval(() => socket.readyState === 1 && socket.ping(), 30e3);
     socket.on('close', () => { bus.off('user-event', onEvent); clearInterval(ping); });
@@ -76,6 +90,7 @@ export async function buildServer({ background = true } = {}) {
   await app.register(settingsRoutes);
   await app.register(spaceRoutes);
   await app.register(diagnosticsRoutes);
+  await app.register(sharedRoutes);
   await app.register(accountRoutes);
   await app.register(mailRoutes);
   await app.register(calendarRoutes);
