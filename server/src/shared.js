@@ -144,10 +144,20 @@ function fixDefaults(from, to) {
  * search index, drafts, outbox, rules, the tasks created from its mail, and the calendars / address books it syncs —
  * from one user to another.
  */
-export function moveAccount(from, to, accountId) {
+export function moveAccount(from, to, accountId, { calendars = false, contacts = false } = {}) {
   const acc = get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', accountId, from);
   if (!acc) throw new Error('Account not found');
   tx(() => {
+    // Calendars / contacts synced through this account that are not to be shared stay with the person as their own
+    // copy; they are no longer synced (their sync runs with the account's login, which now belongs to the space).
+    if (!calendars) {
+      run("UPDATE calendars SET account_id = NULL, source = 'local', url = NULL, readonly = 0 WHERE account_id = ? AND user_id = ?", acc.id, from);
+      run('UPDATE accounts SET caldav_url = NULL WHERE id = ?', acc.id);
+    }
+    if (!contacts) {
+      run("UPDATE address_books SET account_id = NULL, source = 'local', url = NULL, readonly = 0 WHERE account_id = ? AND user_id = ?", acc.id, from);
+      run('UPDATE accounts SET carddav_url = NULL WHERE id = ?', acc.id);
+    }
     const msgIds = idsOf(all('SELECT id FROM messages WHERE account_id = ?', acc.id));
     const list = inList(msgIds);
     remapLabels(from, to, msgIds);

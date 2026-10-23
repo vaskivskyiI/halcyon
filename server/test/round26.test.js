@@ -149,3 +149,18 @@ test('a read-only session can look into the space but not change anything; the o
   assert.equal(db.prepare('SELECT user_id FROM messages WHERE id = ?').get(bizMsg).user_id, A);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ai_insights WHERE message_id = ?').get(bizMsg).n, 1, 'analysis kept on the way back too');
 });
+
+test('sharing an account takes its synced calendar / contacts only when chosen; otherwise they stay as an own copy', async () => {
+  const acc = db.prepare('SELECT * FROM accounts WHERE id = ?').get(db.prepare("INSERT INTO accounts (user_id, email, caldav_url, carddav_url, sync_enabled, created_at) VALUES (?, 'shop@business.example', 'https://dav.example/cal/', 'https://dav.example/card/', 0, ?)").run(A, Date.now()).lastInsertRowid);
+  const cal = db.prepare("INSERT INTO calendars (user_id, account_id, name, source, url, created_at) VALUES (?, ?, 'Shop calendar', 'caldav', 'https://dav.example/cal/x/', ?)").run(A, acc.id, Date.now()).lastInsertRowid;
+  const book = db.prepare("INSERT INTO address_books (user_id, account_id, name, source, url, created_at) VALUES (?, ?, 'Shop contacts', 'carddav', 'https://dav.example/card/x/', ?)").run(A, acc.id, Date.now()).lastInsertRowid;
+  await ok('a', 'POST', `/api/shared/${sharedId}/move-in`, { accountId: acc.id, withContacts: true });
+  const c = db.prepare('SELECT * FROM calendars WHERE id = ?').get(cal);
+  assert.deepEqual([c.user_id, c.account_id, c.source], [A, null, 'local'], 'calendar not chosen: stays as an own copy');
+  assert.equal(db.prepare('SELECT user_id FROM address_books WHERE id = ?').get(book).user_id, sharedId, 'contacts chosen: shared');
+  const moved = db.prepare('SELECT * FROM accounts WHERE id = ?').get(acc.id);
+  assert.deepEqual([moved.user_id, moved.caldav_url, moved.carddav_url], [sharedId, null, 'https://dav.example/card/'], 'the space does not sync the calendar again');
+  // The space's own empty calendar is not listed as something shared (the client hides it; the API says it is empty).
+  const sp = (await ok('a', 'GET', '/api/shared')).find((x) => x.id === sharedId);
+  assert.ok(sp.calendars.every((x) => x.source !== 'local' || typeof x.items === 'number'));
+});
