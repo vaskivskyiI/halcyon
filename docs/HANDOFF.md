@@ -414,3 +414,18 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   addresses), folders, open items and how they were closed (by you / your reply / the AI), analysis by category,
   corrections, AI queue/failures/call timings, settings that matter, and request timings per route
   (util/metrics.js, in memory). Error texts are redacted (`redact`). Meant to be copied and shared.
+
+### Findings from the live instance (read-only session) → second opinion, fewer requests
+- Live data (Diagnostics): small local model (7B) — even with conversation context it flags "she will reply" as
+  needs-reply, turns reminders into tasks, invents deadlines; sent mail rarely got `resolves`; duplicate / repeated
+  requests; reminders of past events stayed open; folders were reloaded ~35×/min and problems ~20×/min.
+- `ai/verify.js`: after analysis, mail flagged needs-reply/action gets a focused second prompt that must quote the
+  sentence asking THE USER; kept only if the quote is really in the email's own text (`quoted`). Actions that are
+  only "attend"/"add to calendar" are dropped (`notATask`); automated senders (`isAutomated`) never need a reply.
+  For the user's sent mail each open request is checked one by one (`resolveCheck`), unioned with `resolves`.
+  One-time re-analysis of open items: app_state 'reanalyze:verify:v1'.
+- `supersededSql`: a newer Inbox mail from the same sender with the same subject_key that was flagged the same way
+  supersedes older ones (repeats, duplicates across accounts); also in list labels (`ai_superseded_*` columns).
+- Event mail (automated or calendar/notification/security/social/promotion/shopping) expires 1 h after its last event.
+- Web: `loadFolders` coalesced (one in flight, ≥2 s apart); folders/problems reload on sync only when it is idle/error;
+  problems at most every 5 s. Tab counts in one query. cleanSummary strips "X asks you/<user> to" only (needs "to").

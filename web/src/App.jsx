@@ -85,7 +85,7 @@ function Shell() {
         case 'outbox:changed': case 'folders:changed': case 'folder:synced': case 'mail:changed': case 'mail:unsnoozed': case 'mail:sent': reload(); break;
         // Background analysis can produce many of these: refresh the AI counts at most every few seconds.
         case 'ai:insight': if (!insightTimer.current) insightTimer.current = setTimeout(() => { insightTimer.current = null; reload(); }, 4000); break;
-        case 'sync:state': if (['idle', 'error'].includes(e.payload.state)) loadAccounts(); reload(); break;
+        case 'sync:state': if (['idle', 'error'].includes(e.payload.state)) { loadAccounts(); reload(); } break;
         case 'spaces:changed': loadSpaces().catch(() => {}); loadAccounts(); reload(); break;
         default: break;
       }

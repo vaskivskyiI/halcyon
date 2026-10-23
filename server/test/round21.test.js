@@ -43,6 +43,8 @@ test('summaries start with the substance, not the sender or the subject', async 
   const from = { fromName: 'Ana Novak', fromAddr: 'ana@x.example', subject: 'Signed contract' };
   assert.equal(cleanSummary('Ana Novak asks you to send the signed contract by Friday.', from), 'Send the signed contract by Friday.');
   assert.equal(cleanSummary('Ana informs that the meeting moved to 10:00.', from), 'The meeting moved to 10:00.');
+  assert.equal(cleanSummary('Ana Novak asks Peter to review the report.', { ...from, userName: 'Peter Kos' }), 'Review the report.');
+  assert.equal(cleanSummary('Ana Novak asks Peter for his opinion on the upgrade.', { ...from, userName: 'Peter Kos' }), 'Ana Novak asks Peter for his opinion on the upgrade.');
   assert.equal(cleanSummary('The email from Ana Novak is about the budget: 12k approved.', from), 'The budget: 12k approved.');
   assert.equal(cleanSummary('Signed contract: the client accepted the 8% discount.', from), 'The client accepted the 8% discount.');
   assert.equal(cleanSummary('Ana Novak invites you to the kickoff on Monday.', from), 'Ana Novak invites you to the kickoff on Monday.', 'verbs that carry meaning stay');

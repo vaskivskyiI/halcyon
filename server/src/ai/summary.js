@@ -7,16 +7,19 @@ const norm = (s) => String(s || '').toLowerCase().replace(/^(re|fwd?|aw|odg|sv)\
 
 // "<who> asks you to X" → "X" (an instruction); "<who> says that X" → "X" (a statement). Invitations, reminders,
 // thanks etc. keep their verb, which carries the meaning.
-const ASK = '(?:asks|requests|wants|would like|needs)(?: you)?(?: to)?';
+// Only "… asks you / <the user> to X": without "to" ("asks Peter for his opinion") the sentence stays as it is.
+const ask = (me) => `(?:asks|requests|wants|would like|needs)(?: (?:you|the user|${['', ...me].filter(Boolean).join('|') || 'you'}))? to`;
 const TELL = '(?:says|writes|informs(?: you)?|notifies(?: you)?|reports|mentions|confirms|announces|explains|shares)(?: that)?';
 const GENERIC = '(?:the|this) (?:e-?mail|message|sender)(?: from [^,.:]{1,60})?';
 
-export function cleanSummary(summary, { fromName, fromAddr, subject } = {}) {
+export function cleanSummary(summary, { fromName, fromAddr, subject, userName = '' } = {}) {
   let s = String(summary || '').trim();
   if (!s) return s;
   fromName = String(fromName || ''); fromAddr = String(fromAddr || ''); subject = String(subject || '');
   const names = [fromName, fromName.split(/\s+/)[0], String(fromAddr).split('@')[0]].filter((n) => n && n.length >= 2).map(esc);
   const who = [GENERIC, ...names].join('|');
+  const me = [String(userName || ''), String(userName || '').split(/\s+/)[0]].filter((n) => n.length >= 2).map(esc);
+  const ASK = ask(me);
   const lead = new RegExp(`^(?:${who})\\s*(?:\\([^)]*\\))?[,:]?\\s+(?:(${ASK})|(${TELL})|(?:is |was )?(?:about|regarding)|(?:is|was) (?:asking|requesting) (?:you )?(?:to )?)\\s*:?\\s*`, 'iu');
   const m = s.match(lead);
   if (m) s = cap(s.slice(m[0].length));

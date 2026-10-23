@@ -30,7 +30,21 @@ export async function loadMe() {
   if (tz && !store.get().readOnly && me.settings?.calendar?.tzAuto !== false && me.settings?.calendar?.timezone !== tz) saveSettings({ calendar: { timezone: tz } }).catch(() => {});
   return me;
 }
-export async function loadFolders() { store.set({ folders: await api.get('/api/folders') }); }
+// Folder counts are asked for by many events (sync, new mail, AI results, own actions): one request at a time, and at
+// most one every 2 seconds; calls in between are merged into one that follows.
+let foldersBusy = null, foldersAgain = false, foldersLast = 0;
+export async function loadFolders() {
+  if (foldersBusy) { foldersAgain = true; return foldersBusy; }
+  foldersBusy = (async () => {
+    const wait = foldersLast + 2000 - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    try { foldersLast = Date.now(); store.set({ folders: await api.get('/api/folders') }); } finally {
+      foldersBusy = null;
+      if (foldersAgain) { foldersAgain = false; loadFolders().catch(() => {}); }
+    }
+  })();
+  return foldersBusy;
+}
 export async function loadAccounts() { store.set({ accounts: await api.get('/api/accounts'), accountsLoaded: true }); }
 export async function loadLabels() { store.set({ labels: await api.get('/api/labels') }); }
 export async function loadProviders() { store.set({ aiProviders: await api.get('/api/ai/providers') }); }

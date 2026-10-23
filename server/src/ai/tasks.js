@@ -19,6 +19,10 @@ import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
 import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
 import { splitPlainQuote } from '../util/quotes.js';
+import { verifyOpen, resolveCheck, isAutomated, notATask } from './verify.js';
+import { logger } from '../util/log.js';
+
+const log = logger('ai');
 
 const LANG_NAMES = P.LANG_NAMES;
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
@@ -57,12 +61,19 @@ function expiryOf(d, m, tz) {
   return CODE_RE.test(head) && /\b\d{4,8}\b|\b[A-Z0-9]{6,8}\b/.test(head) ? m.date + 30 * 60e3 : null;
 }
 
+// Reminders, notices and invitations from automated senders are about an event: once it is over, so are they.
+const EVENT_MAIL = ['calendar', 'notification', 'security', 'social', 'promotion', 'shopping'];
+function eventExpiry(d, m, events) {
+  if (!events.length || d.needs_reply || !(isAutomated(m) || EVENT_MAIL.includes(d.category))) return null;
+  return Math.max(...events.map((e) => Date.parse(e.end || e.start) || 0)) + 3600e3 || null;
+}
+
 /** quiet: analysis of old mail that was most likely handled already — no "needs reply", out of brief/priority views. */
 function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   const messageId = m.id;
   const text = `${m.subject || ''}\n${m.body_text || ''}`;
   const events = (Array.isArray(d.events) ? d.events : []).map((e) => normalizeEvent(e, tz, { text })).filter(Boolean).slice(0, 5);
-  const expires = expiryOf(d, m, tz);
+  const expires = expiryOf(d, m, tz) ?? eventExpiry(d, m, events);
   let priority = clampInt(d.priority, 0, 100, 30), needsReply = d.needs_reply && !quiet ? 1 : 0;
   let needsAction = d.needs_action && !quiet ? 1 : 0;
   if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; needsAction = 0; } // analysed after it expired
@@ -74,7 +85,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_reply_user,
     needs_action, action_summary)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,(SELECT draft_reply FROM ai_insights WHERE message_id = ?),?,?,?,?,?,?,?,?,?)`,
-    messageId, cleanSummary(d.summary, { fromName: m.from_name, fromAddr: m.from_addr, subject: m.subject }).slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
+    messageId, cleanSummary(d.summary, { fromName: m.from_name, fromAddr: m.from_addr, subject: m.subject, userName: get('SELECT name FROM users WHERE id = ?', m.user_id)?.name }).slice(0, 1000), P.CATEGORIES.includes(d.category) ? d.category : 'other',
     priority, String(d.priority_reason || '').slice(0, 200), needsReply,
     JSON.stringify((Array.isArray(d.action_items) ? d.action_items : []).slice(0, 10).map((a) => (typeof a === 'string' ? { text: a, due: null } : { text: String(a.text || ''), due: a.due || null })).filter((a) => a.text)),
     JSON.stringify((Array.isArray(d.suggested_replies) ? d.suggested_replies : []).slice(0, 3).map(String)),
@@ -254,7 +265,9 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const candidates = fromMe && !quiet ? openRequestsFor(userId, m) : [];
     const openRequests = candidates.map((c) => `[${c.id}] ${P.localStamp(c.date, tz).slice(0, 10)} from ${c.from_name || c.from_addr} · ${c.subject}${c.action_summary ? ` → ${c.action_summary}` : ''}${c.summary ? ` — ${c.summary}` : ''}`).join('\n');
     const related = relatedMail(userId, m, fromMe).map((r) => `- ${P.localStamp(r.date, tz).slice(0, 10)} ${r.mine ? 'the user →' : `${r.from_name || r.from_addr} →`} ${r.subject}${r.summary ? ` — ${r.summary}` : ''}`).join('\n');
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz, own), conversation: conversationContext(userId, m, own, tz), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    const message = P.messageForPrompt(m, 6000, tz, own);
+    const conversation = conversationContext(userId, m, own, tz);
+    const prompt = P.analyzePrompt({ ctx, message, conversation, senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
       language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
@@ -264,6 +277,12 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       res.data.needs_reply = false;
       res.data.priority = Math.min(Number(res.data.priority) || 0, 55);
     }
+    if (!fromMe && isAutomated(m)) res.data.needs_reply = false; // nobody reads a reply
+    if (res.data.needs_action && notATask(res.data.action_summary)) res.data.needs_action = false;
+    // Second opinion before anything lands in "Needs reply" / "Action needed" (kept as it was if the check fails).
+    if (!fromMe && !quiet && (res.data.needs_reply || res.data.needs_action)) {
+      try { await verifyOpen(userId, m, res.data, { ctx, conversation, message, interactive }); } catch (e) { log.warn(`verify ${m.id}: ${e.message}`); }
+    }
     applyPreference(res.data, pref);
     res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.needs_action = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
@@ -271,7 +290,12 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
     saveInsight(m, res.data, model, tz, { quiet });
-    if (candidates.length && Array.isArray(res.data.resolves) && res.data.resolves.length) resolveByAi(userId, m, res.data.resolves, candidates);
+    if (candidates.length) {
+      // Which open requests this email by the user answers: asked one by one (small models rarely fill "resolves").
+      let done = Array.isArray(res.data.resolves) ? res.data.resolves.map(Number) : [];
+      try { done = [...new Set([...done, ...await resolveCheck(userId, { ctx, message, candidates, tz, interactive })])]; } catch (e) { log.warn(`resolve ${m.id}: ${e.message}`); }
+      if (done.length) resolveByAi(userId, m, done, candidates);
+    }
     if (settings.ai.embeddings) saveFacts(userId, m, res.data.facts, res.data.category);
   }
   const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
@@ -289,7 +313,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
  * Once after an update that changes what the analysis sees (version key): the mail that is open now ("needs reply",
  * "action needed") is analysed again, in the background and after new mail. What the user marked stays as it was.
  */
-export function reanalyzeOpen(version = 'context:v1') {
+export function reanalyzeOpen(version = 'verify:v1') {
   if (get('SELECT value FROM app_state WHERE key = ?', `reanalyze:${version}`)) return 0;
   let n = 0;
   for (const u of all('SELECT id FROM users')) {

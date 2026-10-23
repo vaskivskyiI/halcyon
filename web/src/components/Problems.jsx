@@ -43,15 +43,17 @@ export default function Problems() {
     }
     known.current = new Set(r.problems.map((p) => p.key));
   }).catch(() => {});
-  const soon = (ms = 800) => { clearTimeout(timer.current); timer.current = setTimeout(load, ms); };
+  // At most one check every 5 seconds, however many events arrive (a sync sends many).
+  const last = useRef(0);
+  const soon = (ms = 800) => { if (timer.current) return; timer.current = setTimeout(() => { timer.current = null; last.current = Date.now(); load(); }, Math.max(ms, last.current + 5000 - Date.now())); };
 
   useEffect(() => {
     load();
     const t = setInterval(load, 30e3);
     const off = onEvent((e) => {
-      if (['sync:state', 'outbox:changed', 'mail:sent', 'folder:synced', 'mail:changed'].includes(e.type)) soon(1500);
+      if (['outbox:changed', 'mail:sent', 'mail:changed'].includes(e.type) || (e.type === 'sync:state' && ['idle', 'error'].includes(e.payload?.state))) soon(1500);
       // Sending failed: show what can be done right away.
-      if (e.type === 'mail:sendError') { soon(300); store.set({ problemsOpen: true }); }
+      if (e.type === 'mail:sendError') { clearTimeout(timer.current); timer.current = null; load(); store.set({ problemsOpen: true }); }
     });
     const mutated = () => soon(2500);
     window.addEventListener('halcyon:mutated', mutated);

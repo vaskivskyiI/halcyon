@@ -16,13 +16,25 @@ export function openSettings(userId) {
   return { days: Math.max(1, Number(s.openItemsDays) || 14), min: Math.max(0, Math.min(100, Number(s.openMinPriority ?? 40))) };
 }
 
+/**
+ * SQL: a newer Inbox email from the same sender with the same subject was flagged the same way (the reminder sent again,
+ * the request repeated, the same email received twice): only the newest one counts as open. what: 'reply' | 'action'.
+ */
+export function supersededSql(what, m = 'm') {
+  const flag = what === 'reply' ? '(ni.needs_reply = 1 OR ni.needs_reply_user = 1)' : 'ni.needs_action = 1';
+  return `EXISTS (SELECT 1 FROM messages n JOIN ai_insights ni ON ni.message_id = n.id WHERE n.user_id = ${m}.user_id AND n.subject_key = ${m}.subject_key
+    AND COALESCE(${m}.subject_key, '') != '' AND n.from_addr = ${m}.from_addr AND n.id != ${m}.id AND (n.date > ${m}.date OR (n.date = ${m}.date AND n.id > ${m}.id))
+    AND ${flag} AND n.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox'))`;
+}
+
 /** SQL condition (aliases i = ai_insights, m = messages): a reply is still expected from the user. */
 export function openReplySql(userId, i = 'i', m = 'm') {
   const { days, min } = openSettings(userId);
   const t = now();
   return `(${i}.dismissed_at IS NULL AND ${m}.is_answered = 0 AND (${i}.expires_at IS NULL OR ${i}.expires_at > ${t})
     AND ((${i}.needs_reply_user = 1 AND ${m}.date >= ${t - 2 * days * 864e5})
-      OR (${i}.needs_reply = 1 AND ${i}.needs_reply_user IS NULL AND ${i}.priority >= ${min} AND COALESCE(${i}.category, '') NOT IN ${NOISE} AND ${m}.date >= ${t - days * 864e5})))`;
+      OR (${i}.needs_reply = 1 AND ${i}.needs_reply_user IS NULL AND ${i}.priority >= ${min} AND COALESCE(${i}.category, '') NOT IN ${NOISE} AND ${m}.date >= ${t - days * 864e5}
+        AND NOT ${supersededSql('reply', m)})))`;
 }
 
 /** SQL condition: something other than a reply is still to be done. */
@@ -30,7 +42,8 @@ export function openActionSql(userId, i = 'i', m = 'm') {
   const { days, min } = openSettings(userId);
   const t = now();
   return `(${i}.dismissed_at IS NULL AND ${i}.needs_action = 1 AND (${i}.expires_at IS NULL OR ${i}.expires_at > ${t})
-    AND ${i}.priority >= ${actionMin(min)} AND COALESCE(${i}.category, '') NOT IN ${NOISE} AND ${m}.date >= ${t - days * 864e5})`;
+    AND ${i}.priority >= ${actionMin(min)} AND COALESCE(${i}.category, '') NOT IN ${NOISE} AND ${m}.date >= ${t - days * 864e5}
+    AND NOT ${supersededSql('action', m)})`;
 }
 
 // Actions (pay, sign, register…) matter even when the AI rated the mail low; newsletters & co. are excluded by
@@ -85,8 +98,8 @@ export function openChecker(userId) {
     const live = !r.ai_dismissed && (!r.ai_expires_at || r.ai_expires_at > t);
     const relevant = (r.ai_priority ?? 0) >= min && !NOISE_LIST.includes(r.ai_category || '');
     const reply = live && !r.is_answered && ((r.ai_needs_reply_user === 1 && r.date >= t - 2 * days * 864e5)
-      || (!!r.ai_needs_reply && r.ai_needs_reply_user == null && relevant && r.date >= t - days * 864e5));
-    const action = live && !!r.ai_needs_action && (r.ai_priority ?? 0) >= actionMin(min) && !NOISE_LIST.includes(r.ai_category || '') && r.date >= t - days * 864e5;
+      || (!!r.ai_needs_reply && r.ai_needs_reply_user == null && relevant && r.date >= t - days * 864e5 && !r.ai_superseded_reply));
+    const action = live && !!r.ai_needs_action && !r.ai_superseded_action && (r.ai_priority ?? 0) >= actionMin(min) && !NOISE_LIST.includes(r.ai_category || '') && r.date >= t - days * 864e5;
     return { reply, action };
   };
 }

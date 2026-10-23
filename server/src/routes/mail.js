@@ -17,7 +17,7 @@ import { notify } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
 import { recordFeedback, correctInsight } from '../ai/learning.js';
 import { CATEGORIES } from '../ai/prompts.js';
-import { openReplySql, openActionSql, openChecker, NOISE as OPEN_NOISE } from '../ai/open-items.js';
+import { openReplySql, openActionSql, openChecker, supersededSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
 
 const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
@@ -25,7 +25,9 @@ const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.threa
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
   i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_reply_user AS ai_needs_reply_user, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
-  (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special`;
+  (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special,
+  CASE WHEN i.needs_reply = 1 AND i.needs_reply_user IS NULL THEN ${supersededSql('reply')} ELSE 0 END AS ai_superseded_reply,
+  CASE WHEN i.needs_action = 1 THEN ${supersededSql('action')} ELSE 0 END AS ai_superseded_action`;
 
 // Message list orders (t = table prefix: 'm.' or '' inside the threaded CTE).
 const SORTS = {
@@ -47,6 +49,8 @@ function listItem(r, open) {
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
 }
+
+const FOCUSED = `(i.message_id IS NULL OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${NOISE}) OR i.priority >= 70)`;
 
 function scopeFor(userId, q, sc) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
@@ -72,7 +76,7 @@ function scopeFor(userId, q, sc) {
     case 'unread': where.push('m.is_read = 0'); break;
     case 'flagged': where.push('m.is_flagged = 1'); break;
     case 'attachments': where.push('m.has_attachments = 1'); break;
-    case 'focused': where.push(`(i.message_id IS NULL OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${NOISE}) OR i.priority >= 70)`); break;
+    case 'focused': where.push(FOCUSED); break;
     case 'other': where.push(`i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${NOISE})`); break;
     default: break;
   }
@@ -175,12 +179,13 @@ export default async function mailRoutes(app) {
   app.get('/api/messages/tab-counts', async (req) => {
     const sc = scope(req.user.id, reqSpace(req));
     const threaded = getSettings(req.user.id).ui.conversationView;
-    const count = (filter) => {
-      const { where, params } = scopeFor(req.user.id, { ...req.query, filter }, sc);
-      where.push('m.is_read = 0');
-      return get(`SELECT COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params).n;
-    };
-    return { focused: count('focused'), other: count('other'), all: count(undefined) };
+    // One pass over the unread mail of the view for all three tabs ("Other" = analysed and not focused).
+    const { where, params } = scopeFor(req.user.id, { ...req.query, filter: undefined }, sc);
+    where.push('m.is_read = 0');
+    const unit = threaded ? 'm.thread_id' : 'm.id';
+    const r = get(`SELECT COUNT(DISTINCT ${unit}) AS a, COUNT(DISTINCT CASE WHEN ${FOCUSED} THEN ${unit} END) AS f, COUNT(DISTINCT CASE WHEN NOT ${FOCUSED} THEN ${unit} END) AS o
+      FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params);
+    return { focused: r.f, other: r.o, all: r.a };
   });
 
   app.get('/api/messages', async (req) => {

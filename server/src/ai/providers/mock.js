@@ -14,6 +14,19 @@ export function mock() {
           language: 'English', user_writing: greeting ? `Opens with "${greeting.slice(0, 40)}"` : '', their_style: 'brief', notes: [] });
         return { text, usage: { input: 1, output: 1 } };
       }
+      // Second opinion (ai/verify.js): quotes the sentence with a question / a request word from THE EMAIL.
+      if (json && /check another assistant's triage/.test(system)) {
+        const sentences = last.slice(last.lastIndexOf('THE EMAIL:')).split(/\n\n/).slice(1).join('\n').split(/(?<=[.?!])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+        const ask = sentences.find((x) => /\?$/.test(x) && !/^(Subject|From|To|Date|Written):/.test(x)) || '';
+        const task = sentences.find((x) => /\b(pay|sign|register|submit|approve|send me)\b/i.test(x) && !/^(Subject|From|To|Written):/.test(x)) || '';
+        return { text: JSON.stringify({ reply_quote: ask, task_quote: task, task: task ? task.replace(/^(please|could you)\s+/i, '').slice(0, 60) : '' }), usage: { input: 1, output: 1 } };
+      }
+      // Which open requests the user's email answers (ai/verify.js): those whose subject the email mentions.
+      if (json && /THE USER sent the email below/.test(system)) {
+        const [reqs, mail] = last.split("THE USER'S EMAIL:");
+        const answers = [...reqs.matchAll(/\[(\d+)\][^·\n]*· ([^—→\n]+)/g)].map((r) => ({ id: Number(r[1]), done: mail.toLowerCase().includes(r[2].trim().toLowerCase()) }));
+        return { text: JSON.stringify({ answers }), usage: { input: 1, output: 1 } };
+      }
       if (!json && /describe who they are professionally/.test(system)) return { text: '- Works on the projects named in the sent mail\n- Writes in English', usage: { input: 1, output: 1 } };
       // The email itself (after the earlier conversation and the "Sender…/Recipients…" notes), so these are not
       // mistaken for content.
