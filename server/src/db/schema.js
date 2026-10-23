@@ -326,4 +326,15 @@ export const migrations = [
   CREATE INDEX idx_shared_members_user ON shared_members(user_id);
   ALTER TABLE chats ADD COLUMN author_id INTEGER;
   `,
+  // 23: assistants connected over MCP (mcp/server.js): one token per assistant, for the user's own mail or one shared
+  //     space (target_id), optionally one space label; access 'read' or 'propose' (drafts, tasks, approval requests).
+  `
+  CREATE TABLE mcp_tokens (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, target_id INTEGER NOT NULL,
+    name TEXT, token_hash TEXT NOT NULL UNIQUE, access TEXT DEFAULT 'read', space TEXT DEFAULT '',
+    created_at INTEGER, last_used_at INTEGER, revoked_at INTEGER
+  );
+  CREATE TABLE mcp_log (id INTEGER PRIMARY KEY, token_id INTEGER NOT NULL REFERENCES mcp_tokens(id) ON DELETE CASCADE, tool TEXT, detail TEXT, ok INTEGER, at INTEGER);
+  CREATE INDEX idx_mcp_log_token ON mcp_log(token_id, at DESC);
+  `,
 ];

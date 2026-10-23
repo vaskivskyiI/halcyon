@@ -597,9 +597,9 @@ function OutboxList({ onMenu }) {
   );
 }
 
-const ACTION_LABELS = { trash: 'Delete', spam: 'Mark as spam', forward: 'Forward', move: 'Move to Trash/Junk' };
+const ACTION_LABELS = { trash: 'Delete', spam: 'Mark as spam', forward: 'Forward', move: 'Move', archive: 'Archive', markRead: 'Mark as read', flag: 'Flag', label: 'Label' };
 
-/** Actions that AI-driven rules proposed but may not run on their own (delete, spam, forward). */
+/** Actions that AI-driven rules or connected assistants (MCP) proposed but may not run on their own. */
 function AiApprovals() {
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
@@ -615,19 +615,21 @@ function AiApprovals() {
     loadFolders();
   };
   if (!items.length) return null;
-  const describe = (a) => `${ACTION_LABELS[a.action.type] || a.action.type}${a.action.type === 'forward' ? ` to ${a.action.to}` : ''}`;
+  const folderName = (id) => store.get().folders.accounts?.flatMap((x) => x.folders).find((f) => f.id === Number(id))?.name;
+  const describe = (a) => `${ACTION_LABELS[a.action.type] || a.action.type}${a.action.type === 'forward' ? ` to ${a.action.to}` : ''}${a.action.type === 'move' ? ` to ${folderName(a.action.folderId) || 'another folder'}` : ''}`;
+  const source = (a) => (a.ruleId ? `rule “${a.ruleName || 'Untitled'}”` : `assistant ${a.ruleName || ''}`);
   return <>
-    <div className="notice warn"><Sparkles size={15} /><span className="grow">{items.length} action{items.length > 1 ? 's' : ''} from AI rules need{items.length > 1 ? '' : 's'} your approval</span>
+    <div className="notice warn"><Sparkles size={15} /><span className="grow">{items.length} action{items.length > 1 ? 's' : ''} from AI rules or assistants need{items.length > 1 ? '' : 's'} your approval</span>
       <button className="btn sm" onClick={() => setOpen(true)}>Review</button></div>
-    {open && <Modal title="Approve actions proposed by AI rules" wide onClose={() => setOpen(false)}
+    {open && <Modal title="Approve actions proposed by AI" wide onClose={() => setOpen(false)}
       footer={<><button className="btn" onClick={() => decide(items.map((a) => a.id), false)}>Dismiss all</button><span className="grow" /><button className="btn" onClick={() => setOpen(false)}>Close</button></>}>
-      <div className="small muted">Rules that depend on the AI's judgement never delete, mark as spam or forward mail by themselves — a crafted email could steer that judgement. Nothing below happens until you approve it.</div>
+      <div className="small muted">AI rules and connected assistants never delete, move, mark as spam or forward mail by themselves — a crafted email could steer their judgement. Nothing below happens until you approve it.</div>
       {items.map((a) => (
         <div key={a.id} className="card item-card" style={{ alignItems: 'flex-start' }}>
           <div className="grow" style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }} className={a.action.type === 'forward' ? 'error-text' : ''}>{describe(a)}</div>
             <a href={`#/mail/unified/${a.messageId}`} onClick={() => setOpen(false)} className="truncate" style={{ display: 'block' }}>{a.message.subject || '(no subject)'}</a>
-            <div className="small muted truncate">{a.message.from} · rule “{a.ruleName || 'Untitled'}”{a.message.category ? ` · AI: ${a.message.category}, priority ${a.message.priority}` : ''}</div>
+            <div className="small muted truncate">{a.message.from} · {source(a)}{a.message.category ? ` · AI: ${a.message.category}, priority ${a.message.priority}` : ''}</div>
           </div>
           <button className="btn sm" onClick={() => decide([a.id], false)}>Dismiss</button>
           <button className={`btn sm ${a.action.type === 'forward' ? '' : 'primary'}`} onClick={() => decide([a.id], true)}>Approve</button>

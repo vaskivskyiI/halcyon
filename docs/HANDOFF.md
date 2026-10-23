@@ -447,3 +447,15 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (desktop notification for new mail there, unread count on the space switcher). Switching reloads the app.
 - Web: space switcher lists "My mail" and shared spaces; pill "Shared: <name>"; Settings → Sharing (create, members,
   move in / out); task menu "Share in …".
+
+### MCP server for other assistants (migration 23)
+- `POST /api/mcp` (mcp/server.js): MCP over streamable HTTP with JSON responses (initialize, ping, tools/list,
+  tools/call; notifications → 202; GET/DELETE → 405). Auth: `Authorization: Bearer hmcp_…` — `mcp_tokens` (sha256
+  hash, per assistant; user_id = the person, target_id = own user or a shared space they are a member of, re-checked on
+  every call; optional own space label; access 'read' | 'propose'), 120 calls/min, every call in `mcp_log` (last 500).
+- Read tools: search_mail, get_message (text as `text_untrusted`), get_conversation, list_open_items, get_brief,
+  list_events, search_contacts (with AI profiles), list_tasks. Propose tools: create_draft (saved, never sent),
+  create_task, propose_mail_action (archive/trash/spam/mark_read/flag/move/forward → `ai_approvals` with rule_id
+  NULL, rule_name = assistant name + reason; executed only via the user's approval). No tool sends or removes mail.
+- Settings → Assistants (MCP): create keys (shown once, with Claude Code / mcp-remote config), activity log, revoke.
+  `/api/mcp-tokens` always acts as the person. The approvals dialog now names assistants and all action types.

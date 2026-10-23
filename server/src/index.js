@@ -11,6 +11,7 @@ import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from 
 import { recordTiming } from './util/metrics.js';
 import diagnosticsRoutes from './routes/diagnostics.js';
 import sharedRoutes from './routes/shared.js';
+import mcpRoutes from './mcp/server.js';
 import { sharedOf } from './shared.js';
 import mailRoutes from './routes/mail.js';
 import accountRoutes from './routes/accounts.js';
@@ -91,6 +92,7 @@ export async function buildServer({ background = true } = {}) {
   await app.register(spaceRoutes);
   await app.register(diagnosticsRoutes);
   await app.register(sharedRoutes);
+  await app.register(mcpRoutes);
   await app.register(accountRoutes);
   await app.register(mailRoutes);
   await app.register(calendarRoutes);
