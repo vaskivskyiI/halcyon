@@ -1,13 +1,17 @@
 import { request, lines, trimSlash, stripThink, thinkFilter } from './http.js';
 
+const noThinkFlag = new Set(); // "<base>|<model>" that rejected `think`
+
 export function ollama({ baseUrl, apiKey }) {
   const base = trimSlash(baseUrl || 'http://localhost:11434');
   const headers = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
   // Thinking models (qwen3, deepseek-r1, gemma4, …) would spend minutes and the whole token budget on hidden
-  // reasoning; mail tasks don't need it. Models without thinking support may reject the flag, so retry without it.
+  // reasoning; mail tasks don't need it. Models without thinking support may reject the flag, so retry without it
+  // (and remember them, so their later requests do not fail first).
   const post = async (path, body, opts) => {
+    if (noThinkFlag.has(`${base}|${body.model}`)) return request(`${base}${path}`, { headers, body, ...opts });
     try { return await request(`${base}${path}`, { headers, body: { ...body, think: false }, ...opts }); } catch (e) {
-      if (e.status === 400 && /think/i.test(e.message)) return request(`${base}${path}`, { headers, body, ...opts });
+      if (e.status === 400 && /think/i.test(e.message)) { noThinkFlag.add(`${base}|${body.model}`); return request(`${base}${path}`, { headers, body, ...opts }); }
       throw e;
     }
   };
