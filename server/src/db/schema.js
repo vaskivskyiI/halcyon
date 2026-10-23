@@ -337,4 +337,9 @@ export const migrations = [
   CREATE TABLE mcp_log (id INTEGER PRIMARY KEY, token_id INTEGER NOT NULL REFERENCES mcp_tokens(id) ON DELETE CASCADE, tool TEXT, detail TEXT, ok INTEGER, at INTEGER);
   CREATE INDEX idx_mcp_log_token ON mcp_log(token_id, at DESC);
   `,
+  // 24: the user's reason for a correction ("only fake conferences — they …"): a rule the AI applies to similar mail
+  //     (ai/learning.js), instead of a blanket rule for the sender.
+  `
+  ALTER TABLE ai_feedback ADD COLUMN reason TEXT;
+  `,
 ];

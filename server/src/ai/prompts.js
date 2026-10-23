@@ -82,7 +82,7 @@ Analyze THE EMAIL and return a JSON object with exactly these keys:
 ${fromMe && openRequests ? `- "resolves": the ids (numbers) of the OPEN REQUESTS below that this email by the user clearly answers or completes — also when it is a new conversation, has another subject or goes to more people (e.g. the user sends the asked-for document, confirms the date, gives the requested answer). [] when unsure: a wrong id hides a request the user still has to handle.
 OPEN REQUESTS to the user (from these recipients or this conversation):
 ${openRequests}
-` : ''}${related ? `\nRECENT MAIL WITH THE SAME PEOPLE in other conversations (context only — e.g. this email may answer or continue one of them; do not summarise these):\n${related}\n` : ''}${preferences ? `\nThe user's own past corrections (follow them for similar mail):\n${preferences}\n` : ''}Output JSON only.`,
+` : ''}${related ? `\nRECENT MAIL WITH THE SAME PEOPLE in other conversations (context only — e.g. this email may answer or continue one of them; do not summarise these):\n${related}\n` : ''}${preferences ? `\nWhat the user taught you:\n${preferences}\n` : ''}Output JSON only.`,
     messages: [{ role: 'user', content: `${conversation ? `EARLIER IN THIS CONVERSATION (oldest first; context only — do not summarise it, use it to understand who asked whom and what THE EMAIL answers):\n${conversation}\n\n` : ''}THE EMAIL TO ANALYSE:\n${senderInfo}\n\n${message}` }],
   };
 }

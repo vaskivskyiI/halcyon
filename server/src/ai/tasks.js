@@ -277,7 +277,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const related = relatedMail(userId, m, fromMe).map((r) => `- ${P.localStamp(r.date, tz).slice(0, 10)} ${r.mine ? 'the user →' : `${r.from_name || r.from_addr} →`} ${r.subject}${r.summary ? ` — ${r.summary}` : ''}`).join('\n');
     const message = P.messageForPrompt(m, 6000, tz, own);
     const conversation = conversationContext(userId, m, own, tz);
-    const prompt = P.analyzePrompt({ ctx, message, conversation, senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    const prompt = P.analyzePrompt({ ctx, message, conversation, senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m),
       language: summaryLanguage(settings, uiLanguage) });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;

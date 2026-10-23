@@ -6,7 +6,7 @@ import { PROVIDER_TYPES, makeProvider, isLocalEndpoint } from '../ai/providers/i
 import { enqueue, resumeWaiting, queueStats } from '../ai/queue.js';
 import { memoryStats, invalidate, removeMemory } from '../ai/memory.js';
 import { scope, reqSpace, spaceMap, ownerSpace, cleanSpace, inIds } from '../spaces.js';
-import { listPreferences, forgetSender } from '../ai/learning.js';
+import { listPreferences, forgetSender, listRules, updateRule } from '../ai/learning.js';
 import * as T from '../ai/tasks.js';
 import { ask } from '../ai/assistant.js';
 import { getSettings } from '../settings.js';
@@ -219,6 +219,9 @@ export default async function aiRoutes(app) {
 
   // ---- what the AI learned from the user's corrections, per sender
   app.get('/api/ai/preferences', async (req) => listPreferences(req.user.id));
+  // The user's rules from their comments on corrections: edit the text, or empty it to delete the rule.
+  app.get('/api/ai/rules', async (req) => listRules(req.user.id));
+  app.patch('/api/ai/rules/:id', async (req) => { updateRule(req.user.id, Number(req.params.id), req.body?.reason); return { ok: true }; });
   app.delete('/api/ai/preferences', async (req) => { forgetSender(req.user.id, req.query.from); return { ok: true }; });
 
   // ---- memory: what the AI has indexed and the facts it remembers (visible, editable, deletable by the user)

@@ -15,7 +15,8 @@ import { runRule } from '../rules.js';
 import { contactByEmail } from '../contacts/service.js';
 import { notify } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
-import { recordFeedback, correctInsight } from '../ai/learning.js';
+import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
+import { enqueue } from '../ai/queue.js';
 import { CATEGORIES } from '../ai/prompts.js';
 import { openReplySql, openActionSql, openChecker, supersededSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
 
@@ -426,13 +427,20 @@ export default async function mailRoutes(app) {
   app.post('/api/messages/:id/feedback', async (req, reply) => {
     const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!m) return httpError(reply, 404, 'Not found');
-    const { kind, value } = req.body || {};
+    const { kind, value, reason } = req.body || {};
     if (!['important', 'unimportant', 'category'].includes(kind) || (kind === 'category' && !CATEGORIES.includes(value))) return httpError(reply, 400, 'Invalid feedback');
-    recordFeedback(req.user.id, m, kind, kind === 'category' ? value : null);
+    recordFeedback(req.user.id, m, kind, kind === 'category' ? value : null, reason);
     correctInsight(m.id, kind, value);
+    // With a reason the AI applies it to similar mail: the recent mail it may fit is analysed again now.
+    let rechecked = 0;
+    if (String(reason || '').trim()) {
+      const ids = similarRecent(req.user.id, { message_id: m.id, subject: m.subject, reason, domain: String(m.from_addr || '').toLowerCase().split('@')[1] || '' });
+      for (const id of ids) enqueue(req.user.id, 'analyze', id, 40, { force: true });
+      rechecked = ids.length;
+    }
     const insight = serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id));
     notify(req.user.id, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight });
-    return { insight, sender: m.from_addr };
+    return { insight, sender: m.from_addr, rechecked };
   });
 
   app.post('/api/messages/:id/unsubscribe', async (req, reply) => {

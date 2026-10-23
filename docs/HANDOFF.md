@@ -459,3 +459,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   NULL, rule_name = assistant name + reason; executed only via the user's approval). No tool sends or removes mail.
 - Settings → Assistants (MCP): create keys (shown once, with Claude Code / mcp-remote config), activity log, revoke.
   `/api/mcp-tokens` always acts as the person. The approvals dialog now names assistants and all action types.
+
+### Corrections with a reason (migration 24)
+- `ai_feedback.reason`: after 👍 / 👎 / category change the reader offers "why?" (optional). A reasoned correction is
+  a rule for the AI, not a sender preference: `senderPreference` / domain preferences / `listPreferences` ignore it, so
+  genuine mail from the same sender is judged on its own. `preferenceExamples(userId, m)` puts the best-fitting
+  reasoned rules (`reasonedRules`: same sender/domain, shared words with the corrected email + reason, recency) first
+  as "RULES THE USER EXPLAINED", then plain corrections. Saving a reason re-analyses similar inbox mail of the last
+  14 days (`similarRecent`, ≤30). Settings → AI → "Your rules": edit / delete (`/api/ai/rules`).

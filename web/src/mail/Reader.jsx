@@ -151,12 +151,14 @@ export default function Reader({ id, view }) {
     openComposer(replyPayload('reply', latest, store.get().accounts, { aiIntent: intent ?? '' }));
   };
 
-  // Corrections teach the AI (per sender) and fix this message right away.
-  const feedback = async (kind, value) => {
+  // Corrections teach the AI and fix this message right away: without a reason for the sender, with one as a rule
+  // the AI applies to similar mail (from anyone).
+  const feedback = async (kind, value, reason) => {
     try {
-      const r = await api.post(`/api/messages/${latest.id}/feedback`, { kind, value });
+      const r = await api.post(`/api/messages/${latest.id}/feedback`, { kind, value, reason });
       setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: r.insight } : m)), current: t.current.id === latest.id ? { ...t.current, insight: r.insight } : t.current }));
-      toast(`Noted — future mail from ${r.sender} will be treated the same way`);
+      if (reason) toast(`Noted — the AI will use your reason for similar mail${r.rechecked ? ` (checking ${r.rechecked} recent email${r.rechecked > 1 ? 's' : ''} again)` : ''}`);
+      else toast(`Noted — future mail from ${r.sender} will be treated the same way. Add a reason to make it a rule for similar mail instead.`);
     } catch (e) { toastError(e); }
   };
   const forwardTo = async (messageId) => {
@@ -301,6 +303,10 @@ const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsle
 
 function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone }) {
   const [openMenu, menuNode] = useMenu();
+  // After a correction: an optional reason ("only the fake conferences — they …") makes it a rule for similar mail.
+  const [why, setWhy] = useState(null);
+  const correct = (kind, value) => { onFeedback(kind, value); setWhy({ kind, value, text: '' }); };
+  useEffect(() => setWhy(null), [latest.id]);
   if (!ins && !summary) {
     return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
       <button className="btn sm ai" onClick={onAnalyze} disabled={aiWorking}>{aiWorking ? <Spinner size={13} /> : <Sparkles size={13} />} Analyze now</button></div></div>;
@@ -312,15 +318,24 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
           {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ins?.topic && <a className="chip topic" href={`#/mail/${topicView(ins.topic)}`} title={`Show all mail about “${ins.topic}”`}>#{ins.topic}</a>}
           {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Show this category, or change it (the AI learns from it)"
-            onClick={(e) => openMenu(e, [{ label: `Show all ${ins.category} mail`, onClick: () => navigate(`#/mail/${categoryView(ins.category)}`) }, 'sep', { section: 'Change category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => onFeedback('category', c) }))])}>{ins.category} ▾</button>}
+            onClick={(e) => openMenu(e, [{ label: `Show all ${ins.category} mail`, onClick: () => navigate(`#/mail/${categoryView(ins.category)}`) }, 'sep', { section: 'Change category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => correct('category', c) }))])}>{ins.category} ▾</button>}
           {ins?.priority != null && <span className="chip" style={{ background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
           {ins && <button className={`chip ${ins.needsReply ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={ins.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply'} onClick={() => onNeedsReply(!ins.needsReply)}>
             <CornerUpLeft size={11} /> {ins.needsReply ? 'Needs reply ✕' : 'Needs reply?'}</button>}
-          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Important — the AI learns from this" onClick={() => onFeedback('important')}><ThumbsUp size={14} /></button>}
-          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Not important — the AI learns from this" onClick={() => onFeedback('unimportant')}><ThumbsDown size={14} /></button>}
+          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Important — the AI learns from this" onClick={() => correct('important')}><ThumbsUp size={14} /></button>}
+          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Not important — the AI learns from this" onClick={() => correct('unimportant')}><ThumbsDown size={14} /></button>}
         </span>
       </div>
       {menuNode}
+      {why && <div className="why-box">
+        <span className="small"><b>{{ important: 'Important', unimportant: 'Not important', category: `Category “${why.value}”` }[why.kind]}</b> — why? <span className="faint">Optional. With a reason the AI applies it to similar mail from anyone, instead of to everything from this sender — e.g. “only fake conferences: generic greeting, unknown organiser, fee to publish”.</span></span>
+        <div className="row" style={{ gap: 6 }}>
+          <input className="input" style={{ height: 30 }} autoFocus maxLength={500} value={why.text} placeholder="Your reason…" onChange={(e) => setWhy({ ...why, text: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter' && why.text.trim()) { onFeedback(why.kind, why.value, why.text.trim()); setWhy(null); } if (e.key === 'Escape') setWhy(null); }} />
+          <button className="btn sm primary" disabled={!why.text.trim()} onClick={() => { onFeedback(why.kind, why.value, why.text.trim()); setWhy(null); }}>Save reason</button>
+          <button className="btn sm ghost" onClick={() => setWhy(null)}>Skip</button>
+        </div>
+      </div>}
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
       {/* Who the sender is and how the user writes with them (contact profile; editable). */}
       {requester?.address && <PersonProfile email={requester.address} name={requester.name} compact />}

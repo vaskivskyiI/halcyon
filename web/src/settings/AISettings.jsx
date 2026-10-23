@@ -147,7 +147,8 @@ function Memory({ enabled }) {
   const [text, setText] = useState('');
   const space = store.use((s) => s.space);
   const [prefs, setPrefs] = useState([]);
-  const load = () => { api.get('/api/ai/memory').then(setMem).catch(() => {}); api.get('/api/ai/preferences').then(setPrefs).catch(() => {}); };
+  const [rules, setRules] = useState([]);
+  const load = () => { api.get('/api/ai/memory').then(setMem).catch(() => {}); api.get('/api/ai/preferences').then(setPrefs).catch(() => {}); api.get('/api/ai/rules').then(setRules).catch(() => {}); };
   useEffect(() => { load(); }, []);
   const forgetSender = async (from) => { await api.del(`/api/ai/preferences?from=${encodeURIComponent(from)}`).catch(toastError); load(); };
   const PREF = { important: 'important', unimportant: 'not important', spam: 'spam → Junk', notspam: 'not spam', category: 'category' };
@@ -178,6 +179,11 @@ function Memory({ enabled }) {
           <button className="icon-btn" style={{ width: 24, height: 24 }} title="Forget this" onClick={() => del(f.id)}><Trash2 size={13} /></button>
         </div>))}
     </div>}
+    <h3 style={{ marginTop: 6 }}>Your rules</h3>
+    <div className="small muted" style={{ marginTop: -6 }}>Reasons you gave when correcting the AI. Each is applied to similar mail from anyone — not to everything from that sender. Edit or delete them here.</div>
+    {rules.length > 0 ? <div className="card" style={{ padding: 6, maxHeight: 320, overflow: 'auto' }}>
+      {rules.map((r) => <RuleRow key={r.id} r={r} onSaved={load} />)}
+    </div> : <div className="small faint">None yet — after 👍 / 👎 or a category change on a message you can say why.</div>}
     <h3 style={{ marginTop: 6 }}>Learned from your corrections</h3>
     <div className="small muted" style={{ marginTop: -6 }}>When you mark mail as important, not important, spam or change its category, Halcyon applies it to future mail from the same sender (and the same company domain after two matching corrections) and shows the examples to the AI.</div>
     {prefs.length > 0 ? <div className="card" style={{ padding: 6, maxHeight: 260, overflow: 'auto' }}>
@@ -299,5 +305,22 @@ function ProviderEditor({ provider, onClose }) {
         {test.embeddings && <div className="row small">{test.embeddings.ok ? <CheckCircle2 size={15} color="var(--success)" /> : <XCircle size={15} color="var(--danger)" />}<b>Embeddings</b>{test.embeddings.ok ? `${test.embeddings.dim} dimensions` : <span className="error-text">{test.embeddings.error}</span>}</div>}
       </div>}
     </Modal>
+  );
+}
+
+const RULE_KIND = { important: 'Important', unimportant: 'Not important', spam: 'Spam', category: 'Category' };
+function RuleRow({ r, onSaved }) {
+  const [text, setText] = useState(r.reason);
+  const save = async (value) => { try { await api.patch(`/api/ai/rules/${r.id}`, { reason: value }); toast(value ? 'Rule updated' : 'Rule deleted'); onSaved(); } catch (e) { toastError(e); } };
+  return (
+    <div className="small" style={{ padding: '6px 8px', borderBottom: '1px solid var(--border)', display: 'grid', gap: 4 }}>
+      <div className="row"><b>{RULE_KIND[r.kind] || r.kind}{r.kind === 'category' ? ` “${r.value}”` : ''}</b>
+        <span className="faint grow truncate">· e.g. {r.messageId ? <a href={`#/mail/unified/${r.messageId}`}>“{r.subject}”</a> : `“${r.subject}”`} from {r.fromAddr}</span>
+        <button className="icon-btn" style={{ width: 24, height: 24 }} title="Delete this rule" onClick={() => confirm('Delete this rule?') && save('')}><Trash2 size={13} /></button></div>
+      <div className="row" style={{ gap: 6 }}>
+        <input className="input" style={{ height: 28 }} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} />
+        {text.trim() !== r.reason && <button className="btn sm" disabled={!text.trim()} onClick={() => save(text.trim())}>Save</button>}
+      </div>
+    </div>
   );
 }
