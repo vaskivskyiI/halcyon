@@ -6,6 +6,8 @@ import { loadProviders, saveSettings } from '../data.js';
 import { Modal, Spinner, Switch } from '../components/common.jsx';
 import { toast, toastError } from '../util.js';
 
+const LANGS = ['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian', 'Croatian', 'Serbian', 'Ukrainian', 'Polish', 'Russian', 'Dutch', 'Czech', 'Portuguese'];
+
 // Presets on top of the five provider types.
 const PRESETS = [
   { key: 'ollama', type: 'ollama', label: 'Ollama (this machine)', baseUrl: 'http://localhost:11434', defaultModel: 'llama3.1:8b', embedModel: 'nomic-embed-text' },
@@ -104,8 +106,16 @@ export default function AISettings() {
         {ai.learnedStyle ? <div className="small muted" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{ai.learnedStyle}</div> : <div className="small faint" style={{ marginTop: 6 }}>Needs at least 5 sent emails.</div>}
       </div>}
       <label className="field">Writing style (your own words — takes precedence)<textarea className="input" defaultValue={ai.writingStyle} onBlur={(e) => setAi({ writingStyle: e.target.value })} placeholder="e.g. Concise and friendly. Use 'Best regards'. Avoid exclamation marks." /></label>
-      <label className="field" style={{ maxWidth: 320 }}>Reply language<select className="input" value={ai.replyLanguage} onChange={(e) => setAi({ replyLanguage: e.target.value })}>
-        <option value="auto">Same as the email</option>{['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian', 'Croatian', 'Serbian', 'Ukrainian', 'Polish'].map((l) => <option key={l}>{l}</option>)}</select></label>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+        <label className="field" style={{ maxWidth: 320 }}>Reply language<select className="input" value={ai.replyLanguage} onChange={(e) => setAi({ replyLanguage: e.target.value })}>
+          <option value="auto">Same as the email</option>{LANGS.map((l) => <option key={l}>{l}</option>)}</select></label>
+        <label className="field" style={{ maxWidth: 320 }} title="Summaries, action texts, conversation summaries and the daily brief">Summary language<select className="input" value={ai.summaryLanguage || 'auto'} onChange={(e) => setAi({ summaryLanguage: e.target.value })}>
+          <option value="auto">Same as the app</option><option value="email">Same as each email</option>{LANGS.map((l) => <option key={l}>{l}</option>)}</select></label>
+        <button className="btn sm" title="Summaries already made stay as they are until the mail is analysed again" onClick={async () => {
+          if (!confirm('Analyse the mail of the last 14 days again, so its summaries are in the chosen language? This runs in the background; your own marks and dismissals stay.')) return;
+          try { const r = await api.post('/api/ai/reprocess', { what: 'analyze', days: 14, mode: 'all' }); toast(`Re-analysing ${r.queued} emails in the background…`); } catch (e) { toastError(e); }
+        }}>Apply to the last 14 days</button>
+      </div>
 
       <Memory enabled={ai.embeddings} />
 

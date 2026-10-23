@@ -98,3 +98,14 @@ test('the user\'s reply closes the requests it answers (checked one by one), als
   assert.equal(ins(ask).resolution, 'done'); assert.equal(ins(ask).resolved_by, mine);
   assert.equal(ins(other).dismissed_at, null, 'unrelated request stays open');
 });
+
+test('summary language: the app\'s, each email\'s own, or a fixed one (separate from the reply language)', async () => {
+  const { summaryLanguage } = await import('../src/ai/tasks.js');
+  const s = (v) => ({ ai: { summaryLanguage: v, replyLanguage: 'German' } });
+  assert.equal(summaryLanguage(s('auto'), 'Slovenian'), 'Slovenian');
+  assert.equal(summaryLanguage(s('email'), 'Slovenian'), 'the same language as the email');
+  assert.equal(summaryLanguage(s('email'), 'Slovenian', 'brief'), 'Slovenian', 'the brief covers many emails');
+  assert.equal(summaryLanguage(s('English'), 'Slovenian', 'thread'), 'English');
+  await api('PATCH', '/api/settings', { ai: { summaryLanguage: 'English' } });
+  assert.equal((await api('GET', '/api/me')).settings.ai.summaryLanguage, 'English');
+});

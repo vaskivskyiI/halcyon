@@ -34,6 +34,16 @@ function ctxFor(userId) {
   return { user, settings, accounts, ctx: P.userContext(user, settings, accounts), uiLanguage: LANG_NAMES[settings.ui.language] || 'English' };
 }
 
+/**
+ * Language of summaries, action texts, conversation summaries and the brief (setting ai.summaryLanguage): the app's
+ * language ('auto'), each email's own ('email'; the brief, which covers many emails, then uses the app's), or a fixed one.
+ */
+export const summaryLanguage = (settings, uiLanguage, what = 'email') => {
+  const v = settings.ai.summaryLanguage || 'auto';
+  if (v === 'auto') return uiLanguage;
+  if (v === 'email') return what === 'email' ? 'the same language as the email' : what === 'thread' ? 'the language of the conversation' : uiLanguage;
+  return v;
+};
 const replyLanguage = (settings) => (settings.ai.replyLanguage && settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : 'the same language as the email being replied to');
 const clampInt = (n, lo, hi, d) => (Number.isFinite(Number(n)) ? Math.max(lo, Math.min(hi, Math.round(Number(n)))) : d);
 
@@ -268,7 +278,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const message = P.messageForPrompt(m, 6000, tz, own);
     const conversation = conversationContext(userId, m, own, tz);
     const prompt = P.analyzePrompt({ ctx, message, conversation, senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
-      language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
+      language: summaryLanguage(settings, uiLanguage) });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
     if (contact?.favorite && res.data.priority < 70) res.data.priority = 70;
@@ -281,7 +291,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     if (res.data.needs_action && notATask(res.data.action_summary)) res.data.needs_action = false;
     // Second opinion before anything lands in "Needs reply" / "Action needed" (kept as it was if the check fails).
     if (!fromMe && !quiet && (res.data.needs_reply || res.data.needs_action)) {
-      try { await verifyOpen(userId, m, res.data, { ctx, conversation, message, interactive }); } catch (e) { log.warn(`verify ${m.id}: ${e.message}`); }
+      try { await verifyOpen(userId, m, res.data, { ctx, conversation, message, interactive, language: summaryLanguage(settings, uiLanguage) }); } catch (e) { log.warn(`verify ${m.id}: ${e.message}`); }
     }
     applyPreference(res.data, pref);
     res.data.topic = normalizeTopic(res.data.topic, topics);
@@ -334,7 +344,7 @@ export async function summarizeThreadJob(userId, threadId) {
   const { ctx, uiLanguage, settings } = ctxFor(userId);
   const own = ownAddresses(userId);
   const parts = unique.filter((m) => !m.is_draft).slice(-12).map((m) => P.messageForPrompt(m, 2500, settings.calendar.timezone, own));
-  const res = await chat(userId, 'background', { ...P.threadSummaryPrompt({ ctx, messages: parts, language: uiLanguage }), temperature: 0.2, maxTokens: 600 });
+  const res = await chat(userId, 'background', { ...P.threadSummaryPrompt({ ctx, messages: parts, language: summaryLanguage(settings, uiLanguage, 'thread') }), temperature: 0.2, maxTokens: 600 });
   run('INSERT OR REPLACE INTO thread_summaries (user_id, thread_id, summary, message_count, model, updated_at) VALUES (?, ?, ?, ?, ?, ?)', userId, threadId, res.text.trim(), unique.length, res.model, now());
   notifyAI(userId, 'ai:thread', { threadId, summary: res.text.trim() });
   queueMemory(userId, 'thread', threadId);
@@ -605,7 +615,7 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
   const cached = get('SELECT * FROM briefs WHERE user_id = ? AND day = ?', userId, key);
   if (cached && !force) return { day: today, space: sc?.space || '', content: cached.content_json, createdAt: cached.created_at, model: cached.model };
   if (cacheOnly) { enqueue(userId, 'brief', key, 60); return { day: today, space: sc?.space || '', content: null, pending: true }; }
-  const { ctx, uiLanguage } = ctxFor(userId);
+  const { ctx, uiLanguage, settings } = ctxFor(userId);
   const accIn = inIds('m.account_id', sc?.accountIds);
   const since = now() - 36 * 3600e3;
   const important = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.action_items_json
@@ -627,7 +637,7 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
     awaitingYourReply: awaiting.map((m) => ({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, receivedDaysAgo: Math.round((now() - m.date) / 864e5) })),
     events, tasks,
   };
-  const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: uiLanguage, data }), temperature: 0.3, maxTokens: 1200, interactive });
+  const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: summaryLanguage(settings, uiLanguage, 'brief'), data }), temperature: 0.3, maxTokens: 1200, interactive });
   run('INSERT OR REPLACE INTO briefs (user_id, day, content_json, model, created_at) VALUES (?, ?, ?, ?, ?)', userId, key, res.text.trim(), res.model, now());
   notifyAI(userId, 'ai:brief', { day: today, space: sc?.space || '' });
   return { day: today, space: sc?.space || '', content: res.text.trim(), createdAt: now(), model: res.model };

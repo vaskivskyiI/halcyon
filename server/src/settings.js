@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS = {
     dailyBrief: true,
     briefTime: '07:00',
     replyLanguage: 'auto',
+    summaryLanguage: 'auto',      // summaries, action texts, brief: 'auto' (the app's language) | 'email' (each email's own) | a language name
     writingStyle: '',             // free text about the user's tone, used in compose
     learnStyle: true,             // learn how the user writes from sent mail (weekly)
     learnedStyle: '',             // generated description (see ai/tasks.js learnStyleJob)

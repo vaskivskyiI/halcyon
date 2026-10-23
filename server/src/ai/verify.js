@@ -22,14 +22,14 @@ export function quoted(quote, text) {
   return q.filter((w) => t.has(w)).length / q.length >= 0.7;
 }
 
-export function verifyPrompt({ ctx, conversation, message, flagged }) {
+export function verifyPrompt({ ctx, conversation, message, flagged, language = 'English' }) {
   return {
     system: `You check another assistant's triage of an email; it is often wrong. ${ctx}
 "THE USER" is the mailbox owner. Judge only THE EMAIL (the new text of it); the earlier conversation and quoted text are context.
 Return JSON with exactly these keys:
 - "reply_quote": the exact sentence from THE EMAIL in which the sender asks THE USER a question or asks THE USER to answer/decide/confirm something, copied word for word; "" if there is none.
 - "task_quote": the exact sentence from THE EMAIL that asks THE USER to do something (pay, sign, send, review, approve, register, submit, book, fill in…), copied word for word; "" if there is none.
-- "task": that task as a short imperative (max 10 words), with a deadline ONLY if THE EMAIL states one; "" if none.
+- "task": that task as a short imperative (max 10 words, in ${language}), with a deadline ONLY if THE EMAIL states one; "" if none.
 Answer "" when: the sender says THEY will do something or will reply later; the question or request is addressed to someone else (another recipient, "Marko, could you…"); it was the USER who asked (earlier); it is an automated notification, reminder, receipt, alert or newsletter (nobody reads a reply); the only "task" is attending a meeting or adding an event to the calendar; it is a sign-in / new-device / security notice that does not say the account is locked or must be secured.
 The other assistant flagged: ${flagged}. Output JSON only.`,
     messages: [{ role: 'user', content: `${conversation ? `EARLIER IN THIS CONVERSATION (context only):\n${conversation}\n\n` : ''}THE EMAIL:\n${message}` }],
@@ -37,9 +37,9 @@ The other assistant flagged: ${flagged}. Output JSON only.`,
 }
 
 /** Applies the second opinion to the analysis result `d` (needs_reply / needs_action / action_summary). */
-export async function verifyOpen(userId, m, d, { ctx, conversation, message, interactive = false }) {
+export async function verifyOpen(userId, m, d, { ctx, conversation, message, interactive = false, language }) {
   const flagged = [d.needs_reply && 'needs a reply', d.needs_action && `action "${d.action_summary || ''}"`].filter(Boolean).join(' and ');
-  const { data: v } = await chatJSON(userId, 'background', { ...verifyPrompt({ ctx, conversation, message, flagged }), temperature: 0, maxTokens: 300, interactive });
+  const { data: v } = await chatJSON(userId, 'background', { ...verifyPrompt({ ctx, conversation, message, flagged, language }), temperature: 0, maxTokens: 300, interactive });
   const own = `${m.subject || ''}\n${P.stripQuoted(m.body_text)}`;
   if (d.needs_reply && !quoted(v.reply_quote, own)) d.needs_reply = false;
   if (d.needs_action) {
