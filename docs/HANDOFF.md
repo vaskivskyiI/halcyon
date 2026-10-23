@@ -466,4 +466,6 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   genuine mail from the same sender is judged on its own. `preferenceExamples(userId, m)` puts the best-fitting
   reasoned rules (`reasonedRules`: same sender/domain, shared words with the corrected email + reason, recency) first
   as "RULES THE USER EXPLAINED", then plain corrections. Saving a reason re-analyses similar inbox mail of the last
-  14 days (`similarRecent`, ≤30). Settings → AI → "Your rules": edit / delete (`/api/ai/rules`).
+  14 days (`similarRecent`, ≤30). Settings → AI → "Your rules": edit / delete (`/api/ai/rules`). "Suggest" in the
+  why-box: `POST /api/messages/:id/suggest-reason` (`suggestReason`: features of the email as a rule for similar mail;
+  prefilled, saved only when the user saves).

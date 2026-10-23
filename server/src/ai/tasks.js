@@ -507,6 +507,32 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
   return res.text.trim();
 }
 
+/**
+ * A suggested reason for the user's correction (they edit it before saving): what about this email — sender,
+ * greeting, wording, what it asks for, how it was sent — makes it important / not important / of that category,
+ * written as a rule that also fits similar emails from other senders.
+ */
+export async function suggestReason(userId, messageId, kind, value) {
+  const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
+  if (!m) throw new Error('Message not found');
+  const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
+  const ins = get('SELECT summary, priority, category FROM ai_insights WHERE message_id = ?', m.id);
+  const verdict = { important: 'IMPORTANT', unimportant: 'NOT important', spam: 'SPAM', category: `of the category "${value}"` }[kind] || kind;
+  const replyTo = json(m.reply_to_json, []).map((a) => a.address).filter((a) => a && a.toLowerCase() !== String(m.from_addr).toLowerCase());
+  const facts = [
+    `From: ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr}`, replyTo.length ? `Reply-To differs from the sender: ${replyTo.join(', ')}` : '',
+    addressingOf(m, accounts).text, m.list_unsubscribe ? 'Sent as bulk mail (has List-Unsubscribe).' : '',
+    `Subject: ${m.subject}`, ins ? `The AI had rated it: priority ${ins.priority}, category ${ins.category}.` : '',
+  ].filter(Boolean).join('\n');
+  const res = await chat(userId, 'compose', {
+    system: `${ctx}
+The user corrected the AI: they marked the email below as ${verdict}. Suggest the user's likely reason, written as a short rule (max 35 words, in ${LANG_NAMES[settings.ui.language] || uiLanguage}) that would let the AI recognise SIMILAR emails from other senders too — name the observable features that set this kind of email apart (who sends it and how, greeting, wording, what it asks for — e.g. fees, links, deadlines —, whether it is personal or bulk), not the details of this one email (no names, dates, amounts of this email). Start with what it applies to, e.g. "Fake conference invitations: …". Output only the rule.`,
+    messages: [{ role: 'user', content: `${facts}\n\n${P.stripQuoted(m.body_text).slice(0, 2500)}` }],
+    temperature: 0.3, maxTokens: 160, interactive: true,
+  });
+  return res.text.trim().replace(/^["“]|["”]$/g, '').slice(0, 500);
+}
+
 export async function composeNew(userId, { instruction, to }, onToken) {
   const { ctx, settings, user, uiLanguage } = ctxFor(userId);
   const lang = settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : `${uiLanguage} (unless the instruction implies another language)`;

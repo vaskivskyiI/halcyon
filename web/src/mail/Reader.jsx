@@ -303,6 +303,12 @@ const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsle
 
 function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone }) {
   const [openMenu, menuNode] = useMenu();
+  const [suggesting, setSuggesting] = useState(false);
+  // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
+  const suggest = async () => {
+    setSuggesting(true);
+    try { const r = await api.post(`/api/messages/${latest.id}/suggest-reason`, { kind: why.kind, value: why.value }); setWhy((w) => w && { ...w, text: r.reason }); } catch (e) { toastError(e); } finally { setSuggesting(false); }
+  };
   // After a correction: an optional reason ("only the fake conferences — they …") makes it a rule for similar mail.
   const [why, setWhy] = useState(null);
   const correct = (kind, value) => { onFeedback(kind, value); setWhy({ kind, value, text: '' }); };
@@ -328,10 +334,11 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
       </div>
       {menuNode}
       {why && <div className="why-box">
-        <span className="small"><b>{{ important: 'Important', unimportant: 'Not important', category: `Category “${why.value}”` }[why.kind]}</b> — why? <span className="faint">Optional. With a reason the AI applies it to similar mail from anyone, instead of to everything from this sender — e.g. “only fake conferences: generic greeting, unknown organiser, fee to publish”.</span></span>
-        <div className="row" style={{ gap: 6 }}>
-          <input className="input" style={{ height: 30 }} autoFocus maxLength={500} value={why.text} placeholder="Your reason…" onChange={(e) => setWhy({ ...why, text: e.target.value })}
-            onKeyDown={(e) => { if (e.key === 'Enter' && why.text.trim()) { onFeedback(why.kind, why.value, why.text.trim()); setWhy(null); } if (e.key === 'Escape') setWhy(null); }} />
+        <span className="small"><b>{{ important: 'Important', unimportant: 'Not important', category: `Category “${why.value}”` }[why.kind]}</b> — why? <span className="faint">Optional. With a reason the AI applies it to similar mail from anyone, instead of to everything from this sender — e.g. “only fake conferences: generic greeting, unknown organiser, fee to publish”. “Suggest” lets the AI guess it.</span></span>
+        <textarea className="input" rows={why.text.length > 60 ? 3 : 2} style={{ resize: 'vertical', minHeight: 30, paddingTop: 5 }} autoFocus maxLength={500} value={why.text} placeholder="Your reason…" onChange={(e) => setWhy({ ...why, text: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && why.text.trim()) { e.preventDefault(); onFeedback(why.kind, why.value, why.text.trim()); setWhy(null); } if (e.key === 'Escape') setWhy(null); }} />
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <button className="btn sm ai" disabled={suggesting} title="Let the AI guess why — you can edit it before saving" onClick={suggest}>{suggesting ? <Spinner size={13} /> : <Sparkles size={13} />} Suggest</button>
           <button className="btn sm primary" disabled={!why.text.trim()} onClick={() => { onFeedback(why.kind, why.value, why.text.trim()); setWhy(null); }}>Save reason</button>
           <button className="btn sm ghost" onClick={() => setWhy(null)}>Skip</button>
         </div>

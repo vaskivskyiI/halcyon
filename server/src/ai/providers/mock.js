@@ -27,6 +27,11 @@ export function mock() {
         const answers = [...reqs.matchAll(/\[(\d+)\][^·\n]*· ([^—→\n]+)/g)].map((r) => ({ id: Number(r[1]), done: mail.toLowerCase().includes(r[2].trim().toLowerCase()) }));
         return { text: JSON.stringify({ answers }), usage: { input: 1, output: 1 } };
       }
+      // Suggested reason for a correction: a rule naming features of the email (tests check what reaches the prompt).
+      if (!json && /Suggest the user's likely reason/.test(system)) {
+        const verdict = (system.match(/marked the email below as ([^.]+)\./) || [])[1] || '';
+        return { text: `"Emails like this (${verdict}): ${/List-Unsubscribe/.test(last) ? 'bulk mail, ' : ''}${(last.match(/Subject: (.*)/) || [])[1] || ''}"`, usage: { input: 1, output: 1 } };
+      }
       if (!json && /describe who they are professionally/.test(system)) return { text: '- Works on the projects named in the sent mail\n- Writes in English', usage: { input: 1, output: 1 } };
       // The email itself (after the earlier conversation and the "Sender…/Recipients…" notes), so these are not
       // mistaken for content.

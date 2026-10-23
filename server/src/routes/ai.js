@@ -170,6 +170,12 @@ export default async function aiRoutes(app) {
     try { return { summary: await T.threadSummary(req.user.id, req.body.threadId) }; } catch (e) { return httpError(reply, 400, e.message); }
   });
 
+  // A suggested reason for a correction (prefilled in the "why?" box; the user edits it before it is saved).
+  app.post('/api/messages/:id/suggest-reason', async (req, reply) => {
+    const { kind, value } = req.body || {};
+    try { return { reason: await T.suggestReason(req.user.id, Number(req.params.id), kind, value) }; } catch (e) { return httpError(reply, 400, e.message); }
+  });
+
   app.post('/api/ai/draft-reply', async (req, reply) => {
     const { messageId, intent, stream } = req.body || {};
     if (!stream) { try { return { text: await T.draftReply(req.user.id, Number(messageId), intent || null, null) }; } catch (e) { return httpError(reply, 400, e.message); } }

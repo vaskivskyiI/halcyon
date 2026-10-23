@@ -73,3 +73,12 @@ test('rules are listed, can be edited, and deleted', async () => {
   // The plain per-sender corrections list does not show reasoned ones (it never did: this one is gone anyway).
   assert.ok((await api('GET', '/api/ai/preferences')).every((p) => p.fromAddr !== 'invite@conference-hub.example'));
 });
+
+test('the AI suggests a reason (a rule naming what sets such mail apart); nothing is saved until the user does', async () => {
+  const id = add('Invitation: Global Summit on Physics 2027', 'noreply@summit-invites.example', 'Dear Esteemed Researcher, publication fee applies.');
+  db.prepare("UPDATE messages SET list_unsubscribe = '<mailto:u@x>' WHERE id = ?").run(id);
+  await api('POST', '/api/ai/providers', { type: 'mock', name: 'Mock' });
+  const { reason } = await api('POST', `/api/messages/${id}/suggest-reason`, { kind: 'unimportant' });
+  assert.match(reason, /NOT important/); assert.match(reason, /bulk mail/); assert.ok(!/^"|"$/.test(reason), 'quotes stripped');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ai_feedback WHERE message_id = ?').get(id).n, 0, 'only a suggestion');
+});
