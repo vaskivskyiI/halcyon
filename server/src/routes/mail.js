@@ -310,7 +310,15 @@ export default async function mailRoutes(app) {
     // A copy that is still unread makes the message unread here, so opening the conversation marks every copy read
     // (Gmail keeps one in All Mail and one in the Inbox; Archive and Inbox can both hold one).
     const kept = new Map();
-    for (const m of rows) { const k = kept.get(m.message_id); if (!k) kept.set(m.message_id, { ...m }); else if (!m.is_read) k.is_read = 0; }
+    // A sent message can share its Message-ID with the draft it was sent from (Gmail, Outlook): show the sent one.
+    for (const m of rows) {
+      const k = kept.get(m.message_id);
+      if (!k) kept.set(m.message_id, { ...m });
+      else {
+        if (k.is_draft && !m.is_draft) kept.set(m.message_id, { ...m, is_read: k.is_read && m.is_read ? 1 : 0 });
+        else if (!m.is_read) k.is_read = 0;
+      }
+    }
     const msgs = [...kept.values()];
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
     for (const m of msgs) { await senderOf(m); await icsOf(m); }

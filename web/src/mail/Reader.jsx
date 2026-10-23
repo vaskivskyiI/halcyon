@@ -106,7 +106,8 @@ export default function Reader({ id, view }) {
   if (!id) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}><MailIcon size={44} strokeWidth={1.2} /><div>Select a message to read</div><div className="small">Shortcuts: j/k navigate · r reply · a reply all · f forward · e archive · # delete · s flag · / search · c compose</div></div></section>;
   if (!thread) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}>{loading ? <Spinner size={22} /> : <div style={{ textAlign: 'center' }}><div>This message is no longer here.</div><div className="small muted">It was moved or deleted (possibly in another mail app). The list has been refreshed.</div></div>}</div></section>;
 
-  const msgs = thread.messages;
+  // Discarded draft versions (in Trash etc.) are left out of the conversation, unless that is what was opened.
+  const msgs = thread.messages.filter((m) => !isLeftoverDraft(m) || m.id === Number(id));
   // Drafts are shown as editors: Halcyon drafts of this conversation, and drafts in the Drafts folder (also from other
   // mail apps) — one editor per draft (a Halcyon draft's copy in the Drafts folder is not shown twice).
   const latest = [...msgs].reverse().find((m) => !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent') || msgs[msgs.length - 1];
@@ -412,7 +413,10 @@ function AddrLine({ label, list, empty }) {
   );
 }
 
-const isDraftMsg = (m) => m.isDraft || /Drafts$/.test(m.folder?.specialUse || '');
+// Editable drafts are the ones in a Drafts folder. A message flagged \Draft elsewhere is a discarded version that
+// another mail app moved (usually to Trash) — not shown in the conversation (see Reader) and never editable.
+const isDraftMsg = (m) => /Drafts$/.test(m.folder?.specialUse || '');
+const isLeftoverDraft = (m) => m.isDraft && !isDraftMsg(m);
 
 /** A draft from the Drafts folder (possibly written in another mail app), editable in place. */
 function ServerDraft({ m, onDone }) {

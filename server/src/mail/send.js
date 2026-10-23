@@ -89,7 +89,7 @@ export function saveDraft(userId, b) {
   // A draft from the Drafts folder (written in another mail app) edited here: it becomes this Halcyon draft, and its
   // server copy is replaced when this one is saved there (or removed when it is sent).
   const adopt = !b.id && b.serverMessageId && get(`SELECT m.id, m.account_id, m.message_id FROM messages m JOIN folders f ON f.id = m.folder_id
-    WHERE m.id = ? AND m.user_id = ? AND (f.special_use = '\\Drafts' OR m.is_draft = 1)`, b.serverMessageId, userId);
+    WHERE m.id = ? AND m.user_id = ? AND f.special_use = '\\Drafts'`, b.serverMessageId, userId);
   if (adopt) {
     const msgid = `<${adopt.message_id}>`;
     const had = get('SELECT id FROM drafts WHERE user_id = ? AND server_msgid = ?', userId, msgid);
@@ -109,9 +109,12 @@ export function saveDraft(userId, b) {
   return { id: Number(r.lastInsertRowid) };
 }
 
-/** A draft in the Drafts folder as composer content (body with its inline images, attachments), to edit it here. */
+/**
+ * A draft in the Drafts folder as composer content (body with its inline images, attachments), to edit it here.
+ * Only there: mail apps move discarded versions of drafts (still flagged \Draft) to Trash, and those are not drafts.
+ */
 export async function draftFromMessage(userId, msgId) {
-  const m = get(`SELECT m.* FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.id = ? AND m.user_id = ? AND (f.special_use = '\\Drafts' OR m.is_draft = 1)`, msgId, userId);
+  const m = get(`SELECT m.* FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.id = ? AND m.user_id = ? AND f.special_use = '\\Drafts'`, msgId, userId);
   if (!m) return null;
   const had = get('SELECT * FROM drafts WHERE user_id = ? AND server_msgid = ?', userId, `<${m.message_id}>`);
   if (had) return { ...json(had.payload_json, {}), draftId: had.id, accountId: had.account_id, onServer: true };

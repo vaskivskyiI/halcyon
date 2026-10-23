@@ -80,6 +80,21 @@ test('a draft in the Drafts folder (e.g. from the phone) is edited in place: it 
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages WHERE id = ?').get(dm).n, 0);
 });
 
+test('only drafts in the Drafts folder are editable; a draft copy sharing its id with the sent message shows the sent one', async () => {
+  const trash = db.prepare('SELECT * FROM folders WHERE id = ?').get(db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'Trash', 'Trash', '\\Trash')").run(account.id).lastInsertRowid);
+  // Another mail app moved an old version of a (since sent) draft to Trash, still flagged \Draft.
+  const old = add(trash, { subject: 'Re: Offer', from: 'me@example.org', to: ['ana@x.example'], thread: 'of', msgid: 'old-version@x', draft: true });
+  assert.match(await api('GET', `/api/messages/${old}/draft`).catch((e) => e.message), /404/);
+  const s = await api('POST', '/api/drafts', { accountId: account.id, to: [], subject: 'x', html: '', serverMessageId: old });
+  assert.equal(db.prepare('SELECT server_msgid FROM drafts WHERE id = ?').get(s.id).server_msgid, null, 'not adopted: nothing outside Drafts can be replaced');
+  // Sent from a draft, same Message-ID, the draft copy not removed yet: the conversation shows the sent message.
+  add(drafts, { subject: 'Re: Offer', from: 'me@example.org', to: ['ana@x.example'], thread: 'of', msgid: 'sent-from-draft@x', draft: true, ageH: 1 });
+  const sentId = add(sent, { subject: 'Re: Offer', from: 'me@example.org', to: ['ana@x.example'], thread: 'of', msgid: 'sent-from-draft@x', ageH: 1 });
+  const t = await api('GET', '/api/threads/of');
+  const shown = t.messages.find((m) => m.messageId === 'sent-from-draft@x');
+  assert.equal(shown.id, sentId); assert.equal(shown.isDraft, false);
+});
+
 test('a conversation is unread while any copy of a message is (Inbox + All Mail / Archive), and reading marks every copy', async () => {
   const archive = db.prepare('SELECT * FROM folders WHERE id = ?').get(db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'Archive', 'Archive', '\\Archive')").run(account.id).lastInsertRowid);
   const a = add(archive, { subject: 'Copies', from: 'ana@x.example', thread: 'cp', msgid: 'copy@x', ageH: 3 });
