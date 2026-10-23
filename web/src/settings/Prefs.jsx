@@ -3,7 +3,7 @@ import { Plus, Trash2, Pencil } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
 import { saveSettings, loadLabels } from '../data.js';
-import { Switch, Modal } from '../components/common.jsx';
+import { Switch, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError } from '../util.js';
 
 const useSettings = () => store.use((s) => s.settings);
@@ -123,6 +123,7 @@ export function Templates() {
 export function Security() {
   const [f, setF] = useState({ current: '', password: '' });
   const single = store.use((s) => s.singleUser);
+  const readOnly = store.use((s) => s.readOnly);
   return (
     <div className="settings-section">
       <h2>Security</h2>
@@ -135,8 +136,30 @@ export function Security() {
         </div>
         <div><button className="btn primary" onClick={async () => { try { await api.post('/api/auth/password', f); toast('Password changed'); setF({ current: '', password: '' }); } catch (e) { toastError(e); } }}>Change password</button></div>
         <h3>Session</h3>
-        <div><button className="btn" onClick={async () => { await api.post('/api/auth/logout'); location.reload(); }}>Sign out</button></div>
+        {readOnly ? <div className="notice">This session is read-only: the server refuses every change (sending, deleting, moving, marking, settings, AI actions). Sign out and sign in normally to make changes.</div>
+          : <div className="muted small">Before letting someone else look at your mail (e.g. support), make this session read-only. It cannot be switched back — only signing out ends it. You can also choose “Read-only session” when signing in.</div>}
+        <div className="row">
+          {!readOnly && <button className="btn" onClick={async () => { if (!confirm('Make this session read-only? Nothing can be changed in it until you sign out.')) return; try { await api.post('/api/auth/read-only'); location.reload(); } catch (e) { toastError(e); } }}>Make this session read-only</button>}
+          <button className="btn" onClick={async () => { await api.post('/api/auth/logout'); location.reload(); }}>Sign out</button>
+        </div>
       </>}
+    </div>
+  );
+}
+
+/** Numbers about this installation (no mail content) to find what is slow, failing or inaccurate; copy to share. */
+export function Diagnostics() {
+  const [d, setD] = useState(null);
+  const load = () => api.get('/api/diagnostics').then(setD).catch(toastError);
+  useEffect(() => { load(); }, []);
+  const text = d ? JSON.stringify(d, null, 2) : '';
+  return (
+    <div className="settings-section">
+      <h2>Diagnostics</h2>
+      <div className="muted">Counts and timings of this installation — sync, sending, AI analysis, open items, your corrections and how fast each part of the app responds. It contains no subjects, message text, names or addresses (they are removed from error messages too), so you can share it to get help.</div>
+      <div className="row"><button className="btn" onClick={load}>Refresh</button>
+        <button className="btn primary" disabled={!d} onClick={() => navigator.clipboard.writeText(text).then(() => toast('Copied')).catch(() => toast('Select the text and copy it', { kind: 'error' }))}>Copy</button></div>
+      {d ? <pre className="diag">{text}</pre> : <Spinner size={18} />}
     </div>
   );
 }

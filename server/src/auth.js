@@ -18,19 +18,39 @@ export function publicUser(u) {
   return u && { id: u.id, email: u.email, name: u.name, isAdmin: !!u.is_admin };
 }
 
-function createSession(reply, userId, ua) {
+function createSession(reply, userId, ua, readOnly = false) {
   const token = randomToken();
-  run('INSERT INTO sessions (token, user_id, created_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?)',
-    token, userId, now(), now() + SESSION_DAYS * 864e5, ua || '');
+  run('INSERT INTO sessions (token, user_id, created_at, expires_at, user_agent, read_only) VALUES (?, ?, ?, ?, ?, ?)',
+    token, userId, now(), now() + SESSION_DAYS * 864e5, ua || '', readOnly ? 1 : 0);
   reply.setCookie(COOKIE, token, { path: '/', httpOnly: true, sameSite: 'lax', secure: config.secureCookies, maxAge: SESSION_DAYS * 86400 });
   return token;
 }
 
 const isLoopback = (ip) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip);
 
+const tokenOf = (req) => req.cookies?.[COOKIE] || (req.headers.authorization || '').replace(/^Bearer /, '');
+
+/** The session of this request (null for none / expired, and for the single-user desktop without a session). */
+export function sessionFromRequest(req) {
+  const token = tokenOf(req);
+  const s = token && get('SELECT * FROM sessions WHERE token = ?', token);
+  return s && s.expires_at > now() ? s : null;
+}
+
+/**
+ * Read-only session: nothing may change — no mail action, no sending, no settings, no AI work started. Only reading
+ * (GET) passes, without the GETs that start something; signing out and signing in again (normally) stay possible.
+ */
+export function readOnlyBlocks(req) {
+  const path = req.url.split('?')[0];
+  if (['/api/auth/logout', '/api/auth/login', '/api/auth/read-only'].includes(path)) return false;
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return true;
+  return /^\/api\/oauth\//.test(path) || req.query?.wait === '1' || req.query?.refresh === '1';
+}
+
 export function userFromRequest(req) {
   // Never from the query string: URLs end up in proxy logs, browser history and Referer headers.
-  const token = req.cookies?.[COOKIE] || (req.headers.authorization || '').replace(/^Bearer /, '');
+  const token = tokenOf(req);
   if (token) {
     const s = get('SELECT * FROM sessions WHERE token = ?', token);
     if (s && s.expires_at > now()) return get('SELECT * FROM users WHERE id = ?', s.user_id);
@@ -50,7 +70,7 @@ export async function requireUser(req, reply) {
   if (!u) return reply.code(401).send({ error: 'Not authenticated' });
   req.user = u;
   const tz = req.headers['x-halcyon-tz'];
-  if (tz) { try { noteClientTimezone(u.id, decodeURIComponent(String(tz))); } catch { /* ignore a bad header */ } }
+  if (tz && !req.readOnly) { try { noteClientTimezone(u.id, decodeURIComponent(String(tz))); } catch { /* ignore a bad header */ } }
 }
 
 // Simple in-memory login throttling per IP.
@@ -66,7 +86,7 @@ export default async function authRoutes(app) {
   app.get('/api/auth/status', async (req) => {
     const count = get('SELECT COUNT(*) AS n FROM users').n;
     const u = userFromRequest(req);
-    return { needsSetup: count === 0 && !config.singleUser, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup };
+    return { needsSetup: count === 0 && !config.singleUser, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup, readOnly: !!sessionFromRequest(req)?.read_only };
   });
 
   app.post('/api/auth/setup', async (req, reply) => {
@@ -98,8 +118,16 @@ export default async function authRoutes(app) {
       return reply.code(401).send({ error: 'Invalid email or password' });
     }
     t.n = 0;
-    const token = createSession(reply, u.id, req.headers['user-agent']);
+    const token = createSession(reply, u.id, req.headers['user-agent'], req.body?.readOnly === true);
     return { user: publicUser(u), token };
+  });
+
+  // Turns this session read-only. There is deliberately no way back from inside it: sign out and sign in again.
+  app.post('/api/auth/read-only', async (req, reply) => {
+    const s = sessionFromRequest(req);
+    if (!s) return reply.code(400).send({ error: 'Only a signed-in browser session can be made read-only' });
+    run('UPDATE sessions SET read_only = 1 WHERE token = ?', s.token);
+    return { ok: true, readOnly: true };
   });
 
   app.post('/api/auth/logout', async (req, reply) => {

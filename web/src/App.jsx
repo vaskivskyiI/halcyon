@@ -26,6 +26,7 @@ export default function App() {
     try {
       const st = await api.get('/api/auth/status');
       setStatus(st);
+      store.set({ readOnly: !!st.readOnly });
       if (st.user) {
         await loadMe();
         await loadSpaces().catch(() => {});
@@ -54,6 +55,7 @@ function Shell() {
   const settings = store.use((s) => s.settings);
   const accounts = store.use((s) => s.accounts);
   const accountsLoaded = store.use((s) => s.accountsLoaded);
+  const readOnly = store.use((s) => s.readOnly);
   const reloadTimer = useRef();
   const insightTimer = useRef();
 
@@ -165,6 +167,7 @@ function Shell() {
   });
   return (
     <div className="app">
+      {readOnly && <div className="readonly-pill" title="This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.">Read-only session</div>}
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (

@@ -66,7 +66,7 @@ export default function Reader({ id, view }) {
   useEffect(() => {
     const unread = unreadKey ? unreadKey.split(',').map(Number) : [];
     const delay = settings.mail.markReadAfterMs;
-    if (!unread.length || delay < 0) return undefined;
+    if (!unread.length || delay < 0 || store.get().readOnly) return undefined; // read-only session: nothing changes
     const t = setTimeout(() => {
       if (location.hash.replace(/[?].*$/, '').split('/').pop() !== String(id)) return; // still the message shown
       api.post('/api/messages/actions', { ids: unread, action: 'read' }).then(() => loadFolders()).catch(() => {});

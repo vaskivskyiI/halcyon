@@ -311,4 +311,8 @@ export const migrations = [
   `
   ALTER TABLE ai_insights ADD COLUMN resolved_by INTEGER;
   `,
+  // 21: read-only sessions (for looking at real mail, e.g. while getting support): the server refuses every change.
+  `
+  ALTER TABLE sessions ADD COLUMN read_only INTEGER DEFAULT 0;
+  `,
 ];

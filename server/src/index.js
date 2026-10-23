@@ -7,7 +7,9 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
 import { config } from './config.js';
 import './db/index.js';
-import authRoutes, { userFromRequest } from './auth.js';
+import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from './auth.js';
+import { recordTiming } from './util/metrics.js';
+import diagnosticsRoutes from './routes/diagnostics.js';
 import mailRoutes from './routes/mail.js';
 import accountRoutes from './routes/accounts.js';
 import calendarRoutes, { startSubscriptionRefresh } from './routes/calendar.js';
@@ -33,6 +35,16 @@ export async function buildServer({ background = true } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024, trustProxy: config.trustProxy });
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket);
+
+  // Read-only sessions are enforced here, before any route runs (see auth.js readOnlyBlocks).
+  app.addHook('onRequest', async (req, reply) => {
+    req.t0 = performance.now();
+    if (!req.url.startsWith('/api/')) return;
+    if (!sessionFromRequest(req)?.read_only) return;
+    req.readOnly = true;
+    if (readOnlyBlocks(req)) return reply.code(403).send({ error: 'Read-only session: nothing can be changed. Sign out and sign in normally to make changes.', readOnly: true });
+  });
+  app.addHook('onResponse', async (req, reply) => { if (req.t0 != null) recordTiming(req, reply.statusCode, performance.now() - req.t0); });
 
   app.addHook('onSend', async (req, reply, payload) => {
     reply.header('x-frame-options', 'SAMEORIGIN');
@@ -63,6 +75,7 @@ export async function buildServer({ background = true } = {}) {
   await app.register(authRoutes);
   await app.register(settingsRoutes);
   await app.register(spaceRoutes);
+  await app.register(diagnosticsRoutes);
   await app.register(accountRoutes);
   await app.register(mailRoutes);
   await app.register(calendarRoutes);

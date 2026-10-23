@@ -27,7 +27,7 @@ export async function loadMe() {
   applyTheme(me.settings);
   // Times the AI reads from mail are local times; the server needs this device's zone, not its own (often UTC).
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (tz && me.settings?.calendar?.tzAuto !== false && me.settings?.calendar?.timezone !== tz) saveSettings({ calendar: { timezone: tz } }).catch(() => {});
+  if (tz && !store.get().readOnly && me.settings?.calendar?.tzAuto !== false && me.settings?.calendar?.timezone !== tz) saveSettings({ calendar: { timezone: tz } }).catch(() => {});
   return me;
 }
 export async function loadFolders() { store.set({ folders: await api.get('/api/folders') }); }

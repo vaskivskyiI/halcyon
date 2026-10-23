@@ -3,7 +3,7 @@ import { api } from './api.js';
 
 export default function Login({ needsSetup, allowSignup, onDone }) {
   const [mode, setMode] = useState(needsSetup ? 'setup' : 'login');
-  const [f, setF] = useState({ email: '', name: '', password: '' });
+  const [f, setF] = useState({ email: '', name: '', password: '', readOnly: false });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -19,6 +19,8 @@ export default function Login({ needsSetup, allowSignup, onDone }) {
         {mode !== 'login' && <label className="field">Name<input className="input" value={f.name} onChange={set('name')} autoComplete="name" /></label>}
         <label className="field">Email<input className="input" type="email" required value={f.email} onChange={set('email')} autoComplete="username" autoFocus /></label>
         <label className="field">Password<input className="input" type="password" required minLength={mode === 'login' ? 1 : 8} value={f.password} onChange={set('password')} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>
+        {mode === 'login' && <label className="row small muted" style={{ gap: 6 }} title="For looking at your mail together with someone (e.g. support): the server refuses every change in this session — sending, deleting, moving, marking as read, settings, AI actions.">
+          <input type="checkbox" checked={f.readOnly} onChange={(e) => setF({ ...f, readOnly: e.target.checked })} /> Read-only session (nothing can be changed)</label>}
         {error && <div className="error-text small">{error}</div>}
         <button className="btn primary" disabled={busy} style={{ justifyContent: 'center', height: 38 }}>{mode === 'login' ? 'Sign in' : 'Create account'}</button>
         {allowSignup && mode !== 'setup' && <button type="button" className="btn ghost" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>{mode === 'login' ? 'Create an account' : 'I already have an account'}</button>}

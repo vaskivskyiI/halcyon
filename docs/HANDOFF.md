@@ -403,3 +403,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (`reanalyzeOpen`, app_state 'reanalyze:context:v1'); re-analysis keeps the user's marks and the resolution.
 - Mobile: modals/menus/toasts/suggestions are limited to the screen width (`.modal.wide` used to be 760 px wide);
   the full-screen composer sits above the bottom bar (its Send button was covered).
+
+### Read-only sessions, diagnostics (migration 21)
+- `sessions.read_only`: chosen at sign-in ("Read-only session" checkbox, `login { readOnly: true }`) or via Settings →
+  Security → "Make this session read-only" (`POST /api/auth/read-only`; no way back except signing out). Enforced in
+  an `onRequest` hook in index.js (`readOnlyBlocks` in auth.js): every non-GET request is refused with 403
+  `{ readOnly: true }` except login/logout, plus GETs that start work (`wait=1`, `refresh=1`, `/api/oauth/*`); the
+  browser time-zone update is skipped. The web UI shows a "Read-only session" pill and does not auto-mark read.
+- Settings → Diagnostics (`GET /api/diagnostics`, routes/diagnostics.js): sync/pending ops/outbox per account (no
+  addresses), folders, open items and how they were closed (by you / your reply / the AI), analysis by category,
+  corrections, AI queue/failures/call timings, settings that matter, and request timings per route
+  (util/metrics.js, in memory). Error texts are redacted (`redact`). Meant to be copied and shared.
