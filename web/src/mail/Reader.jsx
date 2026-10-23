@@ -8,7 +8,7 @@ import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, textToHtml, escapeHtml, CATEGORY_COLORS } from '../util.js';
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
-import { openComposer, replyPayload } from './Composer.jsx';
+import { openComposer, replyPayload, Composer } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
 import PersonProfile from '../components/PersonProfile.jsx';
@@ -107,10 +107,14 @@ export default function Reader({ id, view }) {
   if (!thread) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}>{loading ? <Spinner size={22} /> : <div style={{ textAlign: 'center' }}><div>This message is no longer here.</div><div className="small muted">It was moved or deleted (possibly in another mail app). The list has been refreshed.</div></div>}</div></section>;
 
   const msgs = thread.messages;
-  const latest = [...msgs].reverse().find((m) => m.folder?.specialUse !== '\\Sent') || msgs[msgs.length - 1];
+  // Drafts are shown as editors: Halcyon drafts of this conversation, and drafts in the Drafts folder (also from other
+  // mail apps) — one editor per draft (a Halcyon draft's copy in the Drafts folder is not shown twice).
+  const latest = [...msgs].reverse().find((m) => !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent') || msgs[msgs.length - 1];
+  const drafts = (thread.related?.drafts || []).filter((d) => !(d.quick && d.inReplyToId === latest.id)); // that one is in the quick reply box
+  const adopted = new Set(drafts.map((d) => d.serverMsgid).filter(Boolean));
   const target = thread.current;
   const ins = latest.insight || target.insight;
-  const ids = conv ? msgs.filter((m) => m.folder?.specialUse !== '\\Sent').map((m) => m.id) : [target.id];
+  const ids = conv ? msgs.filter((m) => !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent').map((m) => m.id) : [target.id];
   const act = (requested, extra) => {
     const action = confirmDelete(requested, target.folder?.specialUse, 1);
     if (!action) return;
@@ -118,6 +122,9 @@ export default function Reader({ id, view }) {
   };
   // Reply / Reply all: continue an existing draft for that message instead of starting a second one.
   async function reply(mode, msg = latest, extra = {}) {
+    const inline = mode !== 'forward' && !extra.aiIntent && drafts.find((d) => d.inReplyToId === msg.id);
+    const el = inline && document.querySelector(`[data-draft="${inline.id}"]`);
+    if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.querySelector('.editor')?.focus(); return; }
     if (mode !== 'forward' && !extra.aiIntent && thread?.related?.drafts?.some((d) => d.inReplyToId === msg.id)) {
       const d = (await api.get(`/api/drafts?inReplyTo=${msg.id}`).catch(() => []))[0];
       if (d) return openComposer({ ...d, draftId: d.id });
@@ -240,11 +247,11 @@ export default function Reader({ id, view }) {
             <button className="btn sm" onClick={() => api.post('/api/messages/save-to-server', { ids: msgs.filter((m) => m.notOnServer).map((m) => m.id) }).then((r) => toast(r.queued ? 'Saving on the server…' : 'Nothing to save')).catch(toastError)}>Save on server</button>
           </div>
         )}
-        <RelatedBar related={thread.related} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />
+        <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />
 
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
-        {settings.ai.enabled && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
+        {settings.ai.enabled && !isDraftMsg(latest) && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply}
           onDone={async (resolution = 'done', undo = false) => {
             try {
@@ -258,6 +265,7 @@ export default function Reader({ id, view }) {
           }} />}
 
         {msgs.map((m, i) => {
+          if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;
           // Long conversations: collapsed messages between the first and the last two fold into one row.
           const foldable = !showAll && msgs.length > 4 && i > 0 && i < msgs.length - 2 && !expanded.has(m.id);
           if (foldable) {
@@ -271,7 +279,9 @@ export default function Reader({ id, view }) {
             onExtractEvent={async () => { try { setEventDraft(await api.post('/api/ai/extract-event', { messageId: m.id })); } catch (e) { toastError(e); } }} />;
         })}
 
-        <QuickReply latest={latest} onSent={() => load()} hasDraft={!!ins?.draftReply} />
+        {drafts.map((d) => <Composer key={`d${d.id}`} id={`inline-${d.id}`} inline init={{ ...d, draftId: d.id }} onDone={() => load()} />)}
+
+        {!isDraftMsg(latest) && <QuickReply latest={latest} onSent={() => load()} hasDraft={!!ins?.draftReply} />}
       </div>
       {menuNode}
       {eventDraft && <EventEditor initial={eventDraft} onClose={() => setEventDraft(null)} onSaved={() => { setEventDraft(null); toast('Event added to calendar', { action: { label: 'Open', onClick: () => navigate('#/calendar') } }); }} />}
@@ -400,6 +410,17 @@ function AddrLine({ label, list, empty }) {
       </span>}
     </div>
   );
+}
+
+const isDraftMsg = (m) => m.isDraft || /Drafts$/.test(m.folder?.specialUse || '');
+
+/** A draft from the Drafts folder (possibly written in another mail app), editable in place. */
+function ServerDraft({ m, onDone }) {
+  const [init, setInit] = useState(null);
+  useEffect(() => { api.get(`/api/messages/${m.id}/draft`).then(setInit).catch(() => setInit(false)); }, [m.id]);
+  if (init === null) return <div className="card small faint" style={{ marginBottom: 12 }}><Spinner size={13} /> Opening draft…</div>;
+  if (!init) return <div className="card small faint" style={{ marginBottom: 12 }}>This draft could not be opened here — it is in the Drafts folder.</div>;
+  return <Composer id={`inline-m${m.id}`} inline init={init} onDone={onDone} />;
 }
 
 function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
@@ -631,6 +652,8 @@ function QuickReply({ latest, onSent, hasDraft }) {
   const accounts = store.use((s) => s.accounts);
   const settings = store.use((s) => s.settings);
   const typed = useRef(false);
+  const sending = useRef(false);
+  const sendKey = useRef(null);
   const payloadFor = (m) => replyPayload(m, latest, accounts);
   const all = payloadFor('replyAll');
   const canReplyAll = all.to.length + all.cc.length > payloadFor('reply').to.length;
@@ -659,10 +682,14 @@ function QuickReply({ latest, onSent, hasDraft }) {
   }, [text, mode]);
 
   const send = async () => {
-    setBusy(true);
+    // A double click or Ctrl+Enter pressed twice sends once (also checked by the server via sendKey).
+    if (sending.current) return;
+    sending.current = true; setBusy(true);
+    sendKey.current ||= `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     try {
       const p = payloadFor(mode);
-      const r = await api.post('/api/send', { ...p, html: textToHtml(text) + (p.quoteHtml || ''), draftId: draftId || undefined });
+      const r = await api.post('/api/send', { ...p, html: textToHtml(text) + (p.quoteHtml || ''), draftId: draftId || undefined, sendKey: sendKey.current });
+      sendKey.current = null;
       setText(''); setDraftId(null); typed.current = false;
       afterSend(r);
       if (settings.mail.undoSendSeconds > 0) {
@@ -671,7 +698,7 @@ function QuickReply({ latest, onSent, hasDraft }) {
         } } });
       } else toast('Sent');
       onSent?.();
-    } catch (e) { toastError(e); } finally { setBusy(false); }
+    } catch (e) { toastError(e); } finally { setBusy(false); sending.current = false; }
   };
   const draft = async () => {
     setGenBusy(true); setText(''); typed.current = true;

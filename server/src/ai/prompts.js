@@ -18,12 +18,26 @@ export function localStamp(t, tz) {
   } catch { return new Date(t).toISOString(); }
 }
 
-export function messageForPrompt(m, maxChars = 6000, tz = null) {
+/** "Ana Novak <ana@x> → THE USER (cc Marko)": who wrote to whom, with the user marked (own: the user's addresses). */
+export function whoWrote(m, own) {
+  const label = (a) => (own.has(String(a.address || '').toLowerCase()) ? 'THE USER' : a.name ? `${a.name} <${a.address}>` : a.address);
+  const to = json(m.to_json, []).map(label);
+  const cc = json(m.cc_json, []).map(label);
+  return `${label({ name: m.from_name, address: m.from_addr })} → ${to.slice(0, 8).join(', ') || '(undisclosed recipients)'}${cc.length ? ` (cc ${cc.slice(0, 8).join(', ')})` : ''}`;
+}
+
+/** Earlier messages of a conversation (oldest first), each labelled with who wrote to whom, for the AI to see who asked whom. */
+export function conversationForPrompt(msgs, own, tz, budget = 3600) {
+  const per = Math.max(400, Math.floor(budget / Math.max(1, msgs.length)));
+  return msgs.map((x) => `[${localStamp(x.date, tz)}] ${whoWrote(x, own)}\n${stripQuoted(x.body_text).slice(0, per) || '(no text)'}`).join('\n\n');
+}
+
+export function messageForPrompt(m, maxChars = 6000, tz = null, own = null) {
   const to = json(m.to_json, []).map((a) => a.name || a.address).join(', ');
   const cc = json(m.cc_json, []).map((a) => a.name || a.address).slice(0, 15).join(', ');
   const body = stripQuoted(m.body_text).slice(0, maxChars);
   const atts = json(m.attachments_json, []).filter((a) => !a.inline).map((a) => a.filename);
-  return `From: ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr}
+  return `${own ? `Written: ${whoWrote(m, own)}\n` : ''}From: ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr}
 To: ${to}${cc ? `
 Cc: ${cc}` : ''}
 Date: ${tz ? `${localStamp(m.date, tz)} (${tz})` : new Date(m.date).toISOString()}
@@ -43,11 +57,12 @@ export function userContext(user, settings, accounts) {
   return lines.join('\n');
 }
 
-export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '', topics = [], openRequests = '', related = '' }) {
+export function analyzePrompt({ ctx, message, senderInfo, language, timezone, fromMe = false, preferences = '', topics = [], openRequests = '', related = '', conversation = '' }) {
   return {
     system: `You are an email triage assistant. ${ctx}
-${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}Analyze the email and return a JSON object with exactly these keys:
-- "summary": the substance in 1-2 short sentences (${language}): what the user is asked to do, what was decided or changed, or the key information — with the concrete details (amounts, dates, times, places, names of others, document names). Do NOT repeat or paraphrase the subject line, do NOT start with the sender's name or with "The email", "This message", "The sender", "X writes/informs/asks"; mention the sender only when it matters (e.g. who must act). Write it as a direct statement or an imperative, e.g. "Send the signed contract by Friday; the client accepted the 8% discount." not "Ana Novak sends an email about the contract."
+${fromMe ? 'This email was SENT BY THE USER. Summarise what the user wrote; "action_items" are things the user promised to do; "needs_reply" is false; priority is low (10-30) unless the user committed to something with a deadline.\n' : ''}WHO ASKED WHOM — get this right: every message is labelled with who wrote it to whom ("THE USER" is the mailbox owner). Analyse only THE EMAIL; the earlier conversation and any quoted text are context for understanding it. A question or request the USER made earlier is not something the user must answer or do: if THE EMAIL answers it, summarise the answer (e.g. "Tuesday 10:00 works for Marko; he will bring the slides") and "needs_reply" is false unless the email asks the user something new. What the sender promises or will do is not an action for the user. A request in THE EMAIL addressed to someone else (another recipient, "Marko, could you…") is not for the user. When it matters who must act, name them; refer to the user as "you".
+Analyze THE EMAIL and return a JSON object with exactly these keys:
+- "summary": the substance in 1-2 short sentences (${language}): what the user is asked to do (only what THE EMAIL asks of the user), what was decided, answered or changed, or the key information — with the concrete details (amounts, dates, times, places, names of others, document names). Do NOT repeat or paraphrase the subject line, do NOT start with the sender's name or with "The email", "This message", "The sender", "X writes/informs/asks"; mention the sender only when it matters (e.g. who must act). Write it as a direct statement or an imperative, e.g. "Send the signed contract by Friday; the client accepted the 8% discount." not "Ana Novak sends an email about the contract."
 - "category": one of ${CATEGORIES.join(', ')}.
 - "priority": integer 0-100 for how important it is that the USER sees this soon (personal requests from real people, deadlines, money, security = high; newsletters, promotions, automated notifications = low). Weigh how the user is addressed (see "Recipients"): the only direct recipient = most important; one of many in To = less; only in CC = usually informational unless the user is named or asked to act; not addressed at all (mailing list / BCC) = low unless clearly relevant to the user.
 - "priority_reason": short reason (max 12 words, ${language}).
@@ -68,14 +83,14 @@ ${fromMe && openRequests ? `- "resolves": the ids (numbers) of the OPEN REQUESTS
 OPEN REQUESTS to the user (from these recipients or this conversation):
 ${openRequests}
 ` : ''}${related ? `\nRECENT MAIL WITH THE SAME PEOPLE in other conversations (context only — e.g. this email may answer or continue one of them; do not summarise these):\n${related}\n` : ''}${preferences ? `\nThe user's own past corrections (follow them for similar mail):\n${preferences}\n` : ''}Output JSON only.`,
-    messages: [{ role: 'user', content: `${senderInfo}\n\n${message}` }],
+    messages: [{ role: 'user', content: `${conversation ? `EARLIER IN THIS CONVERSATION (oldest first; context only — do not summarise it, use it to understand who asked whom and what THE EMAIL answers):\n${conversation}\n\n` : ''}THE EMAIL TO ANALYSE:\n${senderInfo}\n\n${message}` }],
   };
 }
 
 export function threadSummaryPrompt({ ctx, messages, language }) {
   return {
     system: `You summarize email conversations. ${ctx}
-Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions made, open questions, and who is waiting on whom, with concrete details (dates, amounts, names). Do not restate the subject; no preamble.`,
+Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions made, open questions, and who is waiting on whom, with concrete details (dates, amounts, names). Each message is labelled with who wrote it to whom; "THE USER" is the mailbox owner — call them "you", and keep straight who asked whom and who promised what. Do not restate the subject; no preamble.`,
     messages: [{ role: 'user', content: messages.map((m, i) => `### Message ${i + 1}\n${m}`).join('\n\n') }],
   };
 }
@@ -83,7 +98,8 @@ Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions ma
 export function draftReplyPrompt({ ctx, style, learned, examples, thread, intent, language, signatureName, people = '' }) {
   return {
     system: `You write email replies on behalf of the user. ${ctx}
-${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${people ? `About the recipient (what the user's mail shows; follow "how the user writes to them" for greeting, form of address, formality, language and sign-off):\n${people}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
+${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${people ? `About the recipient (what the user's mail shows; follow "how the user writes to them" for greeting, form of address, formality, language and sign-off):\n${people}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Each message in the conversation is labelled with who wrote it to whom; "THE USER" is the person you write for — reply to the last message not written by them, and do not answer questions the user asked others as if they were asked of the user.
+Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
 Reply in ${language}. Keep it natural, concise and appropriate in tone. Sign off as ${signatureName || 'the user'}.`,
     messages: [{ role: 'user', content: `Conversation (most recent last):\n\n${thread}\n\n${intent ? `The reply should: ${intent}` : 'Write the most appropriate reply.'}` }],
   };

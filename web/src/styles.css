@@ -145,6 +145,9 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px
 .composer { pointer-events: auto; width: 640px; max-width: calc(100vw - 32px); height: min(680px, calc(100vh - 40px)); background: var(--panel); border: 1px solid var(--border-strong); border-radius: 12px 12px 0 0; box-shadow: var(--shadow); display: flex; flex-direction: column; }
 .composer.min { height: 44px; width: 300px; }
 .composer.max { position: fixed; inset: 30px 60px; width: auto; height: auto; border-radius: 12px; z-index: 60; }
+.composer.inline { width: auto; max-width: none; height: auto; border-radius: 12px; box-shadow: none; margin: 0 0 12px; border-color: var(--accent); }
+.composer.inline .composer-head { cursor: default; border-radius: 12px 12px 0 0; }
+.composer.inline .editor { max-height: 60vh; min-height: 140px; }
 .composer-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 14px; background: var(--panel-2); border-radius: 12px 12px 0 0; border-bottom: 1px solid var(--border); cursor: pointer; font-weight: 600; }
 .composer-fields > div { display: flex; align-items: center; gap: 8px; padding: 2px 12px; border-bottom: 1px solid var(--border); min-height: 38px; }
 .composer-fields label { width: 54px; color: var(--text-2); font-size: 13px; flex: none; }
@@ -167,12 +170,12 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px
 .att-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px; }
 
 /* Menus, modals, toasts */
-.menu { position: fixed; z-index: 100; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; min-width: 200px; max-height: 70vh; overflow: auto; }
+.menu { position: fixed; z-index: 100; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; min-width: min(200px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: 70vh; overflow: auto; }
 .menu button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 7px 10px; border: 0; background: none; border-radius: 6px; cursor: pointer; text-align: left; }
 .menu button:hover { background: var(--hover); }
 .menu .label { padding: 6px 10px 2px; font-size: 11px; color: var(--text-3); font-weight: 700; text-transform: uppercase; }
 .modal-back { position: fixed; inset: 0; background: rgb(15 18 24 / 45%); z-index: 90; display: grid; place-items: center; padding: 20px; }
-.modal { background: var(--panel); border-radius: 14px; box-shadow: var(--shadow); width: 520px; max-width: 100%; max-height: calc(100vh - 40px); display: flex; flex-direction: column; }
+.modal { background: var(--panel); border-radius: 14px; box-shadow: var(--shadow); width: 520px; max-width: calc(100vw - 40px); min-width: 0; max-height: calc(100vh - 40px); display: flex; flex-direction: column; }
 .modal.wide { width: 760px; }
 .modal-head { display: flex; align-items: center; padding: 14px 16px 10px; font-weight: 650; font-size: 16px; }
 .modal-body { padding: 4px 16px 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
@@ -289,6 +292,17 @@ table.simple th, table.simple td { text-align: left; padding: 6px 8px; border-bo
   .cal-side { display: none; }
   .msg-card-head > .row { display: none; }
   .reader-scroll { padding: 12px 10px 40px; }
+  .modal-back { padding: 8px; }
+  .modal, .modal.wide { width: 100%; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .modal-body .row, .modal-foot { flex-wrap: wrap; }
+  .modal-body .input { max-width: 100%; }
+  .suggest { min-width: 0; width: max-content; max-width: calc(100vw - 24px); }
+  .menu button { padding: 10px 12px; }
+  .toasts { bottom: 68px; width: calc(100vw - 24px); }
+  .toast { min-width: 0; max-width: 100%; }
+  .login .card { width: calc(100vw - 24px); max-width: 380px; }
+  .composer.inline { position: static; inset: auto; }
+  .composer-dock { z-index: 70; } /* full-screen composer above the bottom bar (its Send button was hidden) */
 }
 
 /* Attachment chips in the message header */

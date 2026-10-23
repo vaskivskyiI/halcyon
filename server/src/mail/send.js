@@ -64,9 +64,16 @@ export function queueSend(userId, payload, { delayMs = 0, sendAt = null } = {}) 
   const account = get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', payload.accountId, userId);
   if (!account) throw new Error('Account not found');
   if (!normAddrs(payload.to).length && !normAddrs(payload.cc).length && !normAddrs(payload.bcc).length) throw new Error('Add at least one recipient');
+  // A second click on Send (or a retried request) must not send the message twice: the same compose session (sendKey),
+  // or the very same message within a minute, returns the message already queued.
+  const body = JSON.stringify(payload);
+  const dup = payload.sendKey
+    ? get("SELECT id, send_at FROM outbox WHERE user_id = ? AND json_extract(payload_json, '$.sendKey') = ? AND created_at > ?", userId, String(payload.sendKey), now() - 86400e3)
+    : get('SELECT id, send_at FROM outbox WHERE user_id = ? AND account_id = ? AND payload_json = ? AND created_at > ?', userId, account.id, body, now() - 60e3);
+  if (dup) return { id: dup.id, sendAt: dup.send_at, duplicate: true };
   const when = sendAt || now() + delayMs;
   const r = run('INSERT INTO outbox (user_id, account_id, payload_json, send_at, created_at) VALUES (?, ?, ?, ?, ?)',
-    userId, account.id, JSON.stringify(payload), when, now());
+    userId, account.id, body, when, now());
   if (payload.draftId) deleteDraft(userId, payload.draftId);
   notify(userId, 'outbox:changed', {});
   // Deliver as soon as the undo window closes rather than on the next scheduler tick.
@@ -77,14 +84,49 @@ export function queueSend(userId, payload, { delayMs = 0, sendAt = null } = {}) 
 // ---- drafts: kept in Halcyon (autosave) and, when the user saves, as one copy in the account's IMAP Drafts folder.
 
 export function saveDraft(userId, b) {
-  const payload = JSON.stringify({ ...b, quoteHtml: undefined });
+  const payload = JSON.stringify({ ...b, quoteHtml: undefined, serverMessageId: undefined });
   const replyTo = Number(b.inReplyToId) || null;
+  // A draft from the Drafts folder (written in another mail app) edited here: it becomes this Halcyon draft, and its
+  // server copy is replaced when this one is saved there (or removed when it is sent).
+  const adopt = !b.id && b.serverMessageId && get(`SELECT m.id, m.account_id, m.message_id FROM messages m JOIN folders f ON f.id = m.folder_id
+    WHERE m.id = ? AND m.user_id = ? AND (f.special_use = '\\Drafts' OR m.is_draft = 1)`, b.serverMessageId, userId);
+  if (adopt) {
+    const msgid = `<${adopt.message_id}>`;
+    const had = get('SELECT id FROM drafts WHERE user_id = ? AND server_msgid = ?', userId, msgid);
+    if (had) b = { ...b, id: had.id };
+    else {
+      const t = now();
+      const r = run('INSERT INTO drafts (user_id, account_id, payload_json, in_reply_to, updated_at, server_msgid, server_saved_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        userId, b.accountId || adopt.account_id, payload, replyTo, t, msgid, t - 1);
+      return { id: Number(r.lastInsertRowid) };
+    }
+  }
   if (b.id && get('SELECT id FROM drafts WHERE id = ? AND user_id = ?', b.id, userId)) {
     run('UPDATE drafts SET account_id = ?, payload_json = ?, in_reply_to = ?, updated_at = ? WHERE id = ?', b.accountId || null, payload, replyTo, now(), b.id);
     return { id: Number(b.id) };
   }
   const r = run('INSERT INTO drafts (user_id, account_id, payload_json, in_reply_to, updated_at) VALUES (?, ?, ?, ?, ?)', userId, b.accountId || null, payload, replyTo, now());
   return { id: Number(r.lastInsertRowid) };
+}
+
+/** A draft in the Drafts folder as composer content (body with its inline images, attachments), to edit it here. */
+export async function draftFromMessage(userId, msgId) {
+  const m = get(`SELECT m.* FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.id = ? AND m.user_id = ? AND (f.special_use = '\\Drafts' OR m.is_draft = 1)`, msgId, userId);
+  if (!m) return null;
+  const had = get('SELECT * FROM drafts WHERE user_id = ? AND server_msgid = ?', userId, `<${m.message_id}>`);
+  if (had) return { ...json(had.payload_json, {}), draftId: had.id, accountId: had.account_id, onServer: true };
+  const raw = readRaw(m);
+  const parsed = raw ? await parseRaw(raw) : null;
+  let html = parsed?.html || (parsed?.text || m.body_text ? `<div>${String(parsed?.text || m.body_text).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]).replace(/\n/g, '<br>')}</div>` : m.body_html || '');
+  const attachments = [];
+  for (const a of parsed?.attachments || []) {
+    const cid = a.cid && html.includes(`cid:${a.cid}`);
+    if (cid) html = html.split(`cid:${a.cid}`).join(`data:${a.contentType};base64,${a.content.toString('base64')}`);
+    else attachments.push({ filename: a.filename || 'attachment', contentType: a.contentType, size: a.size, contentBase64: a.content.toString('base64') });
+  }
+  const parent = m.in_reply_to && get('SELECT id FROM messages WHERE user_id = ? AND message_id = ? ORDER BY date LIMIT 1', userId, m.in_reply_to);
+  return { accountId: m.account_id, from: { name: m.from_name, address: m.from_addr }, to: json(m.to_json, []), cc: json(m.cc_json, []), bcc: json(m.bcc_json, []),
+    subject: m.subject || '', html, attachments, inReplyToId: parent?.id || null, serverMessageId: m.id, onServer: true };
 }
 
 // Removes the server copy of a draft. Only the message with this draft's own Message-ID (generated by Halcyon) in the

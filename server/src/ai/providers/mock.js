@@ -15,10 +15,13 @@ export function mock() {
         return { text, usage: { input: 1, output: 1 } };
       }
       if (!json && /describe who they are professionally/.test(system)) return { text: '- Works on the projects named in the sent mail\n- Writes in English', usage: { input: 1, output: 1 } };
-      // The email itself (after the "Sender…/Recipients…" notes), so the notes are not mistaken for content.
-      const email = last.slice(Math.max(0, last.indexOf('From:')));
+      // The email itself (after the earlier conversation and the "Sender…/Recipients…" notes), so these are not
+      // mistaken for content.
+      const cur = last.slice(Math.max(0, last.lastIndexOf('THE EMAIL TO ANALYSE')));
+      const email = cur.slice(Math.max(0, cur.indexOf('From:')));
       let text;
       if (json) {
+        const last = cur;
         const subject = (last.match(/Subject: (.*)/) || [])[1] || 'message';
         const urgent = /urgent|asap|today|deadline/i.test(last);
         const question = /\?/.test(last);

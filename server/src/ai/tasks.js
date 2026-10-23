@@ -17,7 +17,8 @@ import { senderPreference, applyPreference, preferenceExamples } from './learnin
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
-import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, resolveByAi } from './open-items.js';
+import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
+import { splitPlainQuote } from '../util/quotes.js';
 
 const LANG_NAMES = P.LANG_NAMES;
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
@@ -66,7 +67,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   let needsAction = d.needs_action && !quiet ? 1 : 0;
   if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; needsAction = 0; } // analysed after it expired
   // What the user decided by hand survives re-analysis.
-  const prev = get('SELECT needs_reply_user, dismissed_at FROM ai_insights WHERE message_id = ?', messageId);
+  const prev = get('SELECT needs_reply_user, dismissed_at, resolution, resolved_by FROM ai_insights WHERE message_id = ?', messageId);
   if (prev?.needs_reply_user != null) needsReply = prev.needs_reply_user;
   const dismissed = prev?.dismissed_at ?? (quiet ? now() : null);
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
@@ -81,6 +82,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     ['positive', 'neutral', 'negative', 'urgent'].includes(d.sentiment) ? d.sentiment : 'neutral',
     String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null,
     d.topic || null, dismissed, prev?.needs_reply_user ?? null, needsAction, needsAction ? String(d.action_summary || '').slice(0, 160) || null : null);
+  if (prev?.resolution) run('UPDATE ai_insights SET resolution = ?, resolved_by = ? WHERE message_id = ?', prev.resolution, prev.resolved_by, messageId);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
 }
 
@@ -199,18 +201,32 @@ export async function findRequestedEmails(userId, m, items) {
 function relatedMail(userId, m, fromMe) {
   const people = (fromMe ? json(m.to_json, []).map((a) => a.address) : [m.from_addr]).filter(Boolean).map((a) => String(a).toLowerCase()).slice(0, 3);
   if (!people.length) return [];
-  const mine = new Set(userAccounts(userId).map((a) => a.email.toLowerCase()));
+  const mine = ownAddresses(userId);
   const like = people.map(() => '(lower(x.from_addr) = ? OR lower(x.to_json) LIKE ?)').join(' OR ');
   return all(`SELECT x.id, x.date, x.subject, x.from_name, x.from_addr, i.summary FROM messages x LEFT JOIN ai_insights i ON i.message_id = x.id
     WHERE x.user_id = ? AND x.thread_id != ? AND x.date BETWEEN ? AND ? AND (${like}) ORDER BY x.date DESC LIMIT 4`,
   userId, m.thread_id || '', m.date - 30 * 864e5, m.date + 864e5, ...people.flatMap((p) => [p, `%"${p}"%`])).map((r) => ({ ...r, mine: mine.has(String(r.from_addr || '').toLowerCase()) }));
 }
 
+/**
+ * Earlier messages of the conversation, labelled with who wrote to whom, so the AI can tell who asked whom (a reply
+ * alone — "yes, Tuesday works" — is easily read the wrong way round). When none is stored here (only the reply
+ * arrived), the history quoted inside the email instead.
+ */
+export function conversationContext(userId, m, own, tz) {
+  const seen = new Set([m.message_id]);
+  const earlier = (m.thread_id ? all('SELECT * FROM messages WHERE user_id = ? AND thread_id = ? AND date <= ? AND id != ? ORDER BY date DESC LIMIT 15', userId, m.thread_id, m.date, m.id) : [])
+    .filter((x) => !x.is_draft && (seen.has(x.message_id) ? false : seen.add(x.message_id))).slice(0, 5).reverse();
+  if (earlier.length) return P.conversationForPrompt(earlier, own, tz);
+  const q = splitPlainQuote(m.body_text);
+  return q ? `(only as quoted inside THE EMAIL)\n${q.quoted.slice(0, 2500)}` : '';
+}
+
 export async function analyzeMessage(userId, messageId, { interactive = false, quiet = false } = {}) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw skip('message gone');
-  // Same message seen in another folder (e.g. Gmail labels) → reuse the analysis.
-  const dup = get('SELECT i.* FROM ai_insights i JOIN messages x ON x.id = i.message_id WHERE x.user_id = ? AND x.message_id = ? AND x.id != ? LIMIT 1', userId, m.message_id, m.id);
+  // Same message seen in another folder (e.g. Gmail labels) → reuse the analysis (not when analysing it again).
+  const dup = !get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', m.id) && get('SELECT i.* FROM ai_insights i JOIN messages x ON x.id = i.message_id WHERE x.user_id = ? AND x.message_id = ? AND x.id != ? LIMIT 1', userId, m.message_id, m.id);
   let model;
   if (dup) {
     run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
@@ -220,7 +236,8 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
-    const fromMe = accounts.some((a) => a.email.toLowerCase() === m.from_addr);
+    const own = ownAddresses(userId);
+    const fromMe = own.has(String(m.from_addr || '').toLowerCase());
     const addressing = fromMe ? null : addressingOf(m, accounts);
     const contact = contactByEmail(userId, m.from_addr);
     const senderInfo = fromMe ? 'Sender: the user themself.' : contact
@@ -237,7 +254,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const candidates = fromMe && !quiet ? openRequestsFor(userId, m) : [];
     const openRequests = candidates.map((c) => `[${c.id}] ${P.localStamp(c.date, tz).slice(0, 10)} from ${c.from_name || c.from_addr} · ${c.subject}${c.action_summary ? ` → ${c.action_summary}` : ''}${c.summary ? ` — ${c.summary}` : ''}`).join('\n');
     const related = relatedMail(userId, m, fromMe).map((r) => `- ${P.localStamp(r.date, tz).slice(0, 10)} ${r.mine ? 'the user →' : `${r.from_name || r.from_addr} →`} ${r.subject}${r.summary ? ` — ${r.summary}` : ''}`).join('\n');
-    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
+    const prompt = P.analyzePrompt({ ctx, message: P.messageForPrompt(m, 6000, tz, own), conversation: conversationContext(userId, m, own, tz), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m.from_addr),
       language: settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : uiLanguage });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
@@ -268,14 +285,31 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   await applyRules(userId, [m.id], 'ai');
 }
 
+/**
+ * Once after an update that changes what the analysis sees (version key): the mail that is open now ("needs reply",
+ * "action needed") is analysed again, in the background and after new mail. What the user marked stays as it was.
+ */
+export function reanalyzeOpen(version = 'context:v1') {
+  if (get('SELECT value FROM app_state WHERE key = ?', `reanalyze:${version}`)) return 0;
+  let n = 0;
+  for (const u of all('SELECT id FROM users')) {
+    const rows = all(`SELECT m.id FROM messages m JOIN ai_insights i ON i.message_id = m.id WHERE m.user_id = ? AND i.model != 'user'
+      AND (${openReplySql(u.id)} OR ${openActionSql(u.id)}) ORDER BY m.date DESC LIMIT 300`, u.id);
+    for (const r of rows) { enqueue(u.id, 'analyze', r.id, 15, { force: true }); n++; }
+  }
+  run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', `reanalyze:${version}`, String(now()));
+  return n;
+}
+
 export async function summarizeThreadJob(userId, threadId) {
   const msgs = all('SELECT * FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY date', userId, threadId);
   const unique = [...new Map(msgs.map((m) => [m.message_id, m])).values()];
   if (unique.length < 2) throw skip('single message');
   const cached = get('SELECT * FROM thread_summaries WHERE user_id = ? AND thread_id = ?', userId, threadId);
   if (cached && cached.message_count === unique.length) return cached;
-  const { ctx, uiLanguage } = ctxFor(userId);
-  const parts = unique.slice(-12).map((m) => P.messageForPrompt(m, 2500));
+  const { ctx, uiLanguage, settings } = ctxFor(userId);
+  const own = ownAddresses(userId);
+  const parts = unique.filter((m) => !m.is_draft).slice(-12).map((m) => P.messageForPrompt(m, 2500, settings.calendar.timezone, own));
   const res = await chat(userId, 'background', { ...P.threadSummaryPrompt({ ctx, messages: parts, language: uiLanguage }), temperature: 0.2, maxTokens: 600 });
   run('INSERT OR REPLACE INTO thread_summaries (user_id, thread_id, summary, message_count, model, updated_at) VALUES (?, ?, ?, ?, ?, ?)', userId, threadId, res.text.trim(), unique.length, res.model, now());
   notifyAI(userId, 'ai:thread', { threadId, summary: res.text.trim() });
@@ -393,8 +427,11 @@ export function rememberFact(userId, text, space = '') {
 }
 
 function threadText(userId, m, max = 6) {
-  const msgs = all('SELECT * FROM messages WHERE user_id = ? AND thread_id = ? AND date <= ? ORDER BY date DESC LIMIT ?', userId, m.thread_id, m.date, max).reverse();
-  return msgs.map((x) => P.messageForPrompt(x, 2500)).join('\n\n---\n\n');
+  const seen = new Set();
+  const msgs = all('SELECT * FROM messages WHERE user_id = ? AND thread_id = ? AND date <= ? ORDER BY date DESC LIMIT ?', userId, m.thread_id, m.date, max * 2)
+    .filter((x) => !x.is_draft && (seen.has(x.message_id) ? false : seen.add(x.message_id))).slice(0, max).reverse();
+  const own = ownAddresses(userId);
+  return msgs.map((x) => P.messageForPrompt(x, 2500, getSettings(userId).calendar.timezone, own)).join('\n\n---\n\n');
 }
 
 export async function draftJob(userId, messageId) {

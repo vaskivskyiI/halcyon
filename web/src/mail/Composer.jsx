@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   X, Minus, Maximize2, Minimize2, Send, Paperclip, Bold, Italic, Underline, Strikethrough, List, ListOrdered, Link2, Quote, RemoveFormatting,
-  Sparkles, ChevronDown, Clock, FileText, Trash2, Wand2, Undo2, Languages, Image as ImageIcon,
+  Sparkles, ChevronDown, Clock, FileText, Trash2, Wand2, Undo2, Languages, Image as ImageIcon, PenLine,
 } from 'lucide-react';
 import { api, stream } from '../api.js';
 import { store } from '../store.js';
@@ -126,7 +126,8 @@ function RecipientInput({ value, onChange, autoFocus }) {
 const REWRITES = [['improve', 'Improve writing'], ['fix', 'Fix spelling & grammar'], ['shorten', 'Make shorter'], ['expand', 'Make longer'], ['formal', 'More formal'], ['friendly', 'More friendly'], ['confident', 'More confident'], ['bullet', 'Use bullet points']];
 const LANGS = ['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian', 'Croatian', 'Serbian', 'Ukrainian', 'Polish'];
 
-function Composer({ id, init, minimized }) {
+/** A compose window in the dock, or (inline) a draft shown as an editor inside its conversation; onDone after it is sent or deleted. */
+export function Composer({ id, init, minimized, inline = false, onDone }) {
   const accounts = store.use((s) => s.accounts);
   const settings = store.use((s) => s.settings);
   const space = store.get().space;
@@ -168,8 +169,13 @@ function Composer({ id, init, minimized }) {
   const editor = useRef();
   const abort = useRef();
   const fileInput = useRef();
+  // One key per compose window: the server ignores a second send of it (double click, Ctrl+Enter twice).
+  const sendKey = useRef(`${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`);
+  const sending = useRef(false);
+  const [busySend, setBusySend] = useState(false);
   const [openMenu, menuNode] = useMenu();
   const isReply = !!init.inReplyToId;
+  const close = () => (inline ? onDone?.() : closeComposer(id));
 
   const signature = (acc) => (acc?.signatureHtml ? `<div class="signature"><br>-- <br>${acc.signatureHtml}</div>` : '');
 
@@ -178,7 +184,7 @@ function Composer({ id, init, minimized }) {
     editor.current.innerHTML = html;
     api.get('/api/templates').then(setTemplates).catch(() => {});
     if (init.aiIntent !== undefined) runAiReply(init.aiIntent);
-    else if (!isReply || to.length) placeCaret();
+    else if (!inline && (!isReply || to.length)) placeCaret();
   }, []);
 
   const placeCaret = () => {
@@ -275,13 +281,13 @@ function Composer({ id, init, minimized }) {
     accountId: account?.id, from: { address: fromId?.address || account?.email, name: fromId?.name || account?.displayName || '' }, to, cc, bcc, subject,
     html: editor.current.innerHTML, inReplyToId: init.inReplyToId || null,
     attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
-    draftId,
+    draftId, sendKey: sendKey.current,
   });
 
   // Saves the draft in Halcyon now; returns its id.
   const saveNow = async () => {
     const p = payload();
-    const r = await api.post('/api/drafts', { ...p, id: draftId, quoteHtml: undefined, attachments: p.attachments.filter((a) => a.fromMessageId != null || (a.contentBase64?.length || 0) < 2e6) });
+    const r = await api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined, attachments: p.attachments.filter((a) => a.fromMessageId != null || (a.contentBase64?.length || 0) < 2e6) });
     setDraftId(r.id); setDirty(false);
     return r.id;
   };
@@ -306,14 +312,14 @@ function Composer({ id, init, minimized }) {
   // Close (×): nothing written → just close; otherwise ask whether to keep the draft.
   const requestClose = () => {
     abort.current?.abort();
-    if (!editor.current || !hasContent()) { if (draftId) api.del(`/api/drafts/${draftId}`).catch(() => {}); closeComposer(id); return; }
+    if (!editor.current || !hasContent()) { if (draftId) api.del(`/api/drafts/${draftId}`).catch(() => {}); close(); return; }
     setClosing(true);
   };
   const saveAndClose = async () => {
     try {
       const did = await saveNow();
       try { const r = await api.post(`/api/drafts/${did}/save-to-server`); toast(`Draft saved (also in ${r.folder})`); } catch (e) { toast(`Draft saved in Halcyon — not in the Drafts folder: ${e.message}`); }
-      closeComposer(id);
+      close();
     } catch (e) { toastError(e); }
   };
 
@@ -324,10 +330,14 @@ function Composer({ id, init, minimized }) {
     if (!subject && !confirm('Send without a subject?')) return;
     const text = htmlToText(editor.current.innerHTML);
     if (/\battach(ed|ment)|\bpriložen|\banbei|\bpièce jointe/i.test(text.split(/On .* wrote:/)[0]) && !attachments.length && !confirm('You mentioned an attachment but none is attached. Send anyway?')) return;
-    const p = payload();
+    if (sending.current) return;
+    sending.current = true; setBusySend(true);
     try {
+      // A draft from the Drafts folder becomes a Halcyon draft first, so sending also removes it from there.
+      let p = payload();
+      if (!p.draftId && init.serverMessageId) p = { ...p, draftId: await saveNow() };
       const r = await api.post('/api/send', sendAt ? { ...p, sendAt } : p);
-      closeComposer(id);
+      close();
       afterSend(r);
       if (sendAt) toast(`Scheduled for ${new Date(sendAt).toLocaleString()}`);
       else if (settings.mail.undoSendSeconds > 0) {
@@ -336,14 +346,15 @@ function Composer({ id, init, minimized }) {
           action: { label: 'Undo', onClick: async () => { try { const c = await api.post(`/api/outbox/${r.id}/cancel`); openComposer({ ...c.payload, to: c.payload.to, html: c.payload.html, draftId: null }); } catch { toast('Too late — message already sent', { kind: 'error' }); } } },
         });
       } else toast('Sent');
-    } catch (e) { toastError(e); }
+    } catch (e) { toastError(e); sending.current = false; setBusySend(false); }
   };
 
   // Deleting a draft is explicit: from the close dialog or the trash button (which asks).
   const discard = async () => {
     abort.current?.abort();
-    if (draftId) await api.del(`/api/drafts/${draftId}`).catch(() => {});
-    closeComposer(id);
+    const did = draftId || (init.serverMessageId ? await saveNow().catch(() => null) : null);
+    if (did) await api.del(`/api/drafts/${did}`).catch(() => {});
+    close();
   };
   const saveToServer = async () => {
     try { const did = await saveNow(); const r = await api.post(`/api/drafts/${did}/save-to-server`); setOnServer(true); toast(`Draft saved in ${r.folder}`); } catch (e) { toastError(e); }
@@ -380,8 +391,14 @@ function Composer({ id, init, minimized }) {
   }
 
   return (
-    <div className={`composer ${max ? 'max' : ''}`} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } }}
-      onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } if (e.key === 'Escape') patchComposer(id, { minimized: true }); }}>
+    <div className={`composer ${max ? 'max' : ''} ${inline ? 'inline' : ''}`} data-draft={draftId || undefined} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } }}
+      onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } if (e.key === 'Escape' && !inline) patchComposer(id, { minimized: true }); }}>
+      {inline ? (
+        <div className="composer-head">
+          <PenLine size={14} /><span className="grow truncate">Draft</span>
+          {dirty ? <span className="small faint">Unsaved changes…</span> : draftId ? <span className="small faint">{onServer ? 'Saved · Drafts folder' : 'Saved'}</span> : null}
+        </div>
+      ) : (
       <div className="composer-head" onClick={() => patchComposer(id, { minimized: true })}>
         <span className="grow truncate">{subject || (isReply ? 'Reply' : 'New message')}</span>
         {dirty ? <span className="small faint">Unsaved changes…</span> : draftId ? <span className="small faint" title={onServer ? 'Saved in Halcyon and in the Drafts folder of the mail server' : 'Saved in Halcyon; closing with “Save draft” also puts it into the Drafts folder'}>{onServer ? 'Draft saved · Drafts folder' : 'Draft saved'}</span> : null}
@@ -389,10 +406,11 @@ function Composer({ id, init, minimized }) {
         <button className="icon-btn" onClick={(e) => { e.stopPropagation(); setMax(!max); }} title="Maximize">{max ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
         <button className="icon-btn" onClick={(e) => { e.stopPropagation(); requestClose(); }} title="Close"><X size={16} /></button>
       </div>
+      )}
       <div className="composer-fields">
         {myIds.length > 1 && <div><label>From</label><select className="bare" value={`${fromId?.accountId}|${fromId?.address}`} onChange={(e) => onAccountChange(e.target.value)}>
           {myIds.map((i) => <option key={`${i.accountId}|${i.address}`} value={`${i.accountId}|${i.address}`}>{i.name ? `${i.name} <${i.address}>` : i.address}</option>)}</select></div>}
-        <div><label>To</label><RecipientInput value={to} onChange={(v) => { setTo(v); setDirty(true); }} autoFocus={!to.length} />{!showCc && <button className="btn ghost sm" onClick={() => setShowCc(true)}>Cc/Bcc</button>}</div>
+        <div><label>To</label><RecipientInput value={to} onChange={(v) => { setTo(v); setDirty(true); }} autoFocus={!inline && !to.length} />{!showCc && <button className="btn ghost sm" onClick={() => setShowCc(true)}>Cc/Bcc</button>}</div>
         {showCc && <div><label>Cc</label><RecipientInput value={cc} onChange={(v) => { setCc(v); setDirty(true); }} /></div>}
         {showCc && <div><label>Bcc</label><RecipientInput value={bcc} onChange={(v) => { setBcc(v); setDirty(true); }} /></div>}
         <div><label>Subject</label><input className="bare" value={subject} onChange={(e) => { setSubject(e.target.value); setDirty(true); }} /></div>
@@ -436,7 +454,7 @@ function Composer({ id, init, minimized }) {
       )}
       <div className="composer-foot">
         <div className="row" style={{ gap: 0 }}>
-          <button className="btn primary" style={{ borderRadius: '8px 0 0 8px' }} onClick={() => send()}><Send size={15} /> Send</button>
+          <button className="btn primary" style={{ borderRadius: '8px 0 0 8px' }} disabled={busySend} onClick={() => send()}>{busySend ? <Spinner size={14} /> : <Send size={15} />} Send</button>
           <button className="btn primary" style={{ borderRadius: '0 8px 8px 0', padding: '0 6px', borderLeft: '1px solid rgb(255 255 255 / 30%)' }} title="Schedule send" onClick={(e) => openMenu(e, [
             { section: 'Schedule send' },
             ...scheduleOptions().map(([l, t]) => ({ label: l, hint: new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }), icon: Clock, onClick: () => send(t) })),

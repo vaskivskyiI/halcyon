@@ -384,3 +384,22 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - AI can be wrong: everything closed automatically shows why ("Answered by your email …") with "Still needs a reply"
   / "Still open"; "Not an action" (resolution 'wrong'). Corrections are feedback kinds reply/noreply/action/noaction;
   two in a row for a sender → applyPreference clears needs_reply / needs_action for that sender's new mail.
+
+### Send once, drafts in place, who asked whom, mobile (no migration)
+- Sending is idempotent: the composer / quick reply send a `sendKey` (one per compose window); `queueSend` returns
+  the queued row for a repeated key (24 h), or for a byte-identical payload within 60 s when no key is sent. The UI
+  also ignores a second click while a send is in flight.
+- Drafts are editors inside the conversation (`Composer` with `inline`): Halcyon drafts of the conversation
+  (`related.drafts`, now the full payload + `serverMsgid`) and messages in the Drafts folder (`isDraft`), loaded via
+  `GET /api/messages/:id/draft` (`draftFromMessage`: raw body, inline images as data URIs, attachments embedded).
+  The first save adopts it (`saveDraft` with `serverMessageId` → `drafts.server_msgid` = its Message-ID), so the next
+  save replaces exactly that server copy and sending removes it. Reply on a message with a draft focuses that editor.
+- Conversation view: a message counts as unread when any of its copies is (Inbox + All Mail / Archive), so opening
+  the conversation marks all copies read.
+- Analysis context: THE EMAIL is analysed with the earlier conversation (up to 5 messages, `conversationContext`;
+  or the history quoted inside the email when nothing earlier is stored), every message labelled "X → THE USER"
+  (`whoWrote`, the user's addresses incl. aliases = `ownAddresses`), plus explicit rules on who asked whom. Thread
+  summaries and AI reply drafts get the same labels. One-time re-analysis of currently open items
+  (`reanalyzeOpen`, app_state 'reanalyze:context:v1'); re-analysis keeps the user's marks and the resolution.
+- Mobile: modals/menus/toasts/suggestions are limited to the screen width (`.modal.wide` used to be 760 px wide);
+  the full-screen composer sits above the bottom bar (its Send button was covered).

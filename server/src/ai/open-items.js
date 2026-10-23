@@ -37,7 +37,8 @@ export function openActionSql(userId, i = 'i', m = 'm') {
 // category anyway. So they need only part of the minimum priority that replies need.
 const actionMin = (min) => Math.floor(min * 0.6);
 
-const own = (userId) => new Set(userAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
+/** The user's own addresses (accounts and their aliases), lower-case. */
+export const ownAddresses = (userId) => new Set(userAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
 
 /**
  * The user wrote in a conversation (sent from here, from the phone, from webmail or from another account): earlier
@@ -47,7 +48,7 @@ const own = (userId) => new Set(userAccounts(userId).flatMap((a) => [a.email, ..
 export function markReplied(userId, msgId, { local = false } = {}) {
   const s = get('SELECT id, thread_id, date, from_addr, in_reply_to FROM messages WHERE id = ? AND user_id = ?', msgId, userId);
   if (!s?.thread_id) return 0;
-  const mine = own(userId);
+  const mine = ownAddresses(userId);
   if (!mine.has(String(s.from_addr || '').toLowerCase())) return 0;
   const earlier = all('SELECT m.id, m.from_addr, m.message_id, m.is_answered FROM messages m WHERE m.user_id = ? AND m.thread_id = ? AND m.date < ? AND m.id != ?', userId, s.thread_id, s.date, s.id)
     .filter((m) => !mine.has(String(m.from_addr || '').toLowerCase()));
@@ -68,7 +69,7 @@ export function markReplied(userId, msgId, { local = false } = {}) {
 export function markRepliedHistory() {
   if (get("SELECT value FROM app_state WHERE key = 'replied:v1'")) return;
   for (const u of all('SELECT id FROM users')) {
-    const mine = [...own(u.id)];
+    const mine = [...ownAddresses(u.id)];
     if (!mine.length) continue;
     const rows = all(`SELECT id FROM messages WHERE user_id = ? AND date > ? AND lower(from_addr) IN (${mine.map(() => '?').join(',')}) ORDER BY date`, u.id, now() - 60 * 864e5, ...mine);
     for (const r of rows) markReplied(u.id, r.id, { local: true });

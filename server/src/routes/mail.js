@@ -4,7 +4,7 @@ import { ids, httpError } from './util.js';
 import { serializeMessage, readRaw, parseRaw, messageRow, senderOf, inviteText, icsOf } from '../mail/store.js';
 import { sanitizeEmailHtml, htmlToText } from '../mail/sanitize.js';
 import * as actions from '../mail/actions.js';
-import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft } from '../mail/send.js';
+import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft, draftFromMessage } from '../mail/send.js';
 import { queueOp, syncManager } from '../mail/sync.js';
 import { serializeInsight } from '../ai/tasks.js';
 import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits } from '../search.js';
@@ -259,8 +259,11 @@ export default async function mailRoutes(app) {
       tasks: all(`SELECT id, title, due, done, source_message_id AS messageId FROM tasks WHERE user_id = ? AND source_message_id IN (${inList}) ORDER BY done, due`, userId),
       events: all(`SELECT e.id, e.title, e.start, e.end, e.all_day AS allDay, e.location, e.source_message_id AS messageId FROM events e JOIN calendars c ON c.id = e.calendar_id
         WHERE c.user_id = ? AND e.deleted = 0 AND e.source_message_id IN (${inList}) ORDER BY e.start`, userId).map((e) => ({ ...e, allDay: !!e.allDay })),
-      drafts: all(`SELECT * FROM drafts WHERE user_id = ? AND in_reply_to IN (${inList}) ORDER BY updated_at DESC`, userId)
-        .map((d) => { const p = json(d.payload_json, {}); return { id: d.id, inReplyToId: d.in_reply_to, updatedAt: d.updated_at, onServer: !!d.server_msgid, to: p.to || [], subject: p.subject, snippet: htmlToText(String(p.html || '').split('data-quote')[0]).slice(0, 160) }; }),
+      // Replies to these messages, and drafts whose copy in the Drafts folder is part of the conversation; in full, so
+      // the conversation shows them as editors.
+      drafts: all(`SELECT * FROM drafts WHERE user_id = ? AND (in_reply_to IN (${inList})
+          OR server_msgid IN (SELECT '<' || message_id || '>' FROM messages WHERE id IN (${inList}))) ORDER BY updated_at`, userId)
+        .map((d) => { const p = json(d.payload_json, {}); return { ...draftOut(d), inReplyToId: d.in_reply_to, serverMsgid: d.server_msgid, snippet: htmlToText(String(p.html || '').split('data-quote')[0]).slice(0, 160) }; }),
     };
   }
 
@@ -299,8 +302,11 @@ export default async function mailRoutes(app) {
   app.get('/api/threads/:threadId', async (req) => {
     const rows = all('SELECT * FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY date', req.user.id, req.params.threadId);
     // De-duplicate copies of the same message (e.g. in Sent and Inbox).
-    const seen = new Set();
-    const msgs = rows.filter((m) => (seen.has(m.message_id) ? false : seen.add(m.message_id)));
+    // A copy that is still unread makes the message unread here, so opening the conversation marks every copy read
+    // (Gmail keeps one in All Mail and one in the Inbox; Archive and Inbox can both hold one).
+    const kept = new Map();
+    for (const m of rows) { const k = kept.get(m.message_id); if (!k) kept.set(m.message_id, { ...m }); else if (!m.is_read) k.is_read = 0; }
+    const msgs = [...kept.values()];
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
     for (const m of msgs) { await senderOf(m); await icsOf(m); }
     return { messages: msgs.map((m) => fullMessage(req.user.id, m, req.query.images === '1')), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
@@ -502,6 +508,7 @@ export default async function mailRoutes(app) {
   });
 
   // ---- drafts (stored locally, optionally saved to the IMAP Drafts folder)
+  app.get('/api/messages/:id/draft', async (req, reply) => (await draftFromMessage(req.user.id, Number(req.params.id))) || httpError(reply, 404, 'Not a draft'));
   const draftOut = (d) => ({ ...json(d.payload_json, {}), id: d.id, accountId: d.account_id, updatedAt: d.updated_at, onServer: !!d.server_msgid });
   app.get('/api/drafts', async (req) => {
     const replyTo = ids(req.query.inReplyTo);
