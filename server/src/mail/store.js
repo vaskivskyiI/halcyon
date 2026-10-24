@@ -143,8 +143,25 @@ export async function parseRaw(raw) {
 /**
  * Inserts (or updates the uid of) a message. Returns { id, isNew }.
  */
+/**
+ * When a message cannot be parsed, it is stored anyway — with the headers that can be read and a note — so nothing
+ * that arrived is lost; the original stays available for download.
+ */
+export function fallbackParse(raw, err) {
+  const head = raw.subarray(0, 65536).toString('latin1').split(/\r?\n\r?\n/)[0].replace(/\r?\n[ \t]+/g, ' ');
+  const h = (name) => (head.match(new RegExp(`^${name}:[ \t]*(.*)$`, 'mi')) || [])[1]?.trim() || '';
+  const addr = (v) => { const m = v.match(/^(.*?)<([^>]+)>/); return m ? { value: [{ name: m[1].replace(/"/g, '').trim(), address: m[2].trim() }] } : (v ? { value: [{ name: '', address: v }] } : null); };
+  const date = new Date(h('Date'));
+  return {
+    messageId: h('Message-ID'), inReplyTo: h('In-Reply-To'), references: h('References') || undefined, subject: h('Subject') || '(message could not be read)',
+    from: addr(h('From')), to: addr(h('To')), cc: null, bcc: null, replyTo: null, date: Number.isNaN(date.getTime()) ? null : date,
+    text: `This message could not be read completely (${err.message}). Download the original to open it in another program.`, html: null, attachments: [], headers: new Map(),
+  };
+}
+
 export async function ingestMessage({ account, folder, uid, flags, raw, internalDate }) {
-  const parsed = await parseRaw(raw);
+  let parsed;
+  try { parsed = await parseRaw(raw); } catch (e) { parsed = fallbackParse(raw, e); }
   const messageId = cleanId(parsed.messageId) || `${sha1(raw).slice(0, 24)}@halcyon.local`;
   const inReplyTo = cleanId(parsed.inReplyTo);
   let refs = parsed.references ? (Array.isArray(parsed.references) ? parsed.references : String(parsed.references).split(/\s+/)) : [];

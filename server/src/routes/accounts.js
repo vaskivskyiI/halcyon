@@ -76,6 +76,10 @@ export default async function accountRoutes(app) {
           title: `${r.status === 'failed' ? 'Not sent' : `Not sent yet (try ${r.attempts + 1} at ${new Date(r.send_at).toLocaleTimeString()})`}: “${p.subject || '(no subject)'}”`,
           text: r.error || '', actions: ['retry-send', 'to-draft'] });
       }
+      // Sent, but some recipients were refused by the mail server (last 3 days).
+      for (const r of all("SELECT id, payload_json, error FROM outbox WHERE account_id = ? AND status = 'sent' AND error IS NOT NULL AND sent_at > ?", a.id, t - 3 * 864e5)) {
+        out.push({ key: `partial:${r.id}`, level: 'error', accountId: a.id, title: `Not delivered to everyone: “${json(r.payload_json, {}).subject || '(no subject)'}”`, text: r.error || '', actions: [] });
+      }
       const unsaved = get(`SELECT COUNT(*) AS n FROM messages WHERE account_id = ? AND local_copy = 1 AND uid IS NULL AND created_at < ?
         AND id NOT IN (SELECT json_extract(payload_json, '$.localId') FROM pending_ops WHERE account_id = ? AND op = 'append' AND attempts < 5 AND json_extract(payload_json, '$.localId') IS NOT NULL)`,
         a.id, t - 120e3, a.id).n;

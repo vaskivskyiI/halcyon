@@ -233,6 +233,9 @@ export class AccountSync {
         }
       }
       let maxUid = folder.last_uid || 0;
+      // A message that could not be stored (e.g. a full disk) is fetched again next time: the folder's last_uid
+      // stays below it (messages above it that were stored are recognised and skipped then).
+      let failedMin = null;
       // Newest first so the user sees recent mail quickly during initial sync.
       uids.sort((a, b) => b - a);
       for (let i = 0; i < uids.length; i += 25) {
@@ -242,7 +245,7 @@ export class AccountSync {
           try {
             const r = await ingestMessage({ account, folder, uid: msg.uid, flags: [...(msg.flags || [])], raw: msg.source, internalDate: msg.internalDate });
             if (r.isNew) newIds.push(r.id);
-          } catch (e) { log.warn(`ingest ${folder.path}/${msg.uid}: ${e.message}`); }
+          } catch (e) { log.warn(`ingest ${folder.path}/${msg.uid}: ${e.message}`); failedMin = Math.min(failedMin ?? Infinity, msg.uid); }
           if (msg.uid > maxUid) maxUid = msg.uid;
         }
         if (!folder.last_uid && newIds.length) notify(account.user_id, 'mail:progress', { accountId: account.id, folderId: folder.id, count: newIds.length, total: uids.length });
@@ -264,12 +267,16 @@ export class AccountSync {
             }
           });
         }
-        // 3) Expunged messages.
+        // 3) Expunged messages. Only when the server's answer is complete: an empty or short list during a glitch
+        //    would otherwise remove mail here that is still on the server (and would not be fetched again).
         const serverUids = new Set((await client.search({ all: true }, { uid: true })) || []);
-        const gone = all('SELECT id, uid FROM messages WHERE folder_id = ? AND uid IS NOT NULL', folder.id).filter((m) => !serverUids.has(m.uid)).map((m) => m.id);
+        const complete = box.exists == null ? serverUids.size > 0 : serverUids.size >= box.exists && (serverUids.size > 0 || box.exists === 0);
+        const gone = complete ? all('SELECT id, uid FROM messages WHERE folder_id = ? AND uid IS NOT NULL', folder.id).filter((m) => !serverUids.has(m.uid)).map((m) => m.id) : [];
+        if (!complete) log.warn(`${folder.path}: incomplete message list from the server (${serverUids.size} of ${box.exists}) — nothing removed this time`);
         if (gone.length) deleteMessages(gone, { keepAnalysis: true });
       }
 
+      if (failedMin != null) maxUid = Math.max(folder.last_uid || 0, failedMin - 1);
       const fetchedMin = uids.length ? Math.min(...uids) : null;
       run(`UPDATE folders SET uidvalidity = ?, last_uid = ?, highest_modseq = ?, last_synced_at = ?, server_total = ?,
         oldest_uid = CASE WHEN ? IS NULL THEN oldest_uid WHEN oldest_uid IS NULL OR ? < oldest_uid THEN ? ELSE oldest_uid END WHERE id = ?`,

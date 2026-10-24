@@ -51,7 +51,7 @@ export async function verifyOpen(userId, m, d, { ctx, conversation, message, int
 }
 
 // Words that ask for something to be sent or forwarded (en, sl, de, fr, hr/sr, it, es).
-const SEND_ASK = /(?<!\p{L})(send|forward|share|resend|attach|provide|pošlj|posreduj|deli|schick|weiterleit|envoy|transf[eé]r|proslijed|prosled|inoltr|invi|reenv|mand)\p{L}*/iu;
+const SEND_ASK = /(?<!\p{L})(send|forward|share|resend|provide|pošlj|posreduj|deli|schick|weiterleit|envoy|transf[eé]r|proslijed|prosled|inoltr|invi|reenv|mand)\p{L}*/iu;
 
 /**
  * Requests to send / forward earlier mail or documents (requested_items) are kept only when the quoted sentence is in

@@ -55,7 +55,7 @@ export async function buildMime(account, p) {
     subject: p.subject || '', html: p.html || undefined, text: p.text || (p.html ? htmlToText(p.html) : ''),
     inReplyTo, references, attachments, headers, priority: p.priority || 'normal',
     icalEvent: p.icalEvent ? { method: p.icalEvent.method, content: p.icalEvent.content } : undefined,
-    messageId: `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${fromAddr.split('@')[1] || 'halcyon.local'}>`,
+    messageId: p.messageId || `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${fromAddr.split('@')[1] || 'halcyon.local'}>`,
   });
   return new Promise((resolve, reject) => mail.compile().build((err, msg) => (err ? reject(err) : resolve(crlf(msg)))));
 }
@@ -186,18 +186,35 @@ export function cancelSend(userId, id) {
   return json(row.payload_json);
 }
 
+/**
+ * Sends one outbox message over SMTP. Only the sending itself can fail here: what follows a successful send
+ * (afterDelivery) must never make it look unsent — that would send it again.
+ */
 export async function deliver(row) {
   const account = get('SELECT * FROM accounts WHERE id = ?', row.account_id);
+  if (!account) throw new Error('The sending account was removed');
   const p = json(row.payload_json);
+  // One Message-ID per message, kept across retries: if a retry follows an unclear failure (the server took it but
+  // the connection broke), the recipient's mail system recognises the same email.
+  if (!p.messageId) {
+    p.messageId = `<${row.id}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${String(account.email).split('@')[1] || 'halcyon.local'}>`;
+    run('UPDATE outbox SET payload_json = ? WHERE id = ?', JSON.stringify(p), row.id);
+  }
   const raw = await buildMime(account, p);
   const transport = await smtpTransport(account);
   const envelope = {
     from: account.email,
     to: [...normAddrs(p.to), ...normAddrs(p.cc), ...normAddrs(p.bcc)].map((a) => a.address),
   };
+  let info;
   try {
-    await transport.sendMail({ envelope, raw });
+    info = await transport.sendMail({ envelope, raw });
   } finally { transport.close(); }
+  return { account, p, raw, rejected: (info?.rejected || []).map(String) };
+}
+
+/** After a successful send: flags on the original, the Sent copy (here and on the server), contacts. */
+export async function afterDelivery(row, { account, p, raw }) {
   // The original shows as replied / forwarded at once; storing the sent copy below can take a moment.
   if (p.inReplyToId) setFlags(row.user_id, [p.inReplyToId], { answered: true });
   if (p.forwardOfId) setFlags(row.user_id, [p.forwardOfId], { forwarded: true });
@@ -237,10 +254,11 @@ const sentFolder = (accountId) => mailFolder(accountId, '\\Sent');
 /** Last SMTP result per account (shown in Settings → Accounts). */
 export const smtpStatus = new Map();
 
-let busy = false;
+let busy = false, busySince = 0;
 export async function processOutbox() {
-  if (busy) return;
-  busy = true;
+  // One run at a time; a run stuck for 20 minutes (a hung connection) does not block the outbox for ever.
+  if (busy && now() - busySince < 20 * 60e3) return;
+  busy = true; busySince = now();
   try {
     // Interrupted while sending (server restarted): not resent automatically (it may have gone out) — the user decides.
     // (Only one run at a time, so a row still marked 'sending' here was left by a previous server process.)
@@ -249,18 +267,27 @@ export async function processOutbox() {
     const due = all("SELECT * FROM outbox WHERE status = 'queued' AND send_at <= ? AND attempts < 5 ORDER BY send_at LIMIT 20", now());
     for (const row of due) {
       run("UPDATE outbox SET status = 'sending' WHERE id = ?", row.id);
+      let sent;
       try {
-        await deliver(row);
-        smtpStatus.set(row.account_id, { ok: true, at: now() });
-        run("UPDATE outbox SET status = 'sent', sent_at = ?, error = NULL WHERE id = ?", now(), row.id);
+        sent = await deliver(row);
       } catch (e) {
         log.warn(`send failed (${row.id}): ${e.message}`);
         smtpStatus.set(row.account_id, { ok: false, at: now(), error: e.message });
-        const attempts = row.attempts + 1;
+        // Refused for good (5xx: bad address, rejected content, not allowed to send as this address): no point retrying.
+        const permanent = e.responseCode >= 500 && e.responseCode < 600;
+        const attempts = permanent ? 5 : row.attempts + 1;
         run("UPDATE outbox SET status = ?, attempts = ?, error = ?, send_at = ? WHERE id = ?",
           attempts >= 5 ? 'failed' : 'queued', attempts, e.message, now() + attempts * 60e3, row.id);
         notify(row.user_id, 'mail:sendError', { outboxId: row.id, error: e.message });
+        notify(row.user_id, 'outbox:changed', {});
+        continue;
       }
+      // Sent: recorded at once, before anything else can go wrong.
+      smtpStatus.set(row.account_id, { ok: true, at: now() });
+      const partial = sent.rejected.length ? `Sent, but not accepted for: ${sent.rejected.join(', ')}` : null;
+      run("UPDATE outbox SET status = 'sent', sent_at = ?, error = ? WHERE id = ?", now(), partial, row.id);
+      if (partial) notify(row.user_id, 'mail:sendError', { outboxId: row.id, error: partial });
+      try { await afterDelivery(row, sent); } catch (e) { log.warn(`after sending ${row.id}: ${e.message}`); }
       notify(row.user_id, 'outbox:changed', {});
     }
     // Keep sent outbox entries for a day for the UI, then clear.
