@@ -29,11 +29,13 @@ const LANG_NAMES = P.LANG_NAMES;
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
 
 /** Prompt context; with an account id, the context of that account (see userContext). */
-function ctxFor(userId, accountId = null) {
+export function ctxFor(userId, accountId = null) {
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const settings = getSettings(userId);
   const accounts = userAccounts(userId);
-  const account = accountId ? accounts.find((a) => a.id === Number(accountId)) || null : null;
+  // The account's own context, unless it (or the general setting) asks for the whole picture of the user.
+  const acc = accountId ? accounts.find((a) => a.id === Number(accountId)) || null : null;
+  const account = acc && (acc.context_mode || settings.ai.contextMode || 'account') !== 'global' ? acc : null;
   return { user, settings, accounts, account, ctx: P.userContext(user, settings, accounts, account), uiLanguage: LANG_NAMES[settings.ui.language] || 'English' };
 }
 

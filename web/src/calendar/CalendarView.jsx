@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner } from '../components/common.jsx';
@@ -70,10 +70,13 @@ export default function CalendarView() {
     setEditing({ start: s, end: allDay ? s + 864e5 : s + (settings.calendar.defaultDurationMin || 30) * 60e3, allDay, reminders: [settings.calendar.defaultReminderMin ?? 15] });
   };
 
+  // Time blocked in another space has no details here; everything else opens.
+  const openEvent = (ev) => (ev.blocked ? toast(`${ev.title} — the details are only shown in that space`) : setEditing(ev));
+
   // Right-click on an event: move it to another (writable) calendar — the whole series for a recurring event.
   const [openEvMenu, evMenuNode] = useMenu();
   const eventMenu = (e, ev) => {
-    if (ev.readonly) return;
+    if (ev.readonly || ev.blocked) return;
     e.preventDefault();
     openEvMenu(e, [
       { label: 'Open', icon: Clock, onClick: () => setEditing(ev) },
@@ -142,10 +145,10 @@ export default function CalendarView() {
           <button className="icon-btn mobile-only" onClick={() => newEvent()}><Plus size={18} /></button>
           <select className="input" style={{ width: 'auto' }} value={view} onChange={(e) => setView(e.target.value)}>{VIEWS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
         </div>
-        {view === 'month' && <MonthView onMenu={eventMenu} from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={setEditing} onDay={(d) => { setDate(d); setView('day'); }} />}
-        {['week', 'workweek', 'day'].includes(view) && <TimeGrid onMenu={eventMenu} from={from} days={Math.round((to - from) / 864e5)} events={shown} settings={settings} onNew={newEvent} onOpen={setEditing} onMove={moveEvent} />}
+        {view === 'month' && <MonthView onMenu={eventMenu} from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={openEvent} onDay={(d) => { setDate(d); setView('day'); }} />}
+        {['week', 'workweek', 'day'].includes(view) && <TimeGrid onMenu={eventMenu} from={from} days={Math.round((to - from) / 864e5)} events={shown} settings={settings} onNew={newEvent} onOpen={openEvent} onMove={moveEvent} />}
         {evMenuNode}
-        {view === 'agenda' && <Agenda events={shown} onOpen={setEditing} onMenu={eventMenu} />}
+        {view === 'agenda' && <Agenda events={shown} onOpen={openEvent} onMenu={eventMenu} />}
       </section>
       {editing && <EventEditor initial={editing} calendars={calendars} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {scopeAsk && <ScopeModal title="Change recurring event" onClose={() => { scopeAsk.onCancel?.(); setScopeAsk(null); }} onPick={(s) => { scopeAsk.onPick(s); setScopeAsk(null); }} />}
@@ -381,7 +384,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
                   const top = ((Math.max(ev.start, s) - s) / 3600e3) * HOUR_PX;
                   const height = Math.max(18, ((Math.min(ev.end, e) - Math.max(ev.start, s)) / 3600e3) * HOUR_PX - 2);
                   return (
-                    <div key={ev.instanceId} onContextMenu={(e) => onMenu?.(e, ev)} className={`ev-block ${ev.status} show-${ev.showAs || 'busy'}`} style={{ top, height, '--ev': ev.color, background: ev.color, left: `calc(${(col / n) * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)`, right: 'auto' }}
+                    <div key={ev.instanceId} onContextMenu={(e) => onMenu?.(e, ev)} className={`ev-block ${ev.status} show-${ev.showAs || 'busy'} ${ev.blocked ? 'blocked' : ''}`} style={{ top, height, '--ev': ev.color, background: ev.color, left: `calc(${(col / n) * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)`, right: 'auto' }}
                       onMouseDown={(m) => startDrag(m, ev, 'move')} title={`${ev.title}\n${fmtTime(ev.start)}–${fmtTime(ev.end)}${ev.location ? `\n${ev.location}` : ''}`}>
                       <div style={{ fontWeight: 600 }} className="truncate">{ev.title}</div>
                       {height > 30 && <div style={{ opacity: 0.9 }}>{fmtTime(ev.start)}–{fmtTime(ev.end)}{ev.location ? ` · ${ev.location}` : ''}</div>}
@@ -452,6 +455,8 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   // New events in a space go to a writable calendar of that space before falling back to the shared default.
   const cal = calendars.find((c) => c.id === ev.calendarId) || (space && calendars.find((c) => c.space === space && !c.readonly && c.enabled)) || calendars.find((c) => c.isDefault) || calendars[0];
   const readonly = cal?.readonly;
+  // Events of read-only, "for information" or shared calendars can be added to one's own calendar (a linked copy).
+  const canLink = isExisting && !initial.linkedFrom && (readonly || initial.showAs === 'info' || cal?.showAs === 'info' || !!store.get().acting);
   const baseRule = (ev.rrule || '').replace(/;?(COUNT|UNTIL)=[^;]*/g, '');
   const ruleExtra = (ev.rrule || '').match(/(COUNT|UNTIL)=([^;]*)/);
 
@@ -511,12 +516,15 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   };
 
   return (
-    <Modal title={isExisting ? (readonly ? 'Event' : 'Edit event') : 'New event'} onClose={onClose} wide footer={readonly ? <button className="btn" onClick={onClose}>Close</button> : <>
+    <Modal title={isExisting ? (readonly ? 'Event' : 'Edit event') : 'New event'} onClose={onClose} wide footer={readonly ? <>{canLink && <LinkToMine ev={initial} onDone={() => { onSaved?.(); }} />}<span className="grow" /><button className="btn" onClick={onClose}>Close</button></> : <>
+      {canLink && <LinkToMine ev={initial} onDone={() => { onSaved?.(); }} />}
       {isExisting && <button className="btn danger" onClick={() => remove()}><Trash2 size={15} /> Delete</button>}
       <span className="grow" />
       <button className="btn" onClick={onClose}>Cancel</button>
       <button className="btn primary" onClick={() => save()}>{sendInvites && ev.attendees.length ? 'Save & send' : 'Save'}</button>
     </>}>
+      {initial.linkedFrom && <div className="notice small" style={{ margin: 0 }}><Link2 size={14} /><span className="grow">Added from “{initial.linkedFromName || 'another calendar'}” — it follows the original: when that moves or changes, this copy does too.</span>
+        <button className="btn sm ghost" onClick={async () => { try { await api.post(`/api/events/${initial.seriesId || initial.id}/unlink`); toast('No longer follows the original'); onSaved?.(); } catch (e) { toastError(e); } }}>Stop following</button></div>}
       <input className="input" style={{ fontSize: 17, height: 42 }} placeholder="Add a title" value={ev.title} onChange={(e) => set('title', e.target.value)} autoFocus={!isExisting} disabled={readonly} />
       <div className="row" style={{ flexWrap: 'wrap' }}>
         <Clock size={16} className="faint" />
@@ -583,4 +591,18 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
       {scopeFor && <ScopeModal title={scopeFor === 'delete' ? 'Delete recurring event' : 'Save recurring event'} onClose={() => setScopeFor(null)} onPick={(s) => { const f = scopeFor; setScopeFor(null); f === 'delete' ? remove(s) : save(s); }} />}
     </Modal>
   );
+}
+
+/** "Add to my calendar": a copy in one of the user's own calendars that follows the original (calendar/linked.js). */
+function LinkToMine({ ev, onDone }) {
+  const [openMenu, menuNode] = useMenu();
+  const choose = async (e) => {
+    const targets = await api.get('/api/events/link-targets').catch(() => []);
+    const add = async (c) => {
+      try { await api.post(`/api/events/${ev.seriesId || ev.id}/link`, { calendarId: c?.id }); toast(`Added to “${c?.name || 'your calendar'}” — it follows the original${ev.rrule ? ' (the whole series)' : ''}`); onDone?.(); } catch (err) { toastError(err); }
+    };
+    if (targets.length <= 1) return add(targets[0]);
+    openMenu(e, [{ section: 'Add to my calendar' }, ...targets.map((c) => ({ label: c.name, hint: c.isDefault ? 'default' : '', onClick: () => add(c) }))]);
+  };
+  return <><button className="btn" title="A copy in your own calendar that follows this event when it moves or changes" onClick={(e) => { e.persist?.(); choose(e); }}><CalendarPlus size={15} /> Add to my calendar</button>{menuNode}</>;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, Layers } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.js';
 import './back.js';
 import { store } from './store.js';
@@ -134,6 +134,7 @@ function Shell() {
     ['tasks', CheckSquare, 'Tasks'], ['assistant', Sparkles, 'Assistant'],
   ];
   const dark = document.documentElement.dataset.theme === 'dark';
+  const theme = ['light', 'dark', 'system'].includes(settings?.ui?.theme) ? settings.ui.theme : 'system';
   const space = store.use((s) => s.space);
   const connected = store.use((s) => s.connected);
   const taskDialog = store.use((s) => s.taskDialog);
@@ -200,7 +201,9 @@ function Shell() {
         <SpaceSwitcher />
         <button title={connected ? 'Sync now' : 'Sync now — live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'}
           aria-label="Sync now" onClick={syncNow} className={connected ? '' : 'offline'}>{syncing ? <Spinner size={18} /> : <RefreshCw size={19} />}{!connected && <span className="offline-dot" />}</button>
-        <button title="Toggle theme" aria-label="Toggle theme" onClick={() => saveSettings({ ui: { theme: dark ? 'light' : 'dark' } })}>{dark ? <Sun size={19} /> : <Moon size={19} />}</button>
+        {/* Light → dark → automatic (follows the device) → light … */}
+        <button title={`Theme: ${{ light: 'light', dark: 'dark', system: 'automatic (as the device)' }[theme]} — click for ${{ light: 'dark', dark: 'automatic', system: 'light' }[theme]}`} aria-label="Change theme"
+          onClick={() => saveSettings({ ui: { theme: { light: 'dark', dark: 'system', system: 'light' }[theme] } })}>{theme === 'system' ? <SunMoon size={19} /> : dark ? <Moon size={19} /> : <Sun size={19} />}</button>
         <button className={section === 'settings' ? 'active' : ''} title="Settings" aria-label="Settings" onClick={() => navigate('#/settings')}><Settings size={21} /></button>
       </nav>
       {/* Remount views when the space changes so every list reloads in the new scope. */}

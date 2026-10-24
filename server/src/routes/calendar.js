@@ -9,6 +9,7 @@ import { respondToInvitation, sendInvitations } from '../calendar/invites.js';
 import { notify } from '../util/events.js';
 import { syncDav } from '../scheduler.js';
 import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
+import { linkEvent, unlinkEvent } from '../calendar/linked.js';
 
 const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, sourceId: c.source_id || null, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
   space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
@@ -135,12 +136,43 @@ export default async function calendarRoutes(app) {
     const sc = all ? null : scope(req.user.id, reqSpace(req));
     let ids = req.query.calendars ? String(req.query.calendars).split(',').map(Number) : null;
     if (sc) ids = (ids || sc.calendarIds).filter((id) => sc.calendarIds.includes(id));
-    if (ids && !ids.length) return [];
-    const list = repo.listRange(req.user.id, from, to, ids);
-    if (!all) return list;
+    const list = ids && !ids.length ? [] : repo.listRange(req.user.id, from, to, ids);
+    if (!all) return [...list, ...blockedElsewhere(req, from, to, sc)].sort((a, b) => a.start - b.start);
     const spaces = spaceMap(req.user.id);
     return list.map((e) => ({ ...e, space: spaces.calendars.get(e.calendarId) || '' }));
   });
+
+  // ---- an event from a read-only / information / shared calendar added to one's own calendar (calendar/linked.js)
+  // In a shared space the copy goes to the person's own calendar.
+  app.get('/api/events/link-targets', async (req) => all('SELECT id, name, color, is_default AS isDefault FROM calendars WHERE user_id = ? AND readonly = 0 AND enabled = 1 ORDER BY is_default DESC, name', req.person?.id || req.user.id));
+  app.post('/api/events/:id/link', async (req, reply) => {
+    try {
+      const e = linkEvent(req.user.id, Number(req.params.id), req.person?.id || req.user.id, req.body?.calendarId ? Number(req.body.calendarId) : null);
+      if (req.person) notify(req.person.id, 'calendar:changed', {});
+      return repo.serializeEvent(e);
+    } catch (e) { return httpError(reply, 400, e.message); }
+  });
+  app.post('/api/events/:id/unlink', async (req) => { unlinkEvent(req.user.id, Number(req.params.id)); notify(req.user.id, 'calendar:changed', {}); return { ok: true }; });
+
+  /**
+   * One person, one schedule: while a space is shown, time the user is busy in their other spaces — and, in a shared
+   * space, in their own calendars — shows as "Blocked · <where>", without title, people or place.
+   */
+  function blockedElsewhere(req, from, to, sc) {
+    const out = [];
+    const mask = (e, label) => ({ instanceId: `blk:${e.instanceId}`, id: null, calendarId: null, start: e.start, end: e.end, allDay: e.allDay, title: `Blocked · ${label}`,
+      blocked: true, busy: true, readonly: true, showAs: 'busy', color: '#9ca3af', calendarName: label });
+    if (sc) {
+      const spaces = spaceMap(req.user.id);
+      const others = all('SELECT id FROM calendars WHERE user_id = ? AND enabled = 1', req.user.id).map((c) => c.id).filter((id) => !sc.calendarIds.includes(id));
+      if (others.length) for (const e of repo.listRange(req.user.id, from, to, others, { includeInfo: false })) if (e.busy) out.push(mask(e, spaces.calendars.get(e.calendarId) || 'another space'));
+    }
+    if (req.person) {
+      const spaces = spaceMap(req.person.id);
+      for (const e of repo.listRange(req.person.id, from, to, null, { includeInfo: false })) if (e.busy) out.push(mask(e, spaces.calendars.get(e.calendarId) || 'my calendar'));
+    }
+    return out;
+  }
 
   app.get('/api/events/search', async (req) => {
     const q = `%${req.query.q || ''}%`;

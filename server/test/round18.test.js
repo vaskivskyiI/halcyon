@@ -48,7 +48,8 @@ test('the overlap check sees events of every space and says which space they are
   const t = Date.parse('2026-11-02T08:00:00Z');
   await api('POST', '/api/events', { calendarId: home.id, title: 'Dentist', start: t, end: t + 3600e3 }, { 'x-halcyon-space': 'Private' });
   const inWork = await api('GET', `/api/events?from=${t}&to=${t + 3600e3}`, undefined, { 'x-halcyon-space': 'Work' });
-  assert.equal(inWork.length, 0, 'the Work view itself does not show private events');
+  // The Work view shows the private time only as blocked, without any details of it.
+  assert.deepEqual(inWork.map((e) => [e.title, e.blocked, e.id, e.location ?? null, e.description ?? null]), [['Blocked · Private', true, null, null, null]]);
   const all = await api('GET', `/api/events?from=${t}&to=${t + 3600e3}&allSpaces=1`, undefined, { 'x-halcyon-space': 'Work' });
   assert.deepEqual(all.map((e) => [e.title, e.space, e.calendarName]), [['Dentist', 'Private', 'Home cal']]);
   assert.ok(work.id);

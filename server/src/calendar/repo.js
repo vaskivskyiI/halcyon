@@ -7,7 +7,8 @@ import { notify } from '../util/events.js';
 import { queueMemory } from '../ai/queue.js';
 
 const COLS = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id',
-  'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty', 'deleted', 'source_message_id', 'updated_at'];
+  'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty', 'deleted', 'source_message_id', 'updated_at',
+  'linked_cal_id', 'linked_uid', 'linked_at'];
 
 export function serializeEvent(e) {
   return {
@@ -15,7 +16,7 @@ export function serializeEvent(e) {
     start: e.start, end: e.end, allDay: !!e.all_day, timezone: e.timezone, rrule: e.rrule, exdates: json(e.exdates_json, []),
     recurrenceId: e.recurrence_id, attendees: json(e.attendees_json, []), organizer: json(e.organizer_json, null),
     reminders: json(e.reminders_json, []), status: e.status, busy: !!e.busy, url: e.url, onlineMeeting: e.online_meeting,
-    sourceMessageId: e.source_message_id,
+    sourceMessageId: e.source_message_id, linkedFrom: e.linked_cal_id || null,
   };
 }
 
@@ -92,6 +93,9 @@ export function updateEvent(userId, id, patch, extra = {}) {
   const cur = get('SELECT e.*, c.source FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ?', id);
   update('events', id, { ...toRow(patch), dirty: cur.source === 'caldav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   notify(userId, 'calendar:changed', {});
+  // Copies of this event in other calendars follow at once (calendar/linked.js).
+  const calId = cur.calendar_id;
+  setImmediate(() => import('./linked.js').then((m) => m.syncLinked(calId)).catch(() => {}));
   queueMemory(userId, 'event', id);
   return get('SELECT * FROM events WHERE id = ?', id);
 }
@@ -143,6 +147,10 @@ export function listRange(userId, from, to, calendarIds, { includeInfo = true } 
   if (!cals.length) return [];
   const ph = cals.map(() => '?').join(',');
   const rows = all(`SELECT * FROM events WHERE deleted = 0 AND calendar_id IN (${ph}) AND (rrule IS NOT NULL OR (start < ? AND end >= ?))`, ...cals.map((c) => c.id), to, from);
+  // An event added to the user's own calendar from another one (a linked copy) shows once — as the copy.
+  const copied = new Set(rows.filter((r) => r.linked_cal_id).map((r) => `${r.linked_cal_id}:${r.linked_uid}`));
+  const linkNames = new Map(all(`SELECT id, name FROM calendars WHERE id IN (${[...new Set(rows.filter((r) => r.linked_cal_id).map((r) => Number(r.linked_cal_id)))].join(',') || 0})`).map((c) => [c.id, c.name]));
+  for (let i = rows.length - 1; i >= 0; i--) if (copied.has(`${rows[i].calendar_id}:${rows[i].uid}`)) rows.splice(i, 1);
   const overrides = new Map();
   for (const r of rows) if (r.recurrence_id) overrides.set(`${r.calendar_id}:${r.uid}:${r.recurrence_id}`, r);
   const calById = Object.fromEntries(cals.map((c) => [c.id, c]));
@@ -150,7 +158,7 @@ export function listRange(userId, from, to, calendarIds, { includeInfo = true } 
   const extra = (r) => {
     const c = calById[r.calendar_id];
     const showAs = c.show_as || 'busy';
-    return { color: c.color, readonly: !!c.readonly, calendarName: c.name, showAs, busy: !!r.busy && showAs === 'busy' };
+    return { color: c.color, readonly: !!c.readonly, calendarName: c.name, showAs, busy: !!r.busy && showAs === 'busy', linkedFromName: r.linked_cal_id ? linkNames.get(r.linked_cal_id) || 'another calendar' : null };
   };
   const out = [];
   for (const r of rows) {

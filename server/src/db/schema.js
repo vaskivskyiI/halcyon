@@ -362,4 +362,14 @@ export const migrations = [
   );
   CREATE INDEX idx_message_tags_cat ON message_tags(category_id, source);
   `,
+  // 27: per account: which picture of the user the AI uses for its mail (NULL = the general setting ai.contextMode);
+  //     linked event copies (an event from a read-only / info / shared calendar added to the user's own calendar,
+  //     following the original: its calendar + uid), see calendar/linked.js.
+  `
+  ALTER TABLE accounts ADD COLUMN context_mode TEXT;
+  ALTER TABLE events ADD COLUMN linked_cal_id INTEGER;
+  ALTER TABLE events ADD COLUMN linked_uid TEXT;
+  ALTER TABLE events ADD COLUMN linked_at INTEGER;
+  CREATE INDEX idx_events_linked ON events(linked_cal_id, linked_uid) WHERE linked_cal_id IS NOT NULL;
+  `,
 ];

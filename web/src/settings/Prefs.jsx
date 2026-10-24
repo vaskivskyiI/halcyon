@@ -73,7 +73,7 @@ export function Appearance() {
     <div className="settings-section">
       <h2>Appearance</h2>
       <div className="form-grid">
-        <label className="field">Theme<select className="input" value={s.ui.theme} onChange={(e) => save({ ui: { theme: e.target.value } })}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <label className="field">Theme<select className="input" value={s.ui.theme} onChange={(e) => save({ ui: { theme: e.target.value } })}><option value="system">Automatic (as the device)</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
         <label className="field">Density<select className="input" value={s.ui.density} onChange={(e) => save({ ui: { density: e.target.value } })}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
         <label className="field">Language for AI summaries<select className="input" value={s.ui.language} onChange={(e) => save({ ui: { language: e.target.value } })}>{[['en', 'English'], ['sl', 'Slovenščina'], ['de', 'Deutsch'], ['fr', 'Français'], ['es', 'Español'], ['it', 'Italiano'], ['hr', 'Hrvatski'], ['uk', 'Українська'], ['pl', 'Polski']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
       </div>

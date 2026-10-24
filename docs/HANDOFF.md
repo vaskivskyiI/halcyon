@@ -490,3 +490,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   downloads; `asLinks` adds it to cid URLs), membership checked in `actingAs`. Web api.js learns owners from responses
   (message, thread, account, folder, draft, outbox ids) and sends the header; selections across owners are split
   per owner. Events of merged spaces count as own (`setMergedSpaces`).
+
+### Linked event copies, blocked time, context mode, theme (migration 27)
+- calendar/linked.js: "Add to my calendar" on events of read-only / info / shared calendars (`POST /api/events/:id/link`,
+  in a shared space into the person's calendar; `link-targets`) creates a copy with `linked_cal_id` + `linked_uid`
+  (robust to subscriptions recreating rows). `listRange` hides the original where the copy shows. `syncLinked`
+  (every 60 s and after updateEvent) copies title/time/place/recurrence from the original; original gone → copy
+  'cancelled'. `/unlink` stops following.
+- `/api/events` (not allSpaces): `blockedElsewhere` adds anonymous "Blocked · <space>" items (`blocked: true`, no id)
+  for busy time in the user's other spaces, and — acting in a shared space — in the person's own calendars.
+- `ai.contextMode` ('account' | 'global') + `accounts.context_mode` override; `ctxFor` honours them.
+- Rail theme button cycles light → dark → automatic.

@@ -15,7 +15,7 @@ export function serializeAccount(a) {
     syncError: a.sync_error, lastSyncAt: a.last_sync_at, caldavUrl: a.caldav_url, carddavUrl: a.carddav_url, davUser: a.dav_user,
     aliases: json(a.aliases_json, []), hasPassword: !!a.imap_pass_enc, sortOrder: a.sort_order, space: a.space || '',
     syncHistory: a.sync_history || '90', inviteCalendarId: a.invite_calendar_id || null,
-    aboutMe: a.about_me || '', learnedAbout: a.learned_about || '', learnedAboutAt: a.learned_about_at || null,
+    aboutMe: a.about_me || '', learnedAbout: a.learned_about || '', learnedAboutAt: a.learned_about_at || null, contextMode: a.context_mode || '',
   };
 }
 
@@ -34,6 +34,7 @@ export function accountFields(b) {
     invite_calendar_id: b.inviteCalendarId === undefined ? undefined : (Number(b.inviteCalendarId) || null),
     // Who the user is in this account (work, private, business) — used for this account's mail instead of all.
     about_me: b.aboutMe === undefined ? undefined : String(b.aboutMe).slice(0, 2000),
+    context_mode: b.contextMode === undefined ? undefined : (['account', 'global'].includes(b.contextMode) ? b.contextMode : null),
   };
   if (b.imap?.password) f.imap_pass_enc = encrypt(b.imap.password);
   if (b.smtp?.password) f.smtp_pass_enc = encrypt(b.smtp.password);
@@ -42,7 +43,7 @@ export function accountFields(b) {
 }
 
 export const ACCOUNT_COLS = ['name', 'email', 'display_name', 'color', 'imap_host', 'imap_port', 'imap_secure', 'imap_user', 'imap_pass_enc', 'smtp_host', 'smtp_port',
-  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space', 'sync_history', 'invite_calendar_id', 'about_me'];
+  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space', 'sync_history', 'invite_calendar_id', 'about_me', 'context_mode'];
 
 export function createAccount(userId, b, extra = {}) {
   const n = all('SELECT id FROM accounts WHERE user_id = ?', userId).length;

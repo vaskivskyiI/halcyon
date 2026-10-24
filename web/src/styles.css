@@ -427,3 +427,4 @@ div.provider { cursor: default; background: var(--panel-2); }
 .follow-up { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: grid; gap: 4px; }
 .follow-up ul { margin: 4px 0 6px; padding-left: 20px; }
 .chip.shared-chip { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.ev-block.blocked { background: repeating-linear-gradient(135deg, #9ca3af33 0 6px, transparent 6px 12px), var(--panel-2) !important; color: var(--text-2); border: 1px dashed var(--border-strong); box-shadow: none; }
