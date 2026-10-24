@@ -50,6 +50,20 @@ export async function verifyOpen(userId, m, d, { ctx, conversation, message, int
   return d;
 }
 
+// Words that ask for something to be sent or forwarded (en, sl, de, fr, hr/sr, it, es).
+const SEND_ASK = /(?<!\p{L})(send|forward|share|resend|attach|provide|pošlj|posreduj|deli|schick|weiterleit|envoy|transf[eé]r|proslijed|prosled|inoltr|invi|reenv|mand)\p{L}*/iu;
+
+/**
+ * Requests to send / forward earlier mail or documents (requested_items) are kept only when the quoted sentence is in
+ * the email's own text and asks for sending, and the sender is a person — a guess would offer to forward mail
+ * nobody asked for.
+ */
+export function checkRequests(m, items) {
+  if (!Array.isArray(items) || isAutomated(m)) return [];
+  const own = `${m.subject || ''}\n${P.stripQuoted(m.body_text)}`;
+  return items.filter((it) => it && SEND_ASK.test(String(it.quote || '')) && quoted(it.quote, own));
+}
+
 export function resolvePrompt({ ctx, message, requests }) {
   return {
     system: `${ctx}

@@ -19,7 +19,7 @@ import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
 import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
 import { splitPlainQuote } from '../util/quotes.js';
-import { verifyOpen, resolveCheck, isAutomated, notATask } from './verify.js';
+import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from './verify.js';
 import { logger } from '../util/log.js';
 
 const log = logger('ai');
@@ -296,7 +296,8 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     applyPreference(res.data, pref);
     res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.needs_action = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
-    if (!quiet && Array.isArray(res.data.requested_items) && res.data.requested_items.length) {
+    res.data.requested_items = checkRequests(m, res.data.requested_items);
+    if (!quiet && res.data.requested_items.length) {
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
     saveInsight(m, res.data, model, tz, { quiet });

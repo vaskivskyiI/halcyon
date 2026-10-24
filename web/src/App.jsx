@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, Layers } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.js';
+import './back.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace, loadShared, enterShared } from './data.js';

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
+import { BackButton } from '../back.js';
 import { navigate, fmtListDate, toast, toastError } from '../util.js';
 import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
@@ -61,7 +62,11 @@ export default function MailView({ route }) {
 function FolderNav({ view, open, onNavigate }) {
   const folders = store.use((s) => s.folders);
   const labels = store.use((s) => s.labels);
-  const [collapsed, setCollapsed] = useState({});
+  // Collapsed sidebar blocks (topics, categories, labels, each account) — remembered on this device.
+  const [collapsed, setCollapsedState] = useState(() => { try { return JSON.parse(localStorage.getItem('halcyon.sidebar.collapsed') || '{}'); } catch { return {}; } });
+  const setCollapsed = (c) => { setCollapsedState(c); try { localStorage.setItem('halcyon.sidebar.collapsed', JSON.stringify(c)); } catch { /* private mode */ } };
+  const toggle = (k) => setCollapsed({ ...collapsed, [k]: !collapsed[k] });
+  const Chevron = ({ k }) => (collapsed[k] ? <ChevronRight size={13} /> : <ChevronDown size={13} />);
   const [dropTarget, setDropTarget] = useState(null);
   const [openMenu, menuNode] = useMenu();
   const [newFolder, setNewFolder] = useState(null);
@@ -94,19 +99,23 @@ function FolderNav({ view, open, onNavigate }) {
       <div className="sidebar-scroll">
         {SMART.map(([key, Icon, label, countKey]) => (
           <div key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => go(key)}>
-            <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && <span className="count" title={COUNT_TITLES[countKey]}>{folders.counts[countKey]}</span>}
+            <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && (countKey === 'scheduled' && folders.counts.outboxFailed > 0
+              ? <span className="count failed" title={`${folders.counts.outboxFailed} could not be sent — open to retry, edit or keep as draft`}>{folders.counts[countKey]}</span>
+              : <span className="count" title={COUNT_TITLES[countKey]}>{folders.counts[countKey]}</span>)}
           </div>
         ))}
         {folders.topics?.length > 0 && <>
-          <div className="nav-section" style={{ cursor: 'default' }} title="Ongoing projects, events and cases recognised by the AI">Topics</div>
-          {folders.topics.map((t) => (
-            <div key={t.name} className={`nav-item ${view === topicView(t.name) ? 'active' : ''}`} onClick={() => go(topicView(t.name))} title={`${t.count} messages in the last 60 days`}>
-              <Hash size={15} /><span className="truncate">{t.name}</span>{t.unread > 0 && <span className="count">{t.unread}</span>}
+          <div className="nav-section" onClick={() => toggle('topics')} title="Ongoing projects, events and cases recognised by the AI — most recent and most urgent first"><Chevron k="topics" /> Topics</div>
+          {!collapsed.topics && folders.topics.map((t) => (
+            <div key={t.name} className={`nav-item ${view === topicView(t.name) ? 'active' : ''}`} onClick={() => go(topicView(t.name))} title={`${t.count} messages in the last 60 days${t.next ? ` · next: ${new Date(t.next).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}${t.actions ? ` · ${t.actions} open action${t.actions > 1 ? 's' : ''}` : ''}`}>
+              <Hash size={15} /><span className="truncate">{t.name}</span>
+              {t.next && t.next < Date.now() + 14 * 864e5 && <span className="small faint" style={{ marginLeft: 'auto', flex: 'none' }}>{new Date(t.next).toLocaleDateString([], { day: 'numeric', month: 'short' })}</span>}
+              {t.unread > 0 && <span className="count" style={t.next && t.next < Date.now() + 14 * 864e5 ? { marginLeft: 6 } : undefined}>{t.unread}</span>}
             </div>))}
         </>}
         {folders.categories?.length > 0 && <>
-          <div className="nav-section" style={{ cursor: 'default' }}>AI categories</div>
-          {folders.categories.map((c) => (
+          <div className="nav-section" onClick={() => toggle('categories')}><Chevron k="categories" /> AI categories</div>
+          {!collapsed.categories && folders.categories.map((c) => (
             <div key={c.name} className={`nav-item ${view === categoryView(c.name) ? 'active' : ''}`} onClick={() => go(categoryView(c.name))}>
               <Tag size={15} /><span className="truncate" style={{ textTransform: 'capitalize' }}>{c.name}</span>{c.unread > 0 && <span className="count">{c.unread}</span>}
             </div>))}
@@ -142,8 +151,8 @@ function FolderNav({ view, open, onNavigate }) {
             </div>
           );
         })}
-        <div className="nav-section" style={{ cursor: 'default' }}><span className="grow">Labels</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="New label" onClick={async () => { const n = prompt('Label name'); if (n) { await api.post('/api/labels', { name: n, color: `hsl(${Math.random() * 360 | 0} 60% 50%)` }); loadLabels(); } }}><Plus size={13} /></button></div>
-        {labels.map((l) => (
+        <div className="nav-section" onClick={() => toggle('labels')}><Chevron k="labels" /><span className="grow">Labels</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="New label" onClick={async (e) => { e.stopPropagation(); const n = prompt('Label name'); if (n) { await api.post('/api/labels', { name: n, color: `hsl(${Math.random() * 360 | 0} 60% 50%)` }); loadLabels(); } }}><Plus size={13} /></button></div>
+        {!collapsed.labels && labels.map((l) => (
           <div key={l.id} className={`nav-item ${view === `l${l.id}` ? 'active' : ''}`} onClick={() => go(`l${l.id}`)}
             onContextMenu={(e) => openMenu(e, [{ label: 'Delete label', icon: Trash2, danger: true, onClick: () => api.del(`/api/labels/${l.id}`).then(loadLabels) }])}>
             <Tag size={15} color={l.color} /><span className="truncate">{l.name}</span>
@@ -441,6 +450,7 @@ function MessageList({ view, openId, onMenu }) {
       <div className="list-head">
         <div className="row">
           <button className="icon-btn mobile-only" onClick={onMenu} aria-label="Folders"><MenuIcon size={18} /></button>
+          <BackButton className="icon-btn" compact />
           <h3 style={{ margin: 0, fontSize: 17 }} className="grow truncate">{activeQuery ? 'Search results' : title}</h3>
           <button className="icon-btn" title="Check for new mail" onClick={() => { window.dispatchEvent(new Event('halcyon:sync')); load(false); }}>{loading ? <Spinner /> : <RefreshCw size={16} />}</button>
           <button className="icon-btn" title={threaded ? 'Conversation view: on' : 'Conversation view: off'} onClick={() => saveSettings({ ui: { conversationView: !threaded } })}><MailIcon size={16} /></button>

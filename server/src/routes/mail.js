@@ -111,6 +111,8 @@ export default async function mailRoutes(app) {
     const counts = {
       unified: unreadIn(out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox').map((f) => f.id))), needsreply: countView('needsreply'), needsaction: countView('needsaction'), snoozed: countView('snoozed'),
       scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, req.user.id).n,
+      // Messages that could not be sent (or are retrying after an error): the Outbox count turns red.
+      outboxFailed: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (status = 'failed' OR (status = 'queued' AND error IS NOT NULL))`, req.user.id).n,
     };
     // Per folder through idx_messages_folder_unread (index only).
     const folderIds = out.flatMap((a) => a.folders.map((f) => f.id));
@@ -120,8 +122,24 @@ export default async function mailRoutes(app) {
     // Dynamic AI views: active topics and the categories present (excluding the generic ones), with unread counts.
     const recent = `FROM ai_insights i JOIN messages m ON m.id = i.message_id JOIN folders f ON f.id = m.folder_id
       WHERE m.user_id = ? AND ${acc} AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk') AND m.date > ?`;
-    const topics = all(`SELECT i.topic AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread, MAX(m.date) AS last ${recent} AND i.topic IS NOT NULL
-      GROUP BY lower(i.topic) HAVING count >= 2 ORDER BY unread > 0 DESC, last DESC LIMIT 12`, req.user.id, Date.now() - 60 * 864e5);
+    // Topics: those with something coming up soon (an open task's due date, an event, an open action) first, by how
+    // soon; then the most recently active ones.
+    const t0 = Date.now();
+    const topics = all(`SELECT i.topic AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread, MAX(m.date) AS last,
+        (SELECT MIN(t.due) FROM tasks t JOIN messages tm ON tm.id = t.source_message_id JOIN ai_insights ti ON ti.message_id = tm.id
+          WHERE t.user_id = m.user_id AND t.done = 0 AND t.due > ${t0 - 864e5} AND lower(ti.topic) = lower(i.topic)) AS task_due,
+        (SELECT MIN(e.start) FROM events e JOIN messages em ON em.id = e.source_message_id JOIN ai_insights ei ON ei.message_id = em.id
+          WHERE em.user_id = m.user_id AND e.deleted = 0 AND e.start > ${t0} AND lower(ei.topic) = lower(i.topic)) AS event_at,
+        SUM(CASE WHEN ${openActionSql(req.user.id)} THEN 1 ELSE 0 END) AS actions
+      ${recent} AND i.topic IS NOT NULL GROUP BY lower(i.topic) HAVING count >= 2 ORDER BY last DESC LIMIT 40`, req.user.id, Date.now() - 60 * 864e5)
+      .map((x) => ({ ...x, next: Math.min(x.task_due || Infinity, x.event_at || Infinity) }))
+      .map((x) => ({ ...x, next: Number.isFinite(x.next) ? x.next : null }))
+      .sort((a, b) => {
+        const soon = (x) => (x.next && x.next < t0 + 14 * 864e5 ? x.next : null);
+        if (soon(a) || soon(b)) return (soon(a) ?? Infinity) - (soon(b) ?? Infinity);
+        return (b.actions > 0) - (a.actions > 0) || b.last - a.last;
+      })
+      .slice(0, 12).map(({ task_due: _t, event_at: _e, ...x }) => x);
     const categories = all(`SELECT i.category AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread ${recent} AND f.special_use = '\\Inbox'
       AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, req.user.id, Date.now() - 30 * 864e5);
     return { accounts: out, counts, topics, categories };

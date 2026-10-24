@@ -55,7 +55,8 @@ export function mock() {
           action_summary: (email.match(/\b(pay|sign|register|submit|approve)\b[^.\n]{0,40}/i) || [''])[0],
           // "Please forward me the email with …" → long words of the email body as search keywords.
           requested_items: /forward|posreduj|send me|pošlji/i.test(last)
-            ? [{ description: 'requested email', keywords: [...new Set((last.split(/\n\n/).pop().match(/\p{L}{7,}/gu) || []).map((w) => w.toLowerCase()))].slice(0, 6) }] : [],
+            ? [{ description: 'requested email', keywords: [...new Set((last.split(/\n\n/).pop().match(/\p{L}{7,}/gu) || []).map((w) => w.toLowerCase()))].slice(0, 6),
+              quote: (email.split(/(?<=[.?!])\s+|\n+/).find((x) => /forward|posreduj|send me|pošlji/i.test(x)) || '').trim() }] : [],
           subject: `Re: ${subject}`, body: 'Thanks for your message. I will follow up shortly.',
           resolves: [...(system.includes('OPEN REQUESTS') ? system.split('OPEN REQUESTS').pop() : '').matchAll(/\[(\d+)\][^·\n]*· ([^—→\n]+)/g)].filter((r) => email.toLowerCase().includes(r[2].trim().toLowerCase())).map((r) => Number(r[1])),
         });

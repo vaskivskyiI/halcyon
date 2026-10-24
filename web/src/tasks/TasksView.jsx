@@ -4,6 +4,7 @@ import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, useMenu } from '../components/common.jsx';
 import { store } from '../store.js';
+import { jump } from '../back.js';
 import { dueOptions, fmtDue, DueField } from './TaskDialog.jsx';
 
 export default function TasksView() {
@@ -48,7 +49,7 @@ export default function TasksView() {
     'sep',
     { label: 'Edit…', icon: Pencil, onClick: () => setEditing(t) },
     { label: t.priority ? 'Not important' : 'Mark important', icon: Flag, onClick: () => patch(t, { priority: t.priority ? 0 : 1 }) },
-    t.sourceMessageId && { label: 'Open the email', icon: Mail, onClick: () => navigate(`#/mail/unified/${t.sourceMessageId}`) },
+    t.sourceMessageId && { label: 'Open the email', icon: Mail, onClick: () => jump(`#/mail/unified/${t.sourceMessageId}`) },
     // From one's own tasks into a shared space (only from one's own mail; it then disappears from here).
     ...(!store.get().acting ? (store.get().shared || []).map((s) => ({ label: `Share in “${s.name}”`, icon: Share2, onClick: async () => {
       if (!confirm(`Move “${t.title}” into the shared space “${s.name}”? Its members will see it there.`)) return;

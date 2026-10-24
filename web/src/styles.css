@@ -78,6 +78,7 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px
 .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-item .count { margin-left: auto; font-size: 12px; color: var(--text-2); font-weight: 600; }
 .nav-item.active .count { color: var(--accent); }
+.nav-item .count.failed, .nav-item.active .count.failed { color: #fff; background: var(--danger); border-radius: 999px; padding: 0 6px; }
 .nav-item.drop { outline: 2px dashed var(--accent); }
 .nav-section { font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; padding: 14px 10px 6px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .nav-section .dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -423,3 +424,5 @@ div.provider { cursor: default; background: var(--panel-2); }
 .space-btn { position: relative; }
 .space-btn .badge { position: absolute; top: 2px; right: 2px; }
 .why-box { display: grid; gap: 6px; margin: 4px 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); }
+.follow-up { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: grid; gap: 4px; }
+.follow-up ul { margin: 4px 0 6px; padding-left: 20px; }

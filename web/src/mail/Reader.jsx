@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
+import { BackButton, jump } from '../back.js';
 import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, textToHtml, escapeHtml, CATEGORY_COLORS } from '../util.js';
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { openComposer, replyPayload, Composer } from './Composer.jsx';
@@ -225,6 +226,7 @@ export default function Reader({ id, view }) {
     <section className="reader">
       <div className="reader-toolbar">
         <button className="icon-btn mobile-only" onClick={() => navigate(`#/mail/${view}`)}><ArrowLeft size={18} /></button>
+        <BackButton />
         <button className="btn ghost" onClick={() => reply('reply')}><Reply size={16} /> Reply</button>
         <button className="btn ghost" onClick={() => reply('replyAll')}><ReplyAll size={16} /> All</button>
         <button className="btn ghost" onClick={() => reply('forward')}><Forward size={16} /> Forward</button>
@@ -250,12 +252,13 @@ export default function Reader({ id, view }) {
             <button className="btn sm" onClick={() => api.post('/api/messages/save-to-server', { ids: msgs.filter((m) => m.notOnServer).map((m) => m.id) }).then((r) => toast(r.queued ? 'Saving on the server…' : 'Nothing to save')).catch(toastError)}>Save on server</button>
           </div>
         )}
-        <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />
+        {/* Tasks and events made from this mail: inside the AI card next to the suggestions; here only without it. */}
+        {!(settings.ai.enabled && !isDraftMsg(latest)) && <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />}
 
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
         {settings.ai.enabled && !isDraftMsg(latest) && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
-          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply}
+          onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}
           onDone={async (resolution = 'done', undo = false) => {
             try {
               await api.post(`/api/messages/${latest.id}/dismiss`, undo ? { dismissed: false } : { resolution });
@@ -301,7 +304,7 @@ const AI_STATUS_TEXT = {
 
 const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone }) {
+function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, related, onTask }) {
   const [openMenu, menuNode] = useMenu();
   const [suggesting, setSuggesting] = useState(false);
   // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
@@ -324,7 +327,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
           {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ins?.topic && <a className="chip topic" href={`#/mail/${topicView(ins.topic)}`} title={`Show all mail about “${ins.topic}”`}>#{ins.topic}</a>}
           {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Show this category, or change it (the AI learns from it)"
-            onClick={(e) => openMenu(e, [{ label: `Show all ${ins.category} mail`, onClick: () => navigate(`#/mail/${categoryView(ins.category)}`) }, 'sep', { section: 'Change category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => correct('category', c) }))])}>{ins.category} ▾</button>}
+            onClick={(e) => openMenu(e, [{ label: `Show all ${ins.category} mail`, onClick: () => jump(`#/mail/${categoryView(ins.category)}`) }, 'sep', { section: 'Change category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => correct('category', c) }))])}>{ins.category} ▾</button>}
           {ins?.priority != null && <span className="chip" style={{ background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
           {ins && <button className={`chip ${ins.needsReply ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={ins.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply'} onClick={() => onNeedsReply(!ins.needsReply)}>
             <CornerUpLeft size={11} /> {ins.needsReply ? 'Needs reply ✕' : 'Needs reply?'}</button>}
@@ -369,18 +372,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
               <button className="btn sm" onClick={() => onForward(c.id)}><Forward size={12} /> Forward to {requester?.name?.split(' ')[0] || requester?.address}</button>
             </div>)) : <div className="small faint">No matching email found — try search.</div>}
         </div>))}
-      {ins?.actionItems?.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div className="small muted" style={{ fontWeight: 600 }}>Action items</div>
-          <ul>{ins.actionItems.map((a, i) => <li key={i}>{a.text}{a.due && <span className="faint"> · due {a.due}</span>}</li>)}</ul>
-          <button className="btn sm" onClick={() => onTasks(ins.actionItems)}><CheckSquare size={13} /> Add to tasks</button>
-        </div>
-      )}
-      {ins?.events?.length > 0 && (
-        <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-          {ins.events.map((e, i) => <button key={i} className="btn sm" onClick={() => onEvent(e)} title={e.read ? `Read from the email as ${e.read.date}${e.read.time ? ` ${e.read.time}` : ''} (${e.read.tz})` : undefined}><CalendarPlus size={13} /> {e.title} · {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</button>)}
-        </div>
-      )}
+      <FollowUp ins={ins} related={related} onTask={onTask} onTasks={onTasks} onEvent={onEvent} />
       {(ins?.needsReply || ins?.suggestedReplies?.length > 0) && (
         <div className="replies">
           {ins.draftReply && <button className="btn sm ai" onClick={() => onReply(null)}><Sparkles size={13} /> Use prepared draft</button>}
@@ -392,10 +384,51 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
   );
 }
 
+const when = (t, allDay) => new Date(t).toLocaleString([], allDay ? { weekday: 'short', day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Follow-up in one place: what was already made from this mail (tasks, events) first, then the AI's suggestions —
+ * so a task that exists is seen right next to "Add to tasks", and suggested events already in the calendar show so.
+ */
+function FollowUp({ ins, related, onTask, onTasks, onEvent }) {
+  const tasks = related?.tasks || [], events = related?.events || [];
+  const items = ins?.actionItems || [];
+  const added = (e) => events.some((x) => Math.abs(x.start - Date.parse(e.start)) < 60e3 || (x.title || '').toLowerCase() === String(e.title || '').toLowerCase());
+  const suggested = (ins?.events || []).filter((e) => !added(e));
+  if (!tasks.length && !events.length && !items.length && !suggested.length) return null;
+  return (
+    <div className="follow-up">
+      {tasks.map((t) => (
+        <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
+          <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
+          <CheckSquare size={14} /><span className="grow truncate"><b>Task{t.done ? ' (done)' : ''}:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
+          <a href="#/tasks" className="small">Tasks</a>
+        </div>))}
+      {events.map((e) => (
+        <div key={`e${e.id}`} className="related-item">
+          <CalendarPlus size={14} /><span className="grow truncate"><b>In calendar:</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
+          <a href="#/calendar" className="small">Calendar</a>
+        </div>))}
+      {items.length > 0 && (
+        <div style={{ marginTop: tasks.length || events.length ? 6 : 0 }}>
+          <div className="small muted" style={{ fontWeight: 600 }}>{tasks.length ? 'Action items (a task already exists)' : 'Action items'}</div>
+          <ul>{items.map((a, i) => <li key={i}>{a.text}{a.due && <span className="faint"> · due {a.due}</span>}</li>)}</ul>
+          {tasks.length ? <button className="link-btn small" onClick={() => onTasks(items)}>Add another task</button>
+            : <button className="btn sm" onClick={() => onTasks(items)}><CheckSquare size={13} /> Add to tasks</button>}
+        </div>
+      )}
+      {suggested.length > 0 && (
+        <div className="row" style={{ marginTop: 6, flexWrap: 'wrap' }}>
+          {suggested.map((e, i) => <button key={i} className="btn sm" onClick={() => onEvent(e)} title={e.read ? `Read from the email as ${e.read.date}${e.read.time ? ` ${e.read.time}` : ''} (${e.read.tz})` : undefined}><CalendarPlus size={13} /> {e.title} · {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Tasks, events and draft replies created from this message / conversation. */
 function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
   if (!related || (!related.tasks.length && !related.events.length && !related.drafts.length)) return null;
-  const when = (t, allDay) => new Date(t).toLocaleString([], allDay ? { weekday: 'short', day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   return (
     <div className="related-bar">
       {related.drafts.map((d) => (

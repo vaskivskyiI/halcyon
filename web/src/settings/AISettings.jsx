@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Pencil, CheckCircle2, XCircle, Server, Cloud, RefreshCw, Lock, Download } from 'lucide-react';
+import { Plus, Trash2, Pencil, CheckCircle2, XCircle, Server, Cloud, RefreshCw, Lock, Download, ChevronDown } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
 import { loadProviders, saveSettings } from '../data.js';
-import { Modal, Spinner, Switch } from '../components/common.jsx';
+import { Modal, Spinner, Switch, useMenu } from '../components/common.jsx';
 import { toast, toastError } from '../util.js';
 
 const LANGS = ['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian', 'Croatian', 'Serbian', 'Ukrainian', 'Polish', 'Russian', 'Dutch', 'Czech', 'Portuguese'];
@@ -247,8 +247,7 @@ function RouteRow({ task, label, hint, providers, route, onChange }) {
         <select className="input" value={pid} onChange={(e) => onChange(e.target.value ? { providerId: Number(e.target.value), model: '' } : null)}>
           <option value="">Automatic</option>{eligible.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        {pid && <><input className="input" list={`models-${task}`} placeholder="Provider default" value={route?.model || ''} onChange={(e) => onChange({ providerId: Number(pid), model: e.target.value })} />
-          <datalist id={`models-${task}`}>{models.filter((m) => (task === 'embeddings' ? m.embedding !== false : !m.embedding)).map((m) => <option key={m.id} value={m.id}>{m.name || ''}</option>)}</datalist></>}
+        {pid && <ModelInput placeholder="Provider default" value={route?.model || ''} models={models.filter((m) => (task === 'embeddings' ? m.embedding !== false : !m.embedding))} onChange={(v) => onChange({ providerId: Number(pid), model: v })} />}
       </div>
     </div>
   );
@@ -291,10 +290,8 @@ function ProviderEditor({ provider, onClose }) {
         <label className="field">Name<input className="input" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
         <label className="field">Base URL<input className="input" value={f.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} /></label>
         {f.type !== 'ollama' && <label className="field full">API key {provider?.hasKey && <span className="faint">(stored — leave empty to keep)</span>}<input className="input" type="password" value={f.apiKey} onChange={(e) => set('apiKey', e.target.value)} autoComplete="off" /></label>}
-        <label className="field">Default chat model<input className="input" list="chat-models" value={f.defaultModel} onChange={(e) => set('defaultModel', e.target.value)} /></label>
-        <label className="field">Embedding model {f.type === 'anthropic' && <span className="faint">(not offered by Anthropic)</span>}<input className="input" list="embed-models" value={f.embedModel || ''} onChange={(e) => set('embedModel', e.target.value)} disabled={f.type === 'anthropic'} /></label>
-        <datalist id="chat-models">{chatModels.map((m) => <option key={m.id} value={m.id}>{m.name || ''}</option>)}</datalist>
-        <datalist id="embed-models">{embedModels.map((m) => <option key={m.id} value={m.id} />)}</datalist>
+        <label className="field">Default chat model<ModelInput value={f.defaultModel} models={chatModels} onChange={(v) => set('defaultModel', v)} /></label>
+        <label className="field">Embedding model {f.type === 'anthropic' && <span className="faint">(not offered by Anthropic)</span>}<ModelInput value={f.embedModel || ''} models={embedModels} onChange={(v) => set('embedModel', v)} disabled={f.type === 'anthropic'} /></label>
       </div>
       <div className="row"><button className="btn sm" onClick={fetchModels} disabled={busy}><RefreshCw size={13} /> Load available models</button>{models.length > 0 && <span className="small faint">{models.length} models found</span>}</div>
       {f.type === 'ollama' && provider && <div className="row"><input className="input" placeholder="Pull a model, e.g. qwen2.5:7b" value={pull} onChange={(e) => setPull(e.target.value)} /><button className="btn sm" disabled={!pull} onClick={async () => { toast(`Pulling ${pull}… this can take a while`); try { await api.post(`/api/ai/providers/${provider.id}/pull`, { model: pull }); toast(`${pull} ready`); fetchModels(); } catch (e) { toastError(e); } }}><Download size={13} /> Pull</button></div>}
@@ -321,6 +318,19 @@ function RuleRow({ r, onSaved }) {
         <input className="input" style={{ height: 28 }} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} />
         {text.trim() !== r.reason && <button className="btn sm" disabled={!text.trim()} onClick={() => save(text.trim())}>Save</button>}
       </div>
+    </div>
+  );
+}
+
+/** A model name: type it, or pick from ALL available models (a datalist would only show the ones matching the text). */
+function ModelInput({ value, models, onChange, placeholder, disabled }) {
+  const [openMenu, menuNode] = useMenu();
+  return (
+    <div className="row" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+      <input className="input" style={{ borderRadius: '8px 0 0 8px', minWidth: 0 }} placeholder={placeholder} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
+      <button type="button" className="btn" style={{ borderRadius: '0 8px 8px 0', padding: '0 8px', height: 36 }} disabled={disabled || !models.length} title={models.length ? 'Choose from the available models' : 'No model list from this provider'}
+        onClick={(e) => openMenu(e, models.map((m) => ({ label: `${m.id}${m.id === value ? ' ✓' : ''}`, hint: m.name && m.name !== m.id ? m.name : '', onClick: () => onChange(m.id) })))}><ChevronDown size={15} /></button>
+      {menuNode}
     </div>
   );
 }
