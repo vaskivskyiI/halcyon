@@ -349,4 +349,17 @@ export const migrations = [
   ALTER TABLE accounts ADD COLUMN learned_about TEXT;
   ALTER TABLE accounts ADD COLUMN learned_about_at INTEGER;
   `,
+  // 26: the user's own categories (ai/custom.js): described in words (the AI assigns mail to them) and/or a saved
+  //     search. message_tags.source: 'ai' | 'user' (added by hand) | 'no' (removed by hand — the AI does not re-add).
+  `
+  CREATE TABLE custom_categories (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, color TEXT,
+    description TEXT, query TEXT, account_id INTEGER, sort_order INTEGER DEFAULT 0, created_at INTEGER, scanned_at INTEGER
+  );
+  CREATE TABLE message_tags (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE, category_id INTEGER NOT NULL REFERENCES custom_categories(id) ON DELETE CASCADE,
+    source TEXT DEFAULT 'ai', created_at INTEGER, PRIMARY KEY (message_id, category_id)
+  );
+  CREATE INDEX idx_message_tags_cat ON message_tags(category_id, source);
+  `,
 ];

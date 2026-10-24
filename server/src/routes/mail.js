@@ -17,6 +17,7 @@ import { notify } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
+import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
 import { openReplySql, openActionSql, openChecker, supersededSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
 
@@ -28,7 +29,8 @@ const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.threa
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special,
   CASE WHEN i.needs_reply = 1 AND i.needs_reply_user IS NULL THEN ${supersededSql('reply')} ELSE 0 END AS ai_superseded_reply,
-  CASE WHEN i.needs_action = 1 THEN ${supersededSql('action')} ELSE 0 END AS ai_superseded_action`;
+  CASE WHEN i.needs_action = 1 THEN ${supersededSql('action')} ELSE 0 END AS ai_superseded_action,
+  (SELECT group_concat(category_id) FROM message_tags WHERE message_id = m.id AND source IN ('ai', 'user')) AS my_tags`;
 
 // Message list orders (t = table prefix: 'm.' or '' inside the threaded CTE).
 const SORTS = {
@@ -46,7 +48,7 @@ function listItem(r, open) {
     ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: open ? open(r).reply : !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
       topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()),
       needsAction: open ? open(r).action : !!r.ai_needs_action && !r.ai_dismissed, actionSummary: r.ai_action_summary || null } : null,
-    hasDraft: !!r.has_user_draft,
+    hasDraft: !!r.has_user_draft, myCategories: r.my_tags ? String(r.my_tags).split(',').map(Number) : [],
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
 }
@@ -66,6 +68,7 @@ function scopeFor(userId, q, sc) {
   else if (view === 'important') where.push(`i.priority >= 70 AND i.dismissed_at IS NULL AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} AND m.date >= ${Date.now() - 30 * 864e5} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
   else if (view === 'topic' && q.topic) { where.push('lower(i.topic) = lower(?)'); params.push(String(q.topic)); }
   else if (view === 'category' && q.category) { where.push("i.category = ? AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))"); params.push(String(q.category)); }
+  else if (view === 'mycat' && q.customId) { const c = categoryById(userId, Number(q.customId)); where.push(c ? viewSql(userId, c) : '0'); }
   else if (view === 'label' && q.labelId) { where.push('EXISTS (SELECT 1 FROM json_each(m.labels_json) j WHERE j.value = ?)'); params.push(Number(q.labelId)); }
   else if (['sent', 'drafts', 'archive', 'trash', 'junk'].includes(view)) {
     const special = { sent: '\\Sent', drafts: '\\Drafts', archive: '\\Archive', trash: '\\Trash', junk: '\\Junk' }[view];
@@ -142,7 +145,7 @@ export default async function mailRoutes(app) {
       .slice(0, 12).map(({ task_due: _t, event_at: _e, ...x }) => x);
     const categories = all(`SELECT i.category AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread ${recent} AND f.special_use = '\\Inbox'
       AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, req.user.id, Date.now() - 30 * 864e5);
-    return { accounts: out, counts, topics, categories };
+    return { accounts: out, counts, topics, categories, custom: listCategories(req.user.id) };
   });
 
   app.post('/api/folders', async (req, reply) => {
@@ -272,6 +275,7 @@ export default async function mailRoutes(app) {
       html, text: m.body_text || (!m.body_html && m.calendar_ics ? inviteText(m.calendar_ics) : m.body_text), blockedRemote, attachments: json(m.attachments_json, []).filter((a) => !a.inline),
       listUnsubscribe: m.list_unsubscribe, insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
       senderContactId: sender?.id || null,
+      myCategories: all("SELECT category_id AS id FROM message_tags WHERE message_id = ? AND source IN ('ai', 'user')", m.id).map((x) => x.id),
     });
   }
 
@@ -558,6 +562,21 @@ export default async function mailRoutes(app) {
   app.delete('/api/drafts/:id', async (req) => { deleteDraft(req.user.id, Number(req.params.id)); return { ok: true }; });
   app.post('/api/drafts/:id/save-to-server', async (req, reply) => {
     try { return await saveDraftToServer(req.user.id, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); }
+  });
+
+  // ---- the user's own categories (ai/custom.js)
+  app.get('/api/custom-categories', async (req) => listCategories(req.user.id));
+  app.post('/api/custom-categories', async (req, reply) => { try { return saveCategory(req.user.id, req.body || {}); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.patch('/api/custom-categories/:id', async (req, reply) => { try { return saveCategory(req.user.id, req.body || {}, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.delete('/api/custom-categories/:id', async (req) => { run('DELETE FROM custom_categories WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+  // Add mail to a category by hand (value true) or take it out (false): the AI does not change that again.
+  app.post('/api/custom-categories/:id/tag', async (req, reply) => {
+    try { return { changed: setTag(req.user.id, Number(req.params.id), ids(req.body?.ids), req.body?.value !== false) }; } catch (e) { return httpError(reply, 400, e.message); }
+  });
+  app.post('/api/custom-categories/:id/rescan', async (req, reply) => {
+    if (!categoryById(req.user.id, Number(req.params.id))) return httpError(reply, 404, 'Not found');
+    enqueue(req.user.id, 'customcat', String(req.params.id), 55, { force: true });
+    return { ok: true };
   });
 
   // ---- labels

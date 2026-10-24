@@ -21,6 +21,7 @@ import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, reso
 import { splitPlainQuote } from '../util/quotes.js';
 import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from './verify.js';
 import { logger } from '../util/log.js';
+import { describedFor, promptBlock, applyAiTags } from './custom.js';
 
 const log = logger('ai');
 
@@ -279,7 +280,8 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const related = relatedMail(userId, m, fromMe).map((r) => `- ${P.localStamp(r.date, tz).slice(0, 10)} ${r.mine ? 'the user →' : `${r.from_name || r.from_addr} →`} ${r.subject}${r.summary ? ` — ${r.summary}` : ''}`).join('\n');
     const message = P.messageForPrompt(m, 6000, tz, own);
     const conversation = conversationContext(userId, m, own, tz);
-    const prompt = P.analyzePrompt({ ctx, message, conversation, senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m),
+    const myCats = describedFor(userId, m.account_id);
+    const prompt = P.analyzePrompt({ ctx, message, conversation, custom: promptBlock(myCats), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m),
       language: summaryLanguage(settings, uiLanguage) });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
@@ -303,6 +305,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
     saveInsight(m, res.data, model, tz, { quiet });
+    if (myCats.length) applyAiTags(userId, m.id, res.data.my_categories, myCats);
     if (candidates.length) {
       // Which open requests this email by the user answers: asked one by one (small models rarely fill "resolves").
       let done = Array.isArray(res.data.resolves) ? res.data.resolves.map(Number) : [];

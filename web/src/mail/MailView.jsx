@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, Send, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
-  ClipboardCheck, SlidersHorizontal,
+  ClipboardCheck, SlidersHorizontal, Pencil,
 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -40,6 +40,7 @@ export const categoryView = (name) => `ct~${encodeURIComponent(name)}`;
 
 function viewQuery(view) {
   if (view.startsWith('tp~')) return { view: 'topic', topic: decodeURIComponent(view.slice(3)) };
+  if (view.startsWith('my~')) return { view: 'mycat', customId: view.slice(3) };
   if (view.startsWith('ct~')) return { view: 'category', category: decodeURIComponent(view.slice(3)) };
   if (view.startsWith('f')) return { view: 'folder', folderId: view.slice(1) };
   if (view.startsWith('l')) return { view: 'label', labelId: view.slice(1) };
@@ -66,6 +67,7 @@ function FolderNav({ view, open, onNavigate }) {
   const [collapsed, setCollapsedState] = useState(() => { try { return JSON.parse(localStorage.getItem('halcyon.sidebar.collapsed') || '{}'); } catch { return {}; } });
   const setCollapsed = (c) => { setCollapsedState(c); try { localStorage.setItem('halcyon.sidebar.collapsed', JSON.stringify(c)); } catch { /* private mode */ } };
   const toggle = (k) => setCollapsed({ ...collapsed, [k]: !collapsed[k] });
+  const [editCat, setEditCat] = useState(null);
   const Chevron = ({ k }) => (collapsed[k] ? <ChevronRight size={13} /> : <ChevronDown size={13} />);
   const [dropTarget, setDropTarget] = useState(null);
   const [openMenu, menuNode] = useMenu();
@@ -113,6 +115,19 @@ function FolderNav({ view, open, onNavigate }) {
               {t.unread > 0 && <span className="count" style={t.next && t.next < Date.now() + 14 * 864e5 ? { marginLeft: 6 } : undefined}>{t.unread}</span>}
             </div>))}
         </>}
+        <div className="nav-section" onClick={() => toggle('custom')} title="Your own categories — described in words (the AI sorts mail into them) or a saved search">
+          <Chevron k="custom" /><span className="grow">My categories</span>
+          <button className="icon-btn" style={{ width: 22, height: 22 }} title="New category" onClick={(e) => { e.stopPropagation(); setEditCat({}); }}><Plus size={13} /></button></div>
+        {!collapsed.custom && (folders.custom || []).map((c) => (
+          <div key={c.id} className={`nav-item ${view === `my~${c.id}` ? 'active' : ''}`} onClick={() => go(`my~${c.id}`)} title={c.description || c.query}
+            onContextMenu={(e) => openMenu(e, [
+              { label: 'Edit…', icon: Pencil, onClick: () => setEditCat(c) },
+              c.description && { label: 'Look through past mail again', icon: RefreshCw, onClick: () => api.post(`/api/custom-categories/${c.id}/rescan`).then(() => toast('Looking through past mail in the background…')).catch(toastError) },
+              { label: 'Delete category', icon: Trash2, danger: true, onClick: () => confirm(`Delete the category “${c.name}”? (The mail stays.)`) && api.del(`/api/custom-categories/${c.id}`).then(loadFolders) },
+            ])}>
+            <Tag size={15} color={c.color || 'var(--accent)'} /><span className="truncate">{c.name}</span>{c.unread > 0 ? <span className="count">{c.unread}</span> : <span className="count faint">{c.count || ''}</span>}
+          </div>))}
+        {!collapsed.custom && !(folders.custom || []).length && <div className="nav-item faint small" onClick={() => setEditCat({})}><Plus size={14} /> e.g. “Gift vouchers”</div>}
         {folders.categories?.length > 0 && <>
           <div className="nav-section" onClick={() => toggle('categories')}><Chevron k="categories" /> AI categories</div>
           {!collapsed.categories && folders.categories.map((c) => (
@@ -161,8 +176,37 @@ function FolderNav({ view, open, onNavigate }) {
       </div>
       {menuNode}
       {newFolder && <NewFolderModal {...newFolder} onClose={() => setNewFolder(null)} />}
+      {editCat && <CategoryEditor cat={editCat} onClose={() => setEditCat(null)} />}
     </aside>
   );
+}
+
+/** A category of the user's own: described in words (the AI sorts mail into it) and/or a saved search. */
+function CategoryEditor({ cat, onClose }) {
+  const accounts = store.use((s) => s.accounts);
+  const [f, setF] = useState({ name: cat.name || '', description: cat.description || '', query: cat.query || '', accountId: cat.accountId || '', color: cat.color || '#7c3aed' });
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      if (cat.id) await api.patch(`/api/custom-categories/${cat.id}`, f); else await api.post('/api/custom-categories', f);
+      toast(f.description && (!cat.id || f.description !== cat.description) ? `Saved — the AI is sorting past mail into “${f.name}” in the background` : 'Saved');
+      loadFolders(); onClose();
+    } catch (e) { toastError(e); } finally { setBusy(false); }
+  };
+  return <Modal title={cat.id ? `Edit “${cat.name}”` : 'New category'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !f.name.trim() || (!f.description.trim() && !f.query.trim())} onClick={save}>Save</button></>}>
+    <label className="field">Name<input className="input" autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Gift vouchers, Newborn shoots" /></label>
+    <label className="field">What belongs here <span className="faint">— in your words; the AI sorts new mail (and, once, past mail) into it</span>
+      <textarea className="input" rows={3} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Buying, redeeming or asking about gift vouchers (darilni boni)" /></label>
+    <label className="field">And/or a search <span className="faint">— optional, e.g. <code>voucher OR bon</code>, <code>from:pixieset.com</code></span>
+      <input className="input" value={f.query} onChange={(e) => setF({ ...f, query: e.target.value })} /></label>
+    <div className="row" style={{ gap: 12 }}>
+      <label className="field" style={{ flex: 1 }}>Only mail of<select className="input" value={f.accountId} onChange={(e) => setF({ ...f, accountId: e.target.value })}>
+        <option value="">All accounts</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.email}</option>)}</select></label>
+      <label className="field">Colour<input className="input" type="color" style={{ width: 60, padding: 2 }} value={f.color} onChange={(e) => setF({ ...f, color: e.target.value })} /></label>
+    </div>
+    <div className="small faint">Right-click an email to add it to the category or take it out — the AI keeps to what you decide.</div>
+  </Modal>;
 }
 
 function NewFolderModal({ accountId, parentPath, onClose }) {
@@ -417,6 +461,10 @@ function MessageList({ view, openId, onMenu }) {
       { label: 'Remove “needs reply”', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, false) },
       settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },
       settings.ai.enabled && { label: 'Mark as not important', icon: MailOpen, hint: 'AI learns', onClick: () => feedbackMany(ids, 'unimportant') },
+      ...((folders.custom || []).length ? ['sep', { section: 'My categories' }, ...folders.custom.map((c) => {
+        const inIt = (m.myCategories || []).includes(c.id);
+        return { label: `${inIt ? '✓ ' : ''}${c.name}`, icon: Tag, hint: inIt ? 'take out' : 'add', onClick: () => api.post(`/api/custom-categories/${c.id}/tag`, { ids, value: !inIt }).then(() => { toast(inIt ? `Taken out of “${c.name}”` : `Added to “${c.name}”`); load(false); loadFolders(); }).catch(toastError) };
+      }), 'sep'] : []),
       { label: 'Archive', icon: Archive, onClick: () => act('archive', {}, ids) },
       { label: 'Delete', icon: Trash2, onClick: () => act('trash', {}, ids) },
       { label: 'Spam', icon: AlertOctagon, onClick: () => act('spam', {}, ids) },
@@ -540,6 +588,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
           {expired && <span className="chip faint" title="Time-sensitive content that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ai?.topic && <span className="chip topic clickable" title={`Show all mail about “${ai.topic}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${topicView(ai.topic)}`); }}><Hash size={10} />{ai.topic}</span>}
+          {(m.myCategories || []).map((id) => { const c = (store.get().folders.custom || []).find((x) => x.id === id); return c && <span key={id} className="chip clickable" style={{ color: c.color || 'var(--accent)' }} title={`Show “${c.name}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/my~${c.id}`); }}><Tag size={10} />{c.name}</span>; })}
           {ai?.needsReply && !m.isAnswered && !expired && <span className="chip ai"><CornerUpLeft size={11} /> Reply needed</span>}
           {ai?.needsAction && !expired && <span className="chip action" title={ai.actionSummary || 'Action needed'}><ClipboardCheck size={11} /> {ai.actionSummary ? (ai.actionSummary.length > 42 ? `${ai.actionSummary.slice(0, 40)}…` : ai.actionSummary) : 'Action needed'}</span>}
           {m.hasInvite && <CalendarPlus size={13} className="faint" title="Invitation" />}

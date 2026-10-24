@@ -469,3 +469,18 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   14 days (`similarRecent`, ≤30). Settings → AI → "Your rules": edit / delete (`/api/ai/rules`). "Suggest" in the
   why-box: `POST /api/messages/:id/suggest-reason` (`suggestReason`: features of the email as a rule for similar mail;
   prefilled, saved only when the user saves).
+
+### Batch: robustness, per-account context, own categories (migrations 25-26)
+- Sending: `deliver` only sends (stable Message-ID per outbox row, kept across retries); `processOutbox` marks sent
+  right after SMTP accepts, then `afterDelivery` (flags, Sent copy, contacts) whose failures are only logged; 5xx →
+  failed at once; refused recipients → 'sent' with error → Problems "Not delivered to everyone"; busy watchdog 20 min.
+- Receiving: `fallbackParse` stores unparseable mail with readable headers; a failed ingest keeps last_uid below it;
+  expunge only when the server's UID list is complete (≥ EXISTS).
+- `accounts.about_me` / `learned_about` (aboutMeJob learns per account too); `userContext(..., account)`; `ctxFor(userId,
+  accountId)` for analysis, replies, compose (client sends accountId), thread summaries, events.
+- Own categories (ai/custom.js): `custom_categories` (description and/or query, optional account), `message_tags`
+  (ai | user | no). Analysis asks for `my_categories` (promptBlock) → `applyAiTags`; `scanCategory` job ('customcat')
+  sorts past mail (keyword + semantic candidates, AI batches of 15, user's own choices as examples). View `my~<id>`.
+- Also: Back button (web/src/back.js), FollowUp block in the AI card, red Outbox count (`counts.outboxFailed`),
+  topics ordered by soonest task/event then recency, collapsible sidebar (localStorage), ModelInput picker,
+  requested_items need a verified quote (`checkRequests`).

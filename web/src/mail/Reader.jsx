@@ -244,6 +244,14 @@ export default function Reader({ id, view }) {
           {target.folder && <span className="chip"><Folder size={11} /> {target.folder.name}</span>}
           {ins?.category && <span className="chip" style={{ color: CATEGORY_COLORS[ins.category] }}>{ins.category}</span>}
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
+          {(target.myCategories || []).map((cid) => { const c = (folders.custom || []).find((x) => x.id === cid); return c && <a key={`c${cid}`} className="chip" style={{ color: c.color || 'var(--accent)' }} href={`#/mail/my~${c.id}`}><Tag size={11} /> {c.name}</a>; })}
+          {(folders.custom || []).length > 0 && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Add to one of your categories, or take it out"
+            onClick={(e) => openMenu(e, [{ section: 'My categories' }, ...folders.custom.map((c) => {
+              const inIt = (target.myCategories || []).includes(c.id);
+              return { label: `${inIt ? '✓ ' : ''}${c.name}`, hint: inIt ? 'take out' : 'add', onClick: async () => {
+                try { await api.post(`/api/custom-categories/${c.id}/tag`, { ids: [target.id], value: !inIt }); toast(inIt ? `Taken out of “${c.name}”` : `Added to “${c.name}”`); load(); loadFolders(); } catch (err) { toastError(err); }
+              } };
+            })])}><Tag size={11} /> ▾</button>}
         </div>
 
         {msgs.some((m) => m.notOnServer) && (

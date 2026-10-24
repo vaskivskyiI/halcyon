@@ -14,6 +14,12 @@ export function mock() {
           language: 'English', user_writing: greeting ? `Opens with "${greeting.slice(0, 40)}"` : '', their_style: 'brief', notes: [] });
         return { text, usage: { input: 1, output: 1 } };
       }
+      // Sorting past mail into a user's category: emails whose line mentions the category's name.
+      if (json && /You sort emails into the user's own category/.test(system)) {
+        const name = ((system.match(/own category "([^"]+)"/) || [])[1] || '').toLowerCase();
+        const ids = last.split(/\n(?=\[\d+\])/).filter((e) => e.toLowerCase().includes(name)).map((e) => Number((e.match(/^\[(\d+)\]/) || [])[1])).filter(Boolean);
+        return { text: JSON.stringify({ ids }), usage: { input: 1, output: 1 } };
+      }
       // Second opinion (ai/verify.js): quotes the sentence with a question / a request word from THE EMAIL.
       if (json && /check another assistant's triage/.test(system)) {
         const sentences = last.slice(last.lastIndexOf('THE EMAIL:')).split(/\n\n/).slice(1).join('\n').split(/(?<=[.?!])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
@@ -58,6 +64,7 @@ export function mock() {
             ? [{ description: 'requested email', keywords: [...new Set((last.split(/\n\n/).pop().match(/\p{L}{7,}/gu) || []).map((w) => w.toLowerCase()))].slice(0, 6),
               quote: (email.split(/(?<=[.?!])\s+|\n+/).find((x) => /forward|posreduj|send me|pošlji/i.test(x)) || '').trim() }] : [],
           subject: `Re: ${subject}`, body: 'Thanks for your message. I will follow up shortly.',
+          my_categories: [...system.matchAll(/· "([^"]+)": /g)].map((x) => x[1]).filter((n) => email.toLowerCase().includes(n.toLowerCase())),
           resolves: [...(system.includes('OPEN REQUESTS') ? system.split('OPEN REQUESTS').pop() : '').matchAll(/\[(\d+)\][^·\n]*· ([^—→\n]+)/g)].filter((r) => email.toLowerCase().includes(r[2].trim().toLowerCase())).map((r) => Number(r[1])),
         });
       } else {
