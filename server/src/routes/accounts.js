@@ -8,6 +8,8 @@ import { syncManager } from '../mail/sync.js';
 import { encrypt, randomToken } from '../util/crypto.js';
 import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient } from '../mail/oauth.js';
 import { syncDav } from '../scheduler.js';
+import { getSettings } from '../settings.js';
+import { sharedOf } from '../shared.js';
 import { invalidate } from '../ai/memory.js';
 import { purgeMemory } from '../mail/pipeline.js';
 import { smtpStatus } from '../mail/send.js';
@@ -15,7 +17,11 @@ import { smtpStatus } from '../mail/send.js';
 const pendingOAuth = new Map(); // state -> { userId, provider, accountId, t }
 
 export default async function accountRoutes(app) {
-  app.get('/api/accounts', { preHandler: requireUser }, async (req) => userAccounts(req.user.id).map(serializeAccount));
+  // With "shared mail in My mail" on, the shared spaces' accounts are listed too (to reply from them), marked.
+  app.get('/api/accounts', { preHandler: requireUser }, async (req) => [
+    ...userAccounts(req.user.id).map(serializeAccount),
+    ...(!req.person && getSettings(req.user.id).ui.showShared ? sharedOf(req.user.id).flatMap((sp) => userAccounts(sp.id).map((a) => ({ ...serializeAccount(a), owner: sp.id, ownerName: sp.name }))) : []),
+  ]);
 
   app.get('/api/accounts/discover', { preHandler: requireUser }, async (req, reply) => {
     try { return { ...(await discover(String(req.query.email || ''))), oauthAvailable: oauthAvailable() }; } catch (e) { return httpError(reply, 400, e.message); }

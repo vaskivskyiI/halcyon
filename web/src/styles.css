@@ -426,3 +426,4 @@ div.provider { cursor: default; background: var(--panel-2); }
 .why-box { display: grid; gap: 6px; margin: 4px 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); }
 .follow-up { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: grid; gap: 4px; }
 .follow-up ul { margin: 4px 0 6px; padding-left: 20px; }
+.chip.shared-chip { background: var(--accent-soft); color: var(--accent); font-weight: 600; }

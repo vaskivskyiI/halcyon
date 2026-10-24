@@ -69,7 +69,8 @@ const PERSON_ONLY = /^\/api\/(auth|admin|shared|mcp-tokens)(\/|$|\?)/;
 
 /** The shared-space user this request acts as: a user row, null (acting as oneself) or false (not a member). */
 export function actingAs(req, person, path = req.url) {
-  const id = Number(req.cookies?.[AS_COOKIE]) || 0;
+  // Per request (header; on GET also ?as= — images and downloads cannot send headers), else the space entered (cookie).
+  const id = Number(req.headers['x-halcyon-as'] || (req.method === 'GET' && req.query?.as) || req.cookies?.[AS_COOKIE]) || 0;
   if (!id || id === person.id || PERSON_ONLY.test(path)) return null;
   const m = get(`SELECT u.* FROM shared_members m JOIN users u ON u.id = m.shared_id WHERE m.shared_id = ? AND m.user_id = ? AND u.kind = 'shared'`, id, person.id);
   return m || false;

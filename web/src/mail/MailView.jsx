@@ -145,7 +145,7 @@ function FolderNav({ view, open, onNavigate }) {
               <div className="nav-section" onClick={() => setCollapsed({ ...collapsed, [acc.accountId]: !collapsed[acc.accountId] })}>
                 {collapsed[acc.accountId] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 <span className="dot" style={{ background: acc.color }} />
-                <span className="truncate grow" style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>{acc.email}</span>
+                <span className="truncate grow" style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>{acc.email}{acc.ownerName ? <span className="faint"> · {acc.ownerName}</span> : ''}</span>
                 {acc.syncState === 'syncing' && <Spinner size={12} />}
                 {acc.syncState === 'error' && <span title={acc.syncError}><AlertTriangle size={13} color="var(--danger)" /></span>}
               </div>
@@ -585,6 +585,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
         {showAi && ai?.summary ? <div className="ai-line"><Sparkles size={12} /><span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{ai.summary}</span></div>
           : <div className="snippet truncate">{m.snippet}</div>}
         <div className="meta">
+          {m.ownerName && <span className="chip shared-chip" title={`Shared space “${m.ownerName}”`}>{m.ownerName}</span>}
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
           {expired && <span className="chip faint" title="Time-sensitive content that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ai?.topic && <span className="chip topic clickable" title={`Show all mail about “${ai.topic}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${topicView(ai.topic)}`); }}><Hash size={10} />{ai.topic}</span>}

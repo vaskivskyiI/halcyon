@@ -2,7 +2,7 @@ import { get, all, run, json } from './db/index.js';
 import { rezone } from './util/time.js';
 
 export const DEFAULT_SETTINGS = {
-  ui: { theme: 'system', density: 'comfortable', readingPane: 'right', conversationView: true, language: 'en', weekStart: 1, timeFormat: '24h' },
+  ui: { theme: 'system', density: 'comfortable', readingPane: 'right', conversationView: true, language: 'en', weekStart: 1, timeFormat: '24h', showShared: false },
   mail: {
     undoSendSeconds: 10, loadRemoteImages: false, markReadAfterMs: 1500, focusedInbox: true,
     defaultAccountId: null, replyAllDefault: false, composeFormat: 'html', autoCollectContacts: true,

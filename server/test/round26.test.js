@@ -164,3 +164,34 @@ test('sharing an account takes its synced calendar / contacts only when chosen; 
   const sp = (await ok('a', 'GET', '/api/shared')).find((x) => x.id === sharedId);
   assert.ok(sp.calendars.every((x) => x.source !== 'local' || typeof x.items === 'number'));
 });
+
+test('"show shared mail in My mail": lists, folders and counts include the space, and actions run as the space', async () => {
+  // The business account is back in the space; Ben shows shared mail together with his own.
+  await ok('a', 'POST', `/api/shared/${sharedId}/move-in`, { accountId: biz.id });
+  await ok('b', 'POST', '/api/shared/leave');
+  await ok('b', 'PATCH', '/api/settings', { ui: { showShared: true } });
+  const items = (await ok('b', 'GET', '/api/messages?view=unified&threads=0')).items;
+  const it = items.find((m) => m.id === bizMsg);
+  assert.ok(it); assert.equal(it.owner, sharedId); assert.equal(it.ownerName, 'Studio');
+  assert.ok(!items.some((m) => m.id === privMsg), 'never Ann\'s private mail');
+  const f = await ok('b', 'GET', '/api/folders');
+  assert.ok(f.accounts.some((a) => a.owner === sharedId && a.email === 'studio@business.example'));
+  assert.ok((await ok('b', 'GET', '/api/accounts')).some((a) => a.owner === sharedId));
+  // Reading and acting on it: per request "as" the space (header) — and only for members.
+  const hdr = async (who, method, url, body, as) => {
+    const cookie = Object.entries(jar[who]).map(([k, v]) => `${k}=${v}`).join('; ');
+    const r = await fetch(base + url, { method, headers: { cookie, 'x-halcyon-as': String(as), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return r.status;
+  };
+  assert.equal(await hdr('b', 'GET', `/api/messages/${bizMsg}`, null, sharedId), 200);
+  assert.equal(await hdr('b', 'POST', '/api/messages/actions', { ids: [bizMsg], action: 'flag' }, sharedId), 200);
+  assert.equal(db.prepare('SELECT is_flagged FROM messages WHERE id = ?').get(bizMsg).is_flagged, 1);
+  assert.equal(await hdr('c', 'GET', `/api/messages/${bizMsg}`, null, sharedId), 403, 'not a member');
+  // Images and downloads carry it as ?as= (GET only); a POST cannot use it.
+  const cookieB = Object.entries(jar.b).map(([k, v]) => `${k}=${v}`).join('; ');
+  assert.equal((await fetch(`${base}/api/messages/${bizMsg}?as=${sharedId}`, { headers: { cookie: cookieB } })).status, 200);
+  assert.equal((await fetch(`${base}/api/messages/${bizMsg}`, { headers: { cookie: cookieB } })).status, 404, 'without it: not his own');
+  // Switched off: only his own again.
+  await ok('b', 'PATCH', '/api/settings', { ui: { showShared: false } });
+  assert.ok(!(await ok('b', 'GET', '/api/messages?view=unified&threads=0')).items.some((m) => m.id === bizMsg));
+});

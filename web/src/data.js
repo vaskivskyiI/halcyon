@@ -1,5 +1,5 @@
 // Shared data loaders kept in the global store.
-import { api, setApiSpace, setApiActing } from './api.js';
+import { api, setApiSpace, setApiActing, setMergedSpaces } from './api.js';
 import { store } from './store.js';
 
 // The chosen space is a per-device choice (a work laptop can stay in "Work").
@@ -13,6 +13,18 @@ export async function loadShared() {
   const shared = await api.get('/api/shared').catch(() => []);
   store.set({ shared });
   return shared;
+}
+
+/** Shared mail shown with one's own (or not): saved, then everything is loaded again. */
+export async function setShowShared(on) {
+  await saveSettings({ ui: { showShared: !!on } });
+  location.reload();
+}
+
+/** Which shared spaces' events and mail count as one's own right now. */
+export function applyMergedSpaces() {
+  const { settings, acting, shared } = store.get();
+  setMergedSpaces(settings?.ui?.showShared && !acting ? (shared || []).map((x) => x.id) : []);
 }
 
 /** Work in a shared space (id) or in one's own mail (null). The whole app reloads: every list, cache and setting

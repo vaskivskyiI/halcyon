@@ -484,3 +484,9 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Also: Back button (web/src/back.js), FollowUp block in the AI card, red Outbox count (`counts.outboxFailed`),
   topics ordered by soonest task/event then recency, collapsible sidebar (localStorage), ModelInput picker,
   requested_items need a verified quote (`checkRequests`).
+- Shared mail in My mail (person setting `ui.showShared`): `/api/messages` (date-sorted smart views and search),
+  `/api/folders` (accounts tagged `owner`/`ownerName`, smart-view counts summed), tab counts and `/api/accounts`
+  include the person's shared spaces. Per-request acting: header `x-halcyon-as` (or `?as=` on GET for images and
+  downloads; `asLinks` adds it to cid URLs), membership checked in `actingAs`. Web api.js learns owners from responses
+  (message, thread, account, folder, draft, outbox ids) and sends the header; selections across owners are split
+  per owner. Events of merged spaces count as own (`setMergedSpaces`).

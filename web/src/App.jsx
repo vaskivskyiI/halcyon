@@ -4,7 +4,7 @@ import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.j
 import './back.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
-import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace, loadShared, enterShared } from './data.js';
+import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setShowShared, applyMergedSpaces } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
 import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
@@ -33,6 +33,7 @@ export default function App() {
         await loadMe();
         await loadSpaces().catch(() => {});
         await loadShared();
+        applyMergedSpaces();
         await Promise.all([loadFolders(), loadAccounts(), loadLabels(), loadProviders()]);
         connectEvents();
       }
@@ -224,12 +225,15 @@ function SpaceSwitcher() {
   const space = store.use((s) => s.space);
   const shared = store.use((s) => s.shared) || [];
   const acting = store.use((s) => s.acting);
+  const showShared = store.use((s) => s.settings?.ui?.showShared);
   const [openMenu, menuNode] = useMenu();
   if (!spaces.length && !shared.length) return null;
-  const unread = shared.filter((s) => s.id !== acting?.id).reduce((n, s) => n + (s.unread || 0), 0);
+  // Unread shared mail not visible right now (when it is shown in My mail, it is counted there).
+  const unread = shared.filter((s) => s.id !== acting?.id && !(showShared && !acting)).reduce((n, s) => n + (s.unread || 0), 0);
   const items = [
     ...(shared.length ? [{ section: 'Mail' }, { label: `My mail${!acting ? ' ✓' : ''}`, onClick: () => acting && enterShared(null) },
-      ...shared.map((s) => ({ label: `${s.name} (shared)${acting?.id === s.id ? ' ✓' : ''}`, hint: s.unread && acting?.id !== s.id ? `${s.unread} unread` : '', onClick: () => acting?.id !== s.id && enterShared(s.id) })), 'sep'] : []),
+      ...shared.map((s) => ({ label: `${s.name} (shared)${acting?.id === s.id ? ' ✓' : ''}`, hint: s.unread && acting?.id !== s.id && !showShared ? `${s.unread} unread` : '', onClick: () => acting?.id !== s.id && enterShared(s.id) })),
+      !acting && { label: `${showShared ? '✓ ' : ''}Show shared mail in My mail`, onClick: () => setShowShared(!showShared) }, 'sep'] : []),
     ...(spaces.length ? [{ section: 'Show' }, { label: `All spaces${!space ? ' ✓' : ''}`, onClick: () => setSpace('') },
       ...spaces.map((s) => ({ label: `${s}${space === s ? ' ✓' : ''}`, onClick: () => setSpace(s) })), 'sep'] : []),
     { label: 'Manage spaces…', icon: Settings, onClick: () => navigate('#/settings/spaces') },

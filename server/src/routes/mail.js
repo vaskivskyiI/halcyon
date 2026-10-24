@@ -15,6 +15,7 @@ import { runRule } from '../rules.js';
 import { contactByEmail } from '../contacts/service.js';
 import { notify } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
+import { sharedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
@@ -92,9 +93,8 @@ export default async function mailRoutes(app) {
   app.addHook('preHandler', requireUser);
 
   // ---- folders
-  app.get('/api/folders', async (req) => {
-    const sc = scope(req.user.id, reqSpace(req));
-    const accounts = userAccounts(req.user.id).filter((a) => !sc || sc.accountIds.includes(a.id));
+  function folderList(uid, sc) {
+    const accounts = userAccounts(uid).filter((a) => !sc || sc.accountIds.includes(a.id));
     const acc = inIds('m.account_id', sc?.accountIds);
     const out = accounts.map((a) => ({
       accountId: a.id, email: a.email, name: a.name || a.email, color: a.color, syncState: a.sync_state, syncError: a.sync_error,
@@ -102,9 +102,9 @@ export default async function mailRoutes(app) {
     }));
     // Each count uses the same filter as its list and counts conversations (as the list shows them):
     // unread ones for mailboxes, all open ones for the AI views and the snoozed list.
-    const threaded = getSettings(req.user.id).ui.conversationView;
+    const threaded = getSettings(uid).ui.conversationView;
     const countView = (view, unreadOnly) => {
-      const { where, params } = scopeFor(req.user.id, { view }, sc);
+      const { where, params } = scopeFor(uid, { view }, sc);
       if (unreadOnly) where.push('m.is_read = 0');
       return get(`SELECT COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params).n;
     };
@@ -113,9 +113,9 @@ export default async function mailRoutes(app) {
       WHERE folder_id IN (${ids.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL`, ...ids).n : 0);
     const counts = {
       unified: unreadIn(out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox').map((f) => f.id))), needsreply: countView('needsreply'), needsaction: countView('needsaction'), snoozed: countView('snoozed'),
-      scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, req.user.id).n,
+      scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, uid).n,
       // Messages that could not be sent (or are retrying after an error): the Outbox count turns red.
-      outboxFailed: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (status = 'failed' OR (status = 'queued' AND error IS NOT NULL))`, req.user.id).n,
+      outboxFailed: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (status = 'failed' OR (status = 'queued' AND error IS NOT NULL))`, uid).n,
     };
     // Per folder through idx_messages_folder_unread (index only).
     const folderIds = out.flatMap((a) => a.folders.map((f) => f.id));
@@ -133,8 +133,8 @@ export default async function mailRoutes(app) {
           WHERE t.user_id = m.user_id AND t.done = 0 AND t.due > ${t0 - 864e5} AND lower(ti.topic) = lower(i.topic)) AS task_due,
         (SELECT MIN(e.start) FROM events e JOIN messages em ON em.id = e.source_message_id JOIN ai_insights ei ON ei.message_id = em.id
           WHERE em.user_id = m.user_id AND e.deleted = 0 AND e.start > ${t0} AND lower(ei.topic) = lower(i.topic)) AS event_at,
-        SUM(CASE WHEN ${openActionSql(req.user.id)} THEN 1 ELSE 0 END) AS actions
-      ${recent} AND i.topic IS NOT NULL GROUP BY lower(i.topic) HAVING count >= 2 ORDER BY last DESC LIMIT 40`, req.user.id, Date.now() - 60 * 864e5)
+        SUM(CASE WHEN ${openActionSql(uid)} THEN 1 ELSE 0 END) AS actions
+      ${recent} AND i.topic IS NOT NULL GROUP BY lower(i.topic) HAVING count >= 2 ORDER BY last DESC LIMIT 40`, uid, Date.now() - 60 * 864e5)
       .map((x) => ({ ...x, next: Math.min(x.task_due || Infinity, x.event_at || Infinity) }))
       .map((x) => ({ ...x, next: Number.isFinite(x.next) ? x.next : null }))
       .sort((a, b) => {
@@ -144,8 +144,20 @@ export default async function mailRoutes(app) {
       })
       .slice(0, 12).map(({ task_due: _t, event_at: _e, ...x }) => x);
     const categories = all(`SELECT i.category AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread ${recent} AND f.special_use = '\\Inbox'
-      AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, req.user.id, Date.now() - 30 * 864e5);
-    return { accounts: out, counts, topics, categories, custom: listCategories(req.user.id) };
+      AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, uid, Date.now() - 30 * 864e5);
+    return { accounts: out, counts, topics, categories, custom: listCategories(uid) };
+  }
+  // Shared spaces shown with the person's own mail (their setting ui.showShared): their accounts and folders are added,
+  // marked with the space; the counts of the smart views include them.
+  const mergedSpaces = (req) => (!req.person && getSettings(req.user.id).ui.showShared ? sharedOf(req.user.id) : []);
+  app.get('/api/folders', async (req) => {
+    const own = folderList(req.user.id, scope(req.user.id, reqSpace(req)));
+    for (const sp of mergedSpaces(req)) {
+      const other = folderList(sp.id, null);
+      own.accounts.push(...other.accounts.map((a) => ({ ...a, owner: sp.id, ownerName: sp.name })));
+      for (const k of ['unified', 'needsreply', 'needsaction', 'snoozed', 'scheduled', 'outboxFailed']) own.counts[k] = (own.counts[k] || 0) + (other.counts[k] || 0);
+    }
+    return own;
   });
 
   app.post('/api/folders', async (req, reply) => {
@@ -198,31 +210,33 @@ export default async function mailRoutes(app) {
 
   // ---- message lists
   // Unread conversations per tab of a list (Focused / Other / All), with the list's own filters.
-  app.get('/api/messages/tab-counts', async (req) => {
-    const sc = scope(req.user.id, reqSpace(req));
-    const threaded = getSettings(req.user.id).ui.conversationView;
+  function tabCounts(uid, query, sc) {
+    const threaded = getSettings(uid).ui.conversationView;
     // One pass over the unread mail of the view for all three tabs ("Other" = analysed and not focused).
-    const { where, params } = scopeFor(req.user.id, { ...req.query, filter: undefined }, sc);
+    const { where, params } = scopeFor(uid, { ...query, filter: undefined }, sc);
     where.push('m.is_read = 0');
     const unit = threaded ? 'm.thread_id' : 'm.id';
     const r = get(`SELECT COUNT(DISTINCT ${unit}) AS a, COUNT(DISTINCT CASE WHEN ${FOCUSED} THEN ${unit} END) AS f, COUNT(DISTINCT CASE WHEN NOT ${FOCUSED} THEN ${unit} END) AS o
       FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params);
     return { focused: r.f, other: r.o, all: r.a };
+  }
+  app.get('/api/messages/tab-counts', async (req) => {
+    const r = tabCounts(req.user.id, req.query, scope(req.user.id, reqSpace(req)));
+    if (MERGE_VIEWS.has(req.query.view || 'unified')) for (const sp of mergedSpaces(req)) { const o = tabCounts(sp.id, req.query, null); r.focused += o.focused; r.other += o.other; r.all += o.all; }
+    return r;
   });
 
-  app.get('/api/messages', async (req) => {
-    const q = req.query;
-    const sc = scope(req.user.id, reqSpace(req));
+  async function listMessages(uid, q, sc) {
     const limit = Math.min(Number(q.limit) || 50, 200);
     if (q.q) {
-      const found = await hybridSearch(req.user.id, q.q, { limit: 100, semantic: q.semantic !== '0', sc });
+      const found = await hybridSearch(uid, q.q, { limit: 100, semantic: q.semantic !== '0', sc });
       if (!found.length) return { items: [], hasMore: false };
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
       const byId = new Map(rows.map((r) => [r.id, r]));
-      return { items: found.map((id) => byId.get(id)).filter(Boolean).map((r) => listItem(r, openChecker(req.user.id))), hasMore: false };
+      return { items: found.map((id) => byId.get(id)).filter(Boolean).map((r) => listItem(r, openChecker(uid))), hasMore: false };
     }
-    const { where, params } = scopeFor(req.user.id, q, sc);
-    const threaded = q.threads !== '0' && getSettings(req.user.id).ui.conversationView;
+    const { where, params } = scopeFor(uid, q, sc);
+    const threaded = q.threads !== '0' && getSettings(uid).ui.conversationView;
     // Newest first pages by date (stable while mail arrives); other orders page by offset.
     const key = SORTS[q.sort] ? q.sort : 'date';
     const dir = q.dir === 'asc' ? 'ASC' : q.dir === 'desc' ? 'DESC' : (['date', 'size', 'flagged'].includes(key) ? 'DESC' : 'ASC');
@@ -261,8 +275,33 @@ export default async function mailRoutes(app) {
       rows = all(`SELECT ${LIST_COLS}, m.size AS size FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.date < ?
         ORDER BY ${order('m.')} LIMIT ? OFFSET ?`, ...params, cursor, limit + 1, offset);
     }
-    return { items: rows.slice(0, limit).map((r) => listItem(r, openChecker(req.user.id))), hasMore: rows.length > limit };
+    return { items: rows.slice(0, limit).map((r) => listItem(r, openChecker(uid))), hasMore: rows.length > limit };
+  }
+  // Views that can include the shared spaces' mail (not folders — a folder belongs to one of them).
+  const MERGE_VIEWS = new Set(['unified', 'needsreply', 'needsaction', 'important', 'flagged', 'snoozed', 'category', 'topic']);
+  app.get('/api/messages', async (req) => {
+    const q = req.query;
+    const own = await listMessages(req.user.id, q, scope(req.user.id, reqSpace(req)));
+    const spaces = mergedSpaces(req);
+    const byDate = (!q.sort || q.sort === 'date') && q.dir !== 'asc';
+    if (!spaces.length || (!q.q && (!byDate || !MERGE_VIEWS.has(q.view || 'unified')))) return own;
+    const limit = Math.min(Number(q.limit) || 50, 200);
+    const lists = [own, ...await Promise.all(spaces.map(async (sp) => {
+      const r = await listMessages(sp.id, q, null);
+      for (const it of r.items) Object.assign(it, { owner: sp.id, ownerName: sp.name });
+      return r;
+    }))];
+    // Search keeps each list's ranking (own results first); lists are merged newest first.
+    const items = q.q ? lists.flatMap((l) => l.items) : lists.flatMap((l) => l.items).sort((a, b) => b.date - a.date);
+    return { items: items.slice(0, limit), hasMore: lists.some((l) => l.hasMore) || items.length > limit };
   });
+
+  // Mail of a shared space read from one's own mail (request acting per header): its inline images load without that
+  // header, so their links carry the space (?as=, checked like the header).
+  function asLinks(req, msg) {
+    if (req.person && msg.html) msg.html = msg.html.replace(/(\/api\/messages\/\d+\/cid\/[^"'\s?]+)/g, `$1?as=${req.user.id}`);
+    return msg;
+  }
 
   function fullMessage(userId, m, allowRemote) {
     const settings = getSettings(userId);
@@ -300,7 +339,7 @@ export default async function mailRoutes(app) {
     if (!m) return httpError(reply, 404, 'Not found');
     await senderOf(m);
     await icsOf(m);
-    return { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) };
+    return asLinks(req, { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) });
   });
 
   // "Needs reply" set or cleared by the user, for one or many messages; it survives re-analysis.
@@ -345,7 +384,7 @@ export default async function mailRoutes(app) {
     const msgs = [...kept.values()];
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
     for (const m of msgs) { await senderOf(m); await icsOf(m); }
-    return { messages: msgs.map((m) => fullMessage(req.user.id, m, req.query.images === '1')), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
+    return { messages: msgs.map((m) => asLinks(req, fullMessage(req.user.id, m, req.query.images === '1'))), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
   });
 
   app.get('/api/messages/:id/raw', async (req, reply) => {
