@@ -99,6 +99,7 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
     email: account.email, displayName: account.displayName || '', name: account.name || '', signatureHtml: account.signatureHtml || '',
     imap: { ...account.imap, password: '' }, smtp: { ...account.smtp, password: '' }, caldavUrl: account.caldavUrl || '', carddavUrl: account.carddavUrl || '',
     davUser: account.davUser || '', davPassword: '', syncEnabled: account.syncEnabled, aliases: account.aliases || [], inviteCalendarId: account.inviteCalendarId || null,
+    aboutMe: account.aboutMe || '',
   } : { email: '', displayName: '', password: '', imap: { host: '', port: 993, secure: true, user: '' }, smtp: { host: '', port: 465, secure: true, user: '' }, caldavUrl: '', carddavUrl: '', signatureHtml: '' });
   const [disc, setDisc] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -265,6 +266,10 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
           <div className="input editor" contentEditable suppressContentEditableWarning style={{ minHeight: 90, height: 'auto' }} dangerouslySetInnerHTML={{ __html: f.signatureHtml }} onBlur={(e) => set('signatureHtml', e.currentTarget.innerHTML)} />
           <label className="field">Aliases / send-as addresses (comma separated)<input className="input" value={(f.aliases || []).map((a) => a.address || a).join(', ')} onChange={(e) => set('aliases', e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((address) => ({ address })))} /></label>
           <InviteCalendar value={f.inviteCalendarId} accountId={account.id} onChange={(v) => set('inviteCalendarId', v)} />
+          <label className="field full">About you in this account <span className="faint">— who you are here (e.g. “owner of NM Studio, a photography studio…” or “private”). The AI uses it for this account's mail instead of everything about you; your general “About me” in Settings → AI is always included.</span>
+            <textarea className="input" rows={4} maxLength={2000} value={f.aboutMe} onChange={(e) => set('aboutMe', e.target.value)} placeholder="e.g. Private mail: family, friends, home. Not work-related." /></label>
+          {account.learnedAbout && <div className="small"><b>Learned from this account's sent mail</b> <span className="faint">({account.learnedAboutAt ? new Date(account.learnedAboutAt).toLocaleDateString() : ''}; your text above wins)</span>
+            <div className="muted" style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{account.learnedAbout}</div></div>}
           <Switch label="Sync this account" checked={f.syncEnabled} onChange={(v) => set('syncEnabled', v)} />
         </>}
       </>}

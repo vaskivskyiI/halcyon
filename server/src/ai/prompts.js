@@ -48,10 +48,24 @@ ${body}`;
 
 export const LANG_NAMES = { en: 'English', sl: 'Slovenian', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', hr: 'Croatian', sr: 'Serbian', uk: 'Ukrainian', pl: 'Polish', pt: 'Portuguese', nl: 'Dutch', cs: 'Czech', ru: 'Russian', ja: 'Japanese', zh: 'Chinese' };
 
-export function userContext(user, settings, accounts) {
-  const lines = [`The user is ${user.name || 'the mailbox owner'} (${accounts.map((a) => a.email).join(', ')}).`];
+/**
+ * Who the user is, for the prompts. With `account` (mail of one account — reading, replying, writing from it): the
+ * user's general description plus that account's own context only, so e.g. private mail is not handled with the
+ * work role in mind. Without (assistant, brief): everything, each account's context labelled.
+ */
+export function userContext(user, settings, accounts, account = null) {
+  const flat = (s) => String(s || '').replace(/\s*\n\s*/g, ' ').trim();
+  const lines = [account
+    ? `The user is ${user.name || 'the mailbox owner'}; this is about their account ${account.email}${json(account.aliases_json, []).length ? ` (also ${json(account.aliases_json, []).map((x) => x?.address || x).join(', ')})` : ''}.`
+    : `The user is ${user.name || 'the mailbox owner'} (${accounts.map((a) => a.email).join(', ')}).`];
   if (settings.ai.aboutMe) lines.push(`About the user (their own words, authoritative): ${settings.ai.aboutMe}`);
-  if (settings.ai.learnedAboutMe) lines.push(`What the user's mail shows about them (learned; the user's own words win): ${settings.ai.learnedAboutMe.replace(/\s*\n\s*/g, ' ')}`);
+  if (account) {
+    if (account.about_me) lines.push(`About the user in this account (their own words, authoritative): ${flat(account.about_me)}`);
+    if (account.learned_about) lines.push(`What this account's mail shows about the user (learned; the user's own words win): ${flat(account.learned_about)}`);
+  } else {
+    if (settings.ai.learnedAboutMe) lines.push(`What the user's mail shows about them (learned; the user's own words win): ${flat(settings.ai.learnedAboutMe)}`);
+    for (const a of accounts.filter((x) => x.about_me || x.learned_about)) lines.push(`In their account ${a.email}: ${flat(a.about_me || a.learned_about).slice(0, 400)}`);
+  }
   // The model has no clock: state "now" explicitly, in the user's time zone (the server may run in UTC).
   lines.push(`Now: ${localStamp(Date.now(), settings.calendar.timezone)} (${settings.calendar.timezone}). Anything dated before now is in the past.`);
   return lines.join('\n');

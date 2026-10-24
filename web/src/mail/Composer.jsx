@@ -246,7 +246,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     const ctl = new AbortController(); abort.current = ctl;
     try {
       let out = '';
-      const r = await stream('/api/ai/compose', { instruction, to: to.map(addrFull).join(', ') }, {
+      const r = await stream('/api/ai/compose', { instruction, to: to.map(addrFull).join(', '), accountId: account?.id }, {
         signal: ctl.signal,
         onToken: (t) => { out += t; const m = out.match(/^\s*Subject:\s*(.+)\n+([\s\S]*)$/i); setBodyText(m ? m[2] : out.replace(/^\s*Subject:.*$/im, '')); },
       });

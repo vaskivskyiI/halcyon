@@ -27,11 +27,13 @@ const log = logger('ai');
 const LANG_NAMES = P.LANG_NAMES;
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
 
-function ctxFor(userId) {
+/** Prompt context; with an account id, the context of that account (see userContext). */
+function ctxFor(userId, accountId = null) {
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const settings = getSettings(userId);
   const accounts = userAccounts(userId);
-  return { user, settings, accounts, ctx: P.userContext(user, settings, accounts), uiLanguage: LANG_NAMES[settings.ui.language] || 'English' };
+  const account = accountId ? accounts.find((a) => a.id === Number(accountId)) || null : null;
+  return { user, settings, accounts, account, ctx: P.userContext(user, settings, accounts, account), uiLanguage: LANG_NAMES[settings.ui.language] || 'English' };
 }
 
 /**
@@ -256,7 +258,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
-    const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
+    const { ctx, settings, accounts, uiLanguage } = ctxFor(userId, m.account_id);
     const own = ownAddresses(userId);
     const fromMe = own.has(String(m.from_addr || '').toLowerCase());
     const addressing = fromMe ? null : addressingOf(m, accounts);
@@ -342,7 +344,7 @@ export async function summarizeThreadJob(userId, threadId) {
   if (unique.length < 2) throw skip('single message');
   const cached = get('SELECT * FROM thread_summaries WHERE user_id = ? AND thread_id = ?', userId, threadId);
   if (cached && cached.message_count === unique.length) return cached;
-  const { ctx, uiLanguage, settings } = ctxFor(userId);
+  const { ctx, uiLanguage, settings } = ctxFor(userId, unique[unique.length - 1]?.account_id);
   const own = ownAddresses(userId);
   const parts = unique.filter((m) => !m.is_draft).slice(-12).map((m) => P.messageForPrompt(m, 2500, settings.calendar.timezone, own));
   const res = await chat(userId, 'background', { ...P.threadSummaryPrompt({ ctx, messages: parts, language: summaryLanguage(settings, uiLanguage, 'thread') }), temperature: 0.2, maxTokens: 600 });
@@ -499,7 +501,7 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
     const pre = get('SELECT draft_reply FROM ai_insights WHERE message_id = ?', messageId)?.draft_reply;
     if (pre && task === 'compose') return pre;
   }
-  const { ctx, settings, user, accounts } = ctxFor(userId);
+  const { ctx, settings, user, accounts } = ctxFor(userId, m.account_id);
   const acc = accounts.find((a) => a.id === m.account_id);
   const to = m.reply_to_json && json(m.reply_to_json, [])[0]?.address || m.from_addr;
   const prompt = P.draftReplyPrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, [to]),
@@ -516,7 +518,7 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
 export async function suggestReason(userId, messageId, kind, value) {
   const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', messageId, userId);
   if (!m) throw new Error('Message not found');
-  const { ctx, settings, accounts, uiLanguage } = ctxFor(userId);
+  const { ctx, settings, accounts, uiLanguage } = ctxFor(userId, m.account_id);
   const ins = get('SELECT summary, priority, category FROM ai_insights WHERE message_id = ?', m.id);
   const verdict = { important: 'IMPORTANT', unimportant: 'NOT important', spam: 'SPAM', category: `of the category "${value}"` }[kind] || kind;
   const replyTo = json(m.reply_to_json, []).map((a) => a.address).filter((a) => a && a.toLowerCase() !== String(m.from_addr).toLowerCase());
@@ -534,8 +536,8 @@ The user corrected the AI: they marked the email below as ${verdict}. Suggest th
   return res.text.trim().replace(/^["“]|["”]$/g, '').slice(0, 500);
 }
 
-export async function composeNew(userId, { instruction, to }, onToken) {
-  const { ctx, settings, user, uiLanguage } = ctxFor(userId);
+export async function composeNew(userId, { instruction, to, accountId = null }, onToken) {
+  const { ctx, settings, user, uiLanguage } = ctxFor(userId, accountId);
   const lang = settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : `${uiLanguage} (unless the instruction implies another language)`;
   const addrs = String(to || '').match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || [];
   const res = await chat(userId, 'compose', { ...P.composePrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, addrs),
@@ -621,7 +623,7 @@ export async function extractEvent(userId, messageId) {
       }
     } catch { /* malformed invitation: fall back to reading the text */ }
   }
-  const { ctx } = ctxFor(userId);
+  const { ctx } = ctxFor(userId, m.account_id);
   const tz = getSettings(userId).calendar.timezone;
   const { data } = await chatJSON(userId, 'compose', { ...P.extractEventPrompt({ ctx, message: P.messageForPrompt(m, 4000, tz), timezone: tz }), temperature: 0.1, maxTokens: 500 });
   const ev = normalizeEvent(data, tz, { text: `${m.subject || ''}\n${m.body_text || ''}` });

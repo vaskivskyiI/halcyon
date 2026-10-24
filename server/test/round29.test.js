@@ -74,3 +74,18 @@ test('topics with a task or event coming up soon are listed first, then the most
   const topics = (await api('GET', '/api/folders')).topics.map((t) => t.name);
   assert.deepEqual(topics.slice(0, 3), ['Wedding shoot', 'Recent topic', 'Old project']);
 });
+
+test('mail of one account is handled with that account\'s context, not everything about the user', async () => {
+  const P = await import('../src/ai/prompts.js');
+  const user = { name: 'Igor' };
+  const settings = { ai: { aboutMe: 'Writes in Slovenian and English.', learnedAboutMe: 'Researcher at a physics institute.' }, calendar: { timezone: 'UTC' } };
+  const work = { id: 1, email: 'igor@institute.example', about_me: 'Physicist; students and grant agencies matter.', learned_about: '' };
+  const studio = { id: 2, email: 'info@studio.example', about_me: 'Owner of a photography studio.', learned_about: 'Answers booking requests.' };
+  const forStudio = P.userContext(user, settings, [work, studio], studio);
+  assert.match(forStudio, /photography studio/); assert.match(forStudio, /Writes in Slovenian/);
+  assert.doesNotMatch(forStudio, /Physicist|physics institute|institute\.example/);
+  const all = P.userContext(user, settings, [work, studio]);
+  assert.match(all, /Physicist/); assert.match(all, /photography studio/); assert.match(all, /physics institute/);
+  await api('PATCH', `/api/accounts/${account.id}`, { aboutMe: 'Private mail.' });
+  assert.equal((await api('GET', '/api/accounts'))[0].aboutMe, 'Private mail.');
+});

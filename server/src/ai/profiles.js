@@ -157,5 +157,19 @@ export async function aboutMeJob(userId) {
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const res = await chat(userId, 'background', { ...P.aboutMePrompt({ name: user.name, samples: rows, facts, language: P.LANG_NAMES[settings.ui.language] || 'English' }), temperature: 0.2, maxTokens: 600 });
   saveSettings(userId, { ai: { learnedAboutMe: res.text.trim().slice(0, 2000), learnedAboutMeAt: now() } });
+  // And per account, from that account's sent mail only (used for its mail instead of the whole picture).
+  for (const a of all('SELECT id, email FROM accounts WHERE user_id = ?', userId)) {
+    const sentA = all("SELECT id FROM folders WHERE account_id = ? AND special_use = '\\Sent'", a.id).map((r) => r.id);
+    if (!sentA.length) continue;
+    const samples = all(`SELECT subject, body_text, to_json FROM messages WHERE folder_id IN (${sentA.join(',')}) ORDER BY date DESC LIMIT 60`)
+      .map((r) => ({ to: json(r.to_json, []).map((x) => x.name || x.address).slice(0, 3).join(', '), subject: r.subject, text: P.stripQuoted(r.body_text || '').slice(0, 400) }))
+      .filter((r) => r.text.length > 30).slice(0, 30);
+    if (samples.length < 5) continue;
+    const ownFacts = all('SELECT text FROM facts WHERE user_id = ? AND owner = ? ORDER BY created_at DESC LIMIT 25', userId, `a:${a.id}`).map((f) => f.text);
+    try {
+      const r = await chat(userId, 'background', { ...P.aboutMePrompt({ name: user.name, samples, facts: ownFacts, language: P.LANG_NAMES[settings.ui.language] || 'English' }), temperature: 0.2, maxTokens: 500 });
+      run('UPDATE accounts SET learned_about = ?, learned_about_at = ? WHERE id = ?', r.text.trim().slice(0, 1500), now(), a.id);
+    } catch (e) { if (/provider/i.test(e.message)) throw e; }
+  }
 }
 registerHandler('aboutme', aboutMeJob);

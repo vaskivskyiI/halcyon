@@ -90,7 +90,7 @@ export default function AISettings() {
       {ai.dailyBrief && <label className="field" style={{ maxWidth: 200 }}>Brief ready by<input className="input" type="time" value={ai.briefTime} onChange={(e) => setAi({ briefTime: e.target.value })} /></label>}
 
       <h3>Personalisation</h3>
-      <label className="field">About you (role, company, what matters — helps prioritisation)<textarea className="input" defaultValue={ai.aboutMe} onBlur={(e) => setAi({ aboutMe: e.target.value })} placeholder="e.g. I'm a researcher at the Jožef Stefan Institute; emails from students and grant agencies are important." /></label>
+      <label className="field">About you in general (always used — keep work- or account-specific details in Settings → Accounts → <i>About you in this account</i>)<textarea className="input" defaultValue={ai.aboutMe} onBlur={(e) => setAi({ aboutMe: e.target.value })} placeholder="e.g. Igor; I write in Slovenian and English; short and friendly." /></label>
       <Switch label="Learn about me from my mail" hint="Your role, organisation, projects and the people you work with, from your sent mail and remembered facts (monthly). Used in every AI request; your own words above win." checked={ai.learnAboutMe !== false} onChange={(v) => setAi({ learnAboutMe: v })} />
       {ai.learnAboutMe !== false && <div className="card" style={{ padding: 10 }}>
         <div className="row"><b className="grow small">What the AI learned about you</b><span className="small faint">{ai.learnedAboutMeAt ? `updated ${new Date(ai.learnedAboutMeAt).toLocaleDateString()}` : 'not learned yet'}</span>

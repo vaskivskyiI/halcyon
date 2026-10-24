@@ -342,4 +342,11 @@ export const migrations = [
   `
   ALTER TABLE ai_feedback ADD COLUMN reason TEXT;
   `,
+  // 25: context per mail account (who the user is in it — work, private, business): the user's own words and what was
+  //     learned from that account's sent mail. Mail of one account is handled with only its own context.
+  `
+  ALTER TABLE accounts ADD COLUMN about_me TEXT;
+  ALTER TABLE accounts ADD COLUMN learned_about TEXT;
+  ALTER TABLE accounts ADD COLUMN learned_about_at INTEGER;
+  `,
 ];
