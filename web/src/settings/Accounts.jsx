@@ -266,6 +266,7 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
           <div className="input editor" contentEditable suppressContentEditableWarning style={{ minHeight: 90, height: 'auto' }} dangerouslySetInnerHTML={{ __html: f.signatureHtml }} onBlur={(e) => set('signatureHtml', e.currentTarget.innerHTML)} />
           <label className="field">Aliases / send-as addresses (comma separated)<input className="input" value={(f.aliases || []).map((a) => a.address || a).join(', ')} onChange={(e) => set('aliases', e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((address) => ({ address })))} /></label>
           <InviteCalendar value={f.inviteCalendarId} accountId={account.id} onChange={(v) => set('inviteCalendarId', v)} />
+          <AutoReply accountId={account.id} />
           <label className="field full">What the AI knows about you for this account's mail<select className="input" value={f.contextMode} onChange={(e) => set('contextMode', e.target.value)}>
             <option value="">As in Settings → AI ({store.get().settings?.ai?.contextMode === 'global' ? 'everything' : 'this account only'})</option>
             <option value="account">Only this account's context (and your general “About you”)</option>
@@ -354,5 +355,30 @@ function InviteCalendar({ value, accountId, onChange }) {
         <option value="">Automatic{own.length ? ` (${own[0].name}, this account's calendar)` : " (this account's calendar, else the default)"}</option>
         {cals.map((c) => <option key={c.id} value={c.id}>{c.name}{c.space ? ` · ${c.space}` : ''}</option>)}
       </select></label>
+  );
+}
+
+/** Automatic replies (out of office): one reply per sender every few days, never to lists or automated mail. */
+function AutoReply({ accountId }) {
+  const [c, setC] = useState(null);
+  useEffect(() => { api.get(`/api/accounts/${accountId}/auto-reply`).then(setC).catch(() => {}); }, [accountId]);
+  if (!c) return null;
+  const day = (t) => (t ? new Date(t - new Date(t).getTimezoneOffset() * 60e3).toISOString().slice(0, 10) : '');
+  const save = async (patch) => {
+    const next = { ...c, ...patch };
+    try { setC(await api.put(`/api/accounts/${accountId}/auto-reply`, next)); if ('enabled' in patch) toast(next.enabled ? 'Automatic replies are on' : 'Automatic replies are off'); loadAccounts(); } catch (e) { toastError(e); setC(next); }
+  };
+  return (
+    <div className="card" style={{ padding: 12, display: 'grid', gap: 8 }}>
+      <Switch label="Automatic replies (out of office)" hint={c.active ? 'On now — people who write get your reply once every few days.' : 'One reply per sender every few days; never to mailing lists, automated mail or other automatic replies.'} checked={c.enabled} onChange={(v) => save({ enabled: v })} />
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <label className="field">From (optional)<input className="input" type="date" value={day(c.start)} onChange={(e) => save({ start: e.target.value ? new Date(`${e.target.value}T00:00`).getTime() : null })} /></label>
+        <label className="field">Until (optional)<input className="input" type="date" value={day(c.end ? c.end - 1 : null)} onChange={(e) => save({ end: e.target.value ? new Date(`${e.target.value}T00:00`).getTime() + 864e5 : null })} /></label>
+        <label className="field">Again after<select className="input" value={c.days} onChange={(e) => save({ days: Number(e.target.value) })}>{[1, 2, 4, 7, 14].map((d) => <option key={d} value={d}>{d} day{d > 1 ? 's' : ''}</option>)}</select></label>
+      </div>
+      <label className="field">Subject (optional)<input className="input" value={c.subject} placeholder="Automatic reply: <their subject>" onChange={(e) => setC({ ...c, subject: e.target.value })} onBlur={() => save({})} /></label>
+      <label className="field">Message<textarea className="input" rows={4} value={c.message} placeholder="Thank you for your email. I am away until Monday 3 November and will reply after that." onChange={(e) => setC({ ...c, message: e.target.value })} onBlur={() => save({})} /></label>
+      <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={c.onlyContacts} onChange={(e) => save({ onlyContacts: e.target.checked })} /> Only to people in my contacts</label>
+    </div>
   );
 }

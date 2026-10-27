@@ -13,6 +13,7 @@ import { logger } from '../util/log.js';
 import { crlf } from '../util/crlf.js';
 import { parseRaw } from './store.js';
 import { readUpload, saveUpload } from './uploads.js';
+import { textToHtml } from '../util/text.js';
 
 const log = logger('send');
 const fmtAddr = (a) => (a.name ? `"${a.name.replace(/"/g, '')}" <${a.address}>` : a.address);
@@ -54,6 +55,8 @@ export async function buildMime(account, p) {
     }
   }
   if (p.requestReadReceipt) headers['Disposition-Notification-To'] = fromAddr;
+  // Automatic replies say so, so other systems do not answer them in turn (RFC 3834).
+  if (p.autoReply) { headers['Auto-Submitted'] = 'auto-replied'; headers['X-Auto-Response-Suppress'] = 'All'; }
   const mail = new MailComposer({
     from: fmtAddr({ name: fromName, address: fromAddr }),
     to: normAddrs(p.to).map(fmtAddr), cc: normAddrs(p.cc).map(fmtAddr), bcc: normAddrs(p.bcc).map(fmtAddr),
@@ -125,7 +128,7 @@ export async function draftFromMessage(userId, msgId) {
   if (had) return { ...json(had.payload_json, {}), draftId: had.id, accountId: had.account_id, onServer: true };
   const raw = readRaw(m);
   const parsed = raw ? await parseRaw(raw) : null;
-  let html = parsed?.html || (parsed?.text || m.body_text ? `<div>${String(parsed?.text || m.body_text).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]).replace(/\n/g, '<br>')}</div>` : m.body_html || '');
+  let html = parsed?.html || (parsed?.text || m.body_text ? textToHtml(parsed?.text || m.body_text) : m.body_html || '');
   const attachments = [];
   for (const a of parsed?.attachments || []) {
     const cid = a.cid && html.includes(`cid:${a.cid}`);

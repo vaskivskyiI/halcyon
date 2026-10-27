@@ -13,17 +13,17 @@ import { getSettings } from '../settings.js';
 import { userAccounts } from '../accounts.js';
 import { runRule } from '../rules.js';
 import { contactByEmail } from '../contacts/service.js';
-import { notify } from '../util/events.js';
+import { notify, bus } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
 import { sharedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
 import { saveUpload, readUpload } from '../mail/uploads.js';
+import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
 import { openReplySql, openActionSql, openChecker, supersededSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
 
-const NOISE = "('newsletter','promotion','social','notification')";
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
@@ -55,7 +55,7 @@ function listItem(r, open) {
   });
 }
 
-const FOCUSED = `(i.message_id IS NULL OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${NOISE}) OR i.priority >= 70)`;
+const FOCUSED = `(i.message_id IS NULL OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE}) OR i.priority >= 70)`;
 
 function scopeFor(userId, q, sc) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
@@ -83,7 +83,7 @@ function scopeFor(userId, q, sc) {
     case 'flagged': where.push('m.is_flagged = 1'); break;
     case 'attachments': where.push('m.has_attachments = 1'); break;
     case 'focused': where.push(FOCUSED); break;
-    case 'other': where.push(`i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${NOISE})`); break;
+    case 'other': where.push(`i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${OPEN_NOISE})`); break;
     default: break;
   }
   if (q.category && view !== 'category') { where.push('i.category = ?'); params.push(q.category); }
@@ -94,6 +94,10 @@ export default async function mailRoutes(app) {
   app.addHook('preHandler', requireUser);
 
   // ---- folders
+  const aiViewsCache = new Map();
+  const dropViews = (e) => { if (['mail:changed', 'mail:new', 'folder:synced', 'folders:changed', 'mail:unsnoozed'].includes(e.type)) for (const k of aiViewsCache.keys()) if (k.startsWith(`${e.userId}|`)) aiViewsCache.delete(k); };
+  bus.on('user-event', dropViews);
+  app.addHook('onClose', async () => bus.off('user-event', dropViews));
   function folderList(uid, sc) {
     const accounts = userAccounts(uid).filter((a) => !sc || sc.accountIds.includes(a.id));
     const acc = inIds('m.account_id', sc?.accountIds);
@@ -123,6 +127,14 @@ export default async function mailRoutes(app) {
     const unreadByFolder = new Map(folderIds.length ? all(`SELECT folder_id AS id, COUNT(${threaded ? 'DISTINCT thread_id' : '*'}) AS n FROM messages
       WHERE folder_id IN (${folderIds.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL GROUP BY folder_id`, ...folderIds).map((r) => [r.id, r.n]) : []);
     for (const a of out) for (const f of a.folders) f.unread = unreadByFolder.get(f.id) || 0;
+    // Dynamic AI views (topics, AI categories, own categories) are the costly part of this list, which is asked for
+    // often: kept for 30 s, and dropped at once when mail changes (read, moved, new) — not for every AI result.
+    const cacheKey = `${uid}|${sc?.space || ''}`;
+    // New analyses, tasks and events change them too: the newest row ids are a cheap version stamp.
+    const version = get('SELECT (SELECT MAX(rowid) FROM ai_insights) AS a, (SELECT MAX(id) FROM tasks) AS t, (SELECT MAX(id) FROM events) AS e, (SELECT MAX(rowid) FROM message_tags) AS g');
+    const stamp = `${version.a}:${version.t}:${version.e}:${version.g}`;
+    const hit = aiViewsCache.get(cacheKey);
+    if (hit && hit.stamp === stamp && Date.now() - hit.at < 30e3) return { accounts: out, counts, ...hit.views };
     // Dynamic AI views: active topics and the categories present (excluding the generic ones), with unread counts.
     const recent = `FROM ai_insights i JOIN messages m ON m.id = i.message_id JOIN folders f ON f.id = m.folder_id
       WHERE m.user_id = ? AND ${acc} AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk') AND m.date > ?`;
@@ -146,7 +158,9 @@ export default async function mailRoutes(app) {
       .slice(0, 12).map(({ task_due: _t, event_at: _e, ...x }) => x);
     const categories = all(`SELECT i.category AS name, COUNT(*) AS count, COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread ${recent} AND f.special_use = '\\Inbox'
       AND i.category NOT IN ('work', 'personal', 'other') GROUP BY i.category ORDER BY count DESC`, uid, Date.now() - 30 * 864e5);
-    return { accounts: out, counts, topics, categories, custom: listCategories(uid) };
+    const views = { topics, categories, custom: listCategories(uid) };
+    aiViewsCache.set(cacheKey, { at: Date.now(), stamp, views });
+    return { accounts: out, counts, ...views };
   }
   // Shared spaces shown with the person's own mail (their setting ui.showShared): their accounts and folders are added,
   // marked with the space; the counts of the smart views include them.
@@ -234,7 +248,8 @@ export default async function mailRoutes(app) {
       if (!found.length) return { items: [], hasMore: false };
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
       const byId = new Map(rows.map((r) => [r.id, r]));
-      return { items: found.map((id) => byId.get(id)).filter(Boolean).map((r) => listItem(r, openChecker(uid))), hasMore: false };
+      const open = openChecker(uid);
+      return { items: found.map((id) => byId.get(id)).filter(Boolean).map((r) => listItem(r, open)), hasMore: false };
     }
     const { where, params } = scopeFor(uid, q, sc);
     const threaded = q.threads !== '0' && getSettings(uid).ui.conversationView;
@@ -276,7 +291,8 @@ export default async function mailRoutes(app) {
       rows = all(`SELECT ${LIST_COLS}, m.size AS size FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.date < ?
         ORDER BY ${order('m.')} LIMIT ? OFFSET ?`, ...params, cursor, limit + 1, offset);
     }
-    return { items: rows.slice(0, limit).map((r) => listItem(r, openChecker(uid))), hasMore: rows.length > limit };
+    const open = openChecker(uid);
+    return { items: rows.slice(0, limit).map((r) => listItem(r, open)), hasMore: rows.length > limit };
   }
   // Views that can include the shared spaces' mail (not folders — a folder belongs to one of them).
   const MERGE_VIEWS = new Set(['unified', 'needsreply', 'needsaction', 'important', 'flagged', 'snoozed', 'category', 'topic']);
@@ -604,6 +620,34 @@ export default async function mailRoutes(app) {
     try { return await saveDraftToServer(req.user.id, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
+  // ---- Outlook-style conveniences (mail/extras.js)
+  app.post('/api/threads/:threadId/mute', async (req) => { X.setMuted(req.user.id, req.params.threadId, req.body?.muted !== false); return { ok: true }; });
+  app.get('/api/threads/:threadId/muted', async (req) => ({ muted: X.isMuted(req.user.id, req.params.threadId) }));
+  app.post('/api/senders/block', async (req, reply) => {
+    try {
+      const r = X.blockSender(req.user.id, req.body?.address);
+      // Their mail already in the Inbox goes to Junk too (when asked).
+      const ids = req.body?.existing ? X.fromSender(req.user.id, req.body.address) : [];
+      if (ids.length) await actions.spamMessages(req.user.id, ids);
+      return { ...r, moved: ids.length };
+    } catch (e) { return httpError(reply, 400, e.message); }
+  });
+  app.delete('/api/senders/block', async (req) => ({ removed: X.unblockSender(req.user.id, req.query.address) }));
+  app.get('/api/messages/from-sender', async (req) => ({ ids: X.fromSender(req.user.id, req.query.address, { keepLatest: req.query.keepLatest === '1' }) }));
+  app.post('/api/messages/:id/follow-up', async (req, reply) => { try { return X.followUp(req.user.id, Number(req.params.id), req.body?.due ? Number(req.body.due) : null); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.get('/api/quick-steps', async (req) => X.listQuickSteps(req.user.id));
+  app.post('/api/quick-steps', async (req, reply) => { try { return X.saveQuickStep(req.user.id, req.body || {}); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.patch('/api/quick-steps/:id', async (req, reply) => { try { return X.saveQuickStep(req.user.id, req.body || {}, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.delete('/api/quick-steps/:id', async (req) => { run('DELETE FROM quick_steps WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+  // A folder as an .mbox file (backup, or to open the mail in another program).
+  app.get('/api/folders/:id/export.mbox', async (req, reply) => {
+    const f = get('SELECT f.* FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.user_id = ?', req.params.id, req.user.id);
+    if (!f) return httpError(reply, 404, 'Not found');
+    const { Readable } = await import('node:stream');
+    reply.header('content-type', 'application/mbox').header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`${f.name}.mbox`)}`);
+    return reply.send(Readable.from(X.mboxOf(f.id)));
+  });
+
   // ---- attachments of messages being written (mail/uploads.js)
   app.post('/api/uploads', async (req, reply) => {
     const b = req.body || {};
@@ -620,12 +664,14 @@ export default async function mailRoutes(app) {
 
   // ---- the user's own categories (ai/custom.js)
   app.get('/api/custom-categories', async (req) => listCategories(req.user.id));
-  app.post('/api/custom-categories', async (req, reply) => { try { return saveCategory(req.user.id, req.body || {}); } catch (e) { return httpError(reply, 400, e.message); } });
-  app.patch('/api/custom-categories/:id', async (req, reply) => { try { return saveCategory(req.user.id, req.body || {}, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); } });
-  app.delete('/api/custom-categories/:id', async (req) => { run('DELETE FROM custom_categories WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return { ok: true }; });
+  // Changing categories refreshes the sidebar's counts (cached in folderList).
+  const catsChanged = (uid, out) => { notify(uid, 'folders:changed', {}); return out; };
+  app.post('/api/custom-categories', async (req, reply) => { try { return catsChanged(req.user.id, saveCategory(req.user.id, req.body || {})); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.patch('/api/custom-categories/:id', async (req, reply) => { try { return catsChanged(req.user.id, saveCategory(req.user.id, req.body || {}, Number(req.params.id))); } catch (e) { return httpError(reply, 400, e.message); } });
+  app.delete('/api/custom-categories/:id', async (req) => { run('DELETE FROM custom_categories WHERE id = ? AND user_id = ?', req.params.id, req.user.id); return catsChanged(req.user.id, { ok: true }); });
   // Add mail to a category by hand (value true) or take it out (false): the AI does not change that again.
   app.post('/api/custom-categories/:id/tag', async (req, reply) => {
-    try { return { changed: setTag(req.user.id, Number(req.params.id), ids(req.body?.ids), req.body?.value !== false) }; } catch (e) { return httpError(reply, 400, e.message); }
+    try { return catsChanged(req.user.id, { changed: setTag(req.user.id, Number(req.params.id), ids(req.body?.ids), req.body?.value !== false) }); } catch (e) { return httpError(reply, 400, e.message); }
   });
   app.post('/api/custom-categories/:id/rescan', async (req, reply) => {
     if (!categoryById(req.user.id, Number(req.params.id))) return httpError(reply, 404, 'Not found');
@@ -689,7 +735,8 @@ export default async function mailRoutes(app) {
     const { where, params } = buildWhere(req.user.id, { ...f, terms: [] }, sc);
     const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
     const byId = new Map(rows.map((r) => [r.id, r]));
-    return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map((r) => listItem(r, openChecker(req.user.id))) };
+    const open = openChecker(req.user.id);
+    return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map((r) => listItem(r, open)) };
   });
 }
 

@@ -13,6 +13,7 @@ import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
 import { noteCorrespondence } from '../ai/profiles.js';
 import { markReplied } from '../ai/open-items.js';
+import { autoReply, applyMuted } from './extras.js';
 
 const log = logger('pipeline');
 const NEVER_ANALYZE = ['\\Trash', '\\Junk', '\\Drafts'];
@@ -45,6 +46,10 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
     // Senders the user marked as spam (their own decision, not an AI one) go straight to Junk.
     const spam = messages.filter((m) => senderPreference(account.user_id, m.from_addr).spam).map((m) => m.id);
     if (spam.length) spamMessages(account.user_id, spam).catch((e) => log.warn(`spam filing: ${e.message}`));
+    // Conversations the user muted ("ignore"): new messages go to the archive, read. Not on the first sync.
+    if (!initial) applyMuted(account.user_id, ids).catch((e) => log.warn(`muted: ${e.message}`));
+    // Out of office: one automatic reply per sender (mail/extras.js decides who gets none).
+    if (!initial) { try { autoReply(get('SELECT * FROM accounts WHERE id = ?', account.id), messages.filter((m) => !spam.includes(m.id))); } catch (e) { log.warn(`auto-reply: ${e.message}`); } }
   }
 
   const cutoff = Date.now() - settings.ai.analyzeDays * 864e5;

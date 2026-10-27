@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.js';
 import './back.js';
+import { loadQuickSteps } from './mail/extras.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setShowShared, applyMergedSpaces } from './data.js';
@@ -34,6 +35,7 @@ export default function App() {
         await loadSpaces().catch(() => {});
         await loadShared();
         applyMergedSpaces();
+        loadQuickSteps();
         await Promise.all([loadFolders(), loadAccounts(), loadLabels(), loadProviders()]);
         connectEvents();
       }

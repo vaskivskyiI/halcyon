@@ -17,7 +17,7 @@ import { senderPreference, applyPreference, preferenceExamples } from './learnin
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
-import { openReplySql, openActionSql, NOISE as OPEN_NOISE, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
+import { openReplySql, openActionSql, NOISE as OPEN_NOISE, NOISE_LIST, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
 import { splitPlainQuote } from '../util/quotes.js';
 import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from './verify.js';
 import { logger } from '../util/log.js';
@@ -362,7 +362,6 @@ export async function summarizeThreadJob(userId, threadId) {
 // ---------- memory (semantic index for search and the assistant) ----------
 
 const day = (t) => (t ? new Date(t).toISOString().slice(0, 10) : '');
-const NOISE = ['newsletter', 'promotion', 'social', 'notification'];
 
 /** What to embed for one memory item, or null when the item is gone / not worth remembering. */
 function memoryItem(userId, kind, ref) {
@@ -452,7 +451,7 @@ function isDuplicateFact(userId, it, vector, model) {
 function saveFacts(userId, m, facts, category) {
   const old = all("SELECT id FROM facts WHERE user_id = ? AND source_message_id = ? AND origin = 'auto'", userId, m.id).map((f) => f.id);
   if (old.length) { run(`DELETE FROM facts WHERE id IN (${old.join(',')})`); removeMemory(userId, 'fact', old); }
-  if (NOISE.includes(category) || !Array.isArray(facts)) return;
+  if (NOISE_LIST.includes(category) || !Array.isArray(facts)) return;
   for (const f of facts.slice(0, 3)) {
     const text = String(typeof f === 'string' ? f : f?.text || '').trim().slice(0, 240);
     if (text.length < 8) continue;

@@ -10,6 +10,7 @@ import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oau
 import { syncDav } from '../scheduler.js';
 import { getSettings } from '../settings.js';
 import { sharedOf } from '../shared.js';
+import { autoReplyOf, autoReplyActive } from '../mail/extras.js';
 import { invalidate } from '../ai/memory.js';
 import { purgeMemory } from '../mail/pipeline.js';
 import { smtpStatus } from '../mail/send.js';
@@ -18,6 +19,24 @@ const pendingOAuth = new Map(); // state -> { userId, provider, accountId, t }
 
 export default async function accountRoutes(app) {
   // With "shared mail in My mail" on, the shared spaces' accounts are listed too (to reply from them), marked.
+  // Automatic replies (out of office) of an account (mail/extras.js).
+  app.get('/api/accounts/:id/auto-reply', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    return a ? { ...autoReplyOf(a), active: autoReplyActive(autoReplyOf(a)) } : httpError(reply, 404, 'Not found');
+  });
+  app.put('/api/accounts/:id/auto-reply', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    if (!a) return httpError(reply, 404, 'Not found');
+    const b = req.body || {};
+    const cfg = { enabled: !!b.enabled, start: Number(b.start) || null, end: Number(b.end) || null, subject: String(b.subject || '').slice(0, 200),
+      message: String(b.message || '').slice(0, 5000), onlyContacts: !!b.onlyContacts, days: Math.max(1, Math.min(30, Number(b.days) || 4)) };
+    if (cfg.enabled && !cfg.message.trim()) return httpError(reply, 400, 'Write the reply first');
+    run('UPDATE accounts SET auto_reply_json = ? WHERE id = ?', JSON.stringify(cfg), a.id);
+    // A new period: everyone may get the reply again.
+    if (cfg.enabled && !autoReplyOf(a).enabled) run('DELETE FROM auto_replied WHERE account_id = ?', a.id);
+    return { ...cfg, active: autoReplyActive(cfg) };
+  });
+
   app.get('/api/accounts', { preHandler: requireUser }, async (req) => [
     ...userAccounts(req.user.id).map(serializeAccount),
     ...(!req.person && getSettings(req.user.id).ui.showShared ? sharedOf(req.user.id).flatMap((sp) => userAccounts(sp.id).map((a) => ({ ...serializeAccount(a), owner: sp.id, ownerName: sp.name }))) : []),

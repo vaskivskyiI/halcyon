@@ -19,6 +19,7 @@ import { saveDraft } from '../mail/send.js';
 import { notify } from '../util/events.js';
 import { pendingApprovalCount } from '../rules.js';
 import { logger } from '../util/log.js';
+import { textToHtml } from '../util/text.js';
 
 const log = logger('mcp');
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -198,7 +199,7 @@ const PROPOSE_TOOLS = {
       const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).trim()).filter((x) => /^[^\s@]+@[^\s@]+$/.test(x)).map((address) => ({ name: '', address }));
       const to = list(a.to).length ? list(a.to) : orig ? [{ name: orig.from_name || '', address: orig.from_addr }] : [];
       const subject = a.subject || (orig ? (/^re:/i.test(orig.subject || '') ? orig.subject : `Re: ${orig.subject || ''}`) : '');
-      const html = String(a.body || '').split(/\n{2,}/).map((p) => `<p>${p.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]).replace(/\n/g, '<br>')}</p>`).join('');
+      const html = textToHtml(a.body);
       const d = saveDraft(ctx.uid, { accountId: acc.id, from: { address: acc.email, name: acc.display_name || '' }, to, cc: list(a.cc), bcc: [], subject, html, inReplyToId: orig?.id || null, attachments: [], byAssistant: ctx.token.name });
       notify(ctx.uid, 'outbox:changed', {});
       return { draft_id: d.id, status: 'Saved as a draft in Halcyon — not sent. The user reviews and sends it.' };

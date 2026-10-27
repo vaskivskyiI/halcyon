@@ -2,11 +2,12 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { BackButton, jump } from '../back.js';
+import { extraMenuItems, runQuickStep } from './extras.js';
 import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, textToHtml, escapeHtml, CATEGORY_COLORS } from '../util.js';
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { openComposer, replyPayload, Composer } from './Composer.jsx';
@@ -36,6 +37,7 @@ export default function Reader({ id, view }) {
   const placedFor = useRef(null);
   const firstUnread = useRef(null);
   const labels = store.use((s) => s.labels);
+  const quickSteps = store.use((s) => s.quickSteps);
   const conv = settings.ui.conversationView;
 
   const load = useCallback(async (images = allowImages) => {
@@ -48,7 +50,8 @@ export default function Reader({ id, view }) {
         const t = await api.get(`/api/threads/${encodeURIComponent(m.threadId)}${images ? '?images=1' : ''}`);
         if (t.messages.length) data = t;
       }
-      const t = { ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m };
+      const muted = m.threadId ? (await api.get(`/api/threads/${encodeURIComponent(m.threadId)}/muted`).catch(() => ({}))).muted : false;
+      const t = { ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m, muted };
       setThread(t);
       store.set({ focusAccountId: m.accountId }); // new mail defaults to the account of the message being read
       const last = data.messages[data.messages.length - 1];
@@ -232,6 +235,7 @@ export default function Reader({ id, view }) {
     { label: 'Delete permanently', icon: Trash2, danger: true, onClick: () => confirm('Delete permanently?') && act('delete') },
     'sep', { section: 'Labels' },
     ...labels.map((l) => ({ label: `${target.labels?.includes(l.id) ? '✓ ' : ''}${l.name}`, icon: Tag, onClick: () => act(target.labels?.includes(l.id) ? 'unlabel' : 'label', { labelId: l.id }) })),
+    ...extraMenuItems({ msg: latest, ids: [target.id], muted: thread.muted, onDone: () => load() }),
   ]);
 
   const moveMenu = (e) => openMenu(e, folders.accounts.flatMap((a) => [{ section: a.email }, ...a.folders.map((f) => ({ label: f.name, icon: Folder, onClick: () => act('move', { folderId: f.id }) }))]));
@@ -252,6 +256,7 @@ export default function Reader({ id, view }) {
         <button className="icon-btn" title="Move" onClick={moveMenu}><Folder size={17} /></button>
         <button className="icon-btn" title="Snooze" onClick={snoozeMenu}><Clock size={17} /></button>
         <button className="icon-btn" title="Flag (s)" onClick={() => act(target.isFlagged ? 'unflag' : 'flag')}><Star size={17} fill={target.isFlagged ? '#f59e0b' : 'none'} color={target.isFlagged ? '#f59e0b' : 'currentColor'} /></button>
+        {(quickSteps || []).slice(0, 3).map((q) => <button key={q.id} className="btn ghost sm" title={`Quick step: ${q.name}`} onClick={() => runQuickStep(q, ids.length ? ids : [target.id], () => navigate(`#/mail/${view}`))}><Zap size={14} /> {q.name}</button>)}
         <button className="icon-btn" title="More" onClick={moreMenu}><MoreHorizontal size={17} /></button>
       </div>
       <div className="reader-scroll" ref={scroller}>

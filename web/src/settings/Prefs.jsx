@@ -9,6 +9,41 @@ import { toast, toastError } from '../util.js';
 const useSettings = () => store.use((s) => s.settings);
 const save = (patch) => saveSettings(patch).catch(toastError);
 
+const STEP_KINDS = [['markRead', 'Mark as read'], ['markUnread', 'Mark as unread'], ['flag', 'Flag'], ['followUp', 'Follow up (task)'], ['label', 'Add label'], ['category', 'Add to my category'], ['archive', 'Archive'], ['move', 'Move to folder'], ['trash', 'Delete']];
+
+/** Quick steps: one click for a set of actions (e.g. "Done" = mark read + archive), in the reader and the list menu. */
+function QuickSteps() {
+  const steps = store.use((x) => x.quickSteps) || [];
+  const labels = store.use((x) => x.labels);
+  const folders = store.use((x) => x.folders);
+  const [edit, setEdit] = useState(null);
+  const reload = () => api.get('/api/quick-steps').then((q) => store.set({ quickSteps: q })).catch(() => {});
+  const save2 = async () => {
+    try { if (edit.id) await api.patch(`/api/quick-steps/${edit.id}`, edit); else await api.post('/api/quick-steps', edit); setEdit(null); reload(); toast('Quick step saved'); } catch (e) { toastError(e); }
+  };
+  const allFolders = (folders.accounts || []).flatMap((a) => a.folders.map((f) => ({ ...f, account: a.email })));
+  return <>
+    <h3>Quick steps</h3>
+    <div className="small muted" style={{ marginTop: -8 }}>One click for several actions — e.g. “Done”: mark as read and archive; “To accountant”: label and move. Shown in the reader (the first three) and in the right-click menu.</div>
+    {steps.map((q) => <div key={q.id} className="row small"><b>{q.name}</b><span className="grow faint">{q.actions.map((a) => STEP_KINDS.find((k) => k[0] === a.type)?.[1]).join(' → ')}</span>
+      <button className="btn sm" onClick={() => setEdit({ ...q })}>Edit</button><button className="icon-btn" title="Delete" onClick={() => api.del(`/api/quick-steps/${q.id}`).then(reload)}><Trash2 size={14} /></button></div>)}
+    <div><button className="btn sm" onClick={() => setEdit({ name: '', actions: [{ type: 'markRead' }, { type: 'archive' }] })}><Plus size={14} /> New quick step</button></div>
+    {edit && <Modal title={edit.id ? 'Edit quick step' : 'New quick step'} onClose={() => setEdit(null)} footer={<><button className="btn" onClick={() => setEdit(null)}>Cancel</button><button className="btn primary" onClick={save2}>Save</button></>}>
+      <label className="field">Name<input className="input" autoFocus value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="e.g. Done" /></label>
+      {edit.actions.map((a, i) => (
+        <div key={i} className="row" style={{ gap: 6 }}>
+          <select className="input" value={a.type} onChange={(e) => setEdit({ ...edit, actions: edit.actions.map((x, j) => (j === i ? { type: e.target.value } : x)) })}>{STEP_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          {a.type === 'move' && <select className="input" value={a.folderId || ''} onChange={(e) => setEdit({ ...edit, actions: edit.actions.map((x, j) => (j === i ? { ...x, folderId: Number(e.target.value) } : x)) })}><option value="">Folder…</option>{allFolders.map((f) => <option key={f.id} value={f.id}>{f.name} · {f.account}</option>)}</select>}
+          {a.type === 'label' && <select className="input" value={a.labelId || ''} onChange={(e) => setEdit({ ...edit, actions: edit.actions.map((x, j) => (j === i ? { ...x, labelId: Number(e.target.value) } : x)) })}><option value="">Label…</option>{labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>}
+          {a.type === 'category' && <select className="input" value={a.categoryId || ''} onChange={(e) => setEdit({ ...edit, actions: edit.actions.map((x, j) => (j === i ? { ...x, categoryId: Number(e.target.value) } : x)) })}><option value="">Category…</option>{(folders.custom || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>}
+          {a.type === 'followUp' && <select className="input" value={a.days ?? ''} onChange={(e) => setEdit({ ...edit, actions: edit.actions.map((x, j) => (j === i ? { ...x, days: e.target.value === '' ? null : Number(e.target.value) } : x)) })}><option value="">No date</option><option value="0">Today</option><option value="1">Tomorrow</option><option value="7">In a week</option></select>}
+          <button className="icon-btn" title="Remove" onClick={() => setEdit({ ...edit, actions: edit.actions.filter((_, j) => j !== i) })}><Trash2 size={14} /></button>
+        </div>))}
+      <div><button className="btn sm ghost" onClick={() => setEdit({ ...edit, actions: [...edit.actions, { type: 'markRead' }] })}><Plus size={14} /> Add action</button></div>
+    </Modal>}
+  </>;
+}
+
 export function MailPrefs() {
   const s = useSettings();
   const accounts = store.use((x) => x.accounts);
@@ -25,6 +60,7 @@ export function MailPrefs() {
         <label className="field">Mark as read<select className="input" value={s.mail.markReadAfterMs} onChange={(e) => save({ mail: { markReadAfterMs: Number(e.target.value) } })}><option value={0}>Immediately</option><option value={1500}>After 1.5 seconds</option><option value={5000}>After 5 seconds</option><option value={-1}>Never automatically</option></select></label>
         <label className="field">Default sending account<select className="input" value={s.mail.defaultAccountId || ''} onChange={(e) => save({ mail: { defaultAccountId: e.target.value ? Number(e.target.value) : null } })}><option value="">First account</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.email}</option>)}</select></label>
       </div>
+      <QuickSteps />
     </div>
   );
 }

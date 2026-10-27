@@ -8,7 +8,8 @@ import { setFlags } from '../mail/actions.js';
 import { notify } from '../util/events.js';
 import { userAccounts } from '../accounts.js';
 
-const NOISE_LIST = ['newsletter', 'promotion', 'social', 'notification'];
+/** Categories of mail that is rarely personal (newsletters, ads, social networks, automated notices). */
+export const NOISE_LIST = ['newsletter', 'promotion', 'social', 'notification'];
 export const NOISE = `(${NOISE_LIST.map((c) => `'${c}'`).join(', ')})`;
 
 export function openSettings(userId) {

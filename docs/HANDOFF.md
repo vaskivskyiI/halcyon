@@ -501,3 +501,16 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   for busy time in the user's other spaces, and — acting in a shared space — in the person's own calendars.
 - `ai.contextMode` ('account' | 'global') + `accounts.context_mode` override; `ctxFor` honours them.
 - Rail theme button cycles light → dark → automatic.
+
+### Audit pass + Outlook-style features (migration 28)
+- Audit: one noise-category list (`NOISE_LIST` in open-items), `util/text.js` (escapeHtml, textToHtml, keywords) used
+  by send/MCP/learning/custom; `openChecker` built once per list (was per row, each reading settings); the costly
+  AI part of `/api/folders` (topics, AI categories, own categories) cached 30 s per user+space, keyed by a version
+  stamp (newest insight/task/event/tag) and dropped on mail events. Draft attachments → `mail/uploads.js`
+  (uploaded once, `{uploadId}` in payloads; cleaned when unreferenced for 2 days). Sync no longer overwrites flags
+  that still have a pending 'flags' op. Reader scrolls to the first unread message.
+- mail/extras.js: automatic replies (`accounts.auto_reply_json`, `auto_replied`; RFC 3834 headers; never to own,
+  list, bulk, automated, auto-replied mail; once per sender per N days), muted threads (`muted_threads`; arriving
+  replies archived + read), block sender (a rule "Blocked: <addr>" → spam, + existing Inbox mail), sweep
+  (`/api/messages/from-sender`), follow-up (flag + "Follow up:" task with due), quick steps (`quick_steps`; run on
+  the client, web/src/mail/extras.js), folder export as mbox (mboxrd). Composer importance (payload.priority).

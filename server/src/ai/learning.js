@@ -7,6 +7,7 @@
 // sender preference is made from it (the next, genuine mail from that sender must not be caught), and the reason is
 // given to the model for similar mail, from any sender (reasonedRules).
 import { get, all, run, now } from '../db/index.js';
+import { keywords } from '../util/text.js';
 
 const PUBLIC_DOMAINS = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com', 'gmx.net', 'gmx.de', 'web.de', 'proton.me', 'protonmail.com', 'siol.net', 't-2.net', 'amis.net', 'aol.com', 'mail.com']);
 const KINDS = new Set(['important', 'unimportant', 'spam', 'notspam', 'category', 'reply', 'noreply', 'action', 'noaction']);
@@ -67,8 +68,7 @@ export function applyPreference(d, pref) {
 const label = (r) => ({ important: 'marked IMPORTANT', unimportant: 'marked NOT important', spam: 'marked SPAM', category: `category set to "${r.value}"`,
   reply: 'the user said it NEEDS a reply', noreply: 'the user said it needs NO reply', action: 'the user said it needs an action', noaction: 'the user said it is NOT an action for them' }[r.kind]);
 
-const STOP = new Set('the and for with that this from your you are was were have has not but all any can will our their they them about into only also than then there what when which who why how more most some such very just like dear best regards thanks thank please email mail message'.split(' '));
-const words = (s) => new Set((String(s || '').toLowerCase().match(/\p{L}{4,}/gu) || []).filter((w) => !STOP.has(w)));
+const words = keywords;
 
 /**
  * The user's rules from their comments that fit this email best (same sender / domain, shared words with the

@@ -186,6 +186,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   const sendKey = useRef(`${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`);
   const sending = useRef(false);
   const [busySend, setBusySend] = useState(false);
+  const [importance, setImportance] = useState(init.priority || 'normal');
   const [openMenu, menuNode] = useMenu();
   const isReply = !!init.inReplyToId;
   const close = () => (inline ? onDone?.() : closeComposer(id));
@@ -295,7 +296,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     html: editor.current.innerHTML, inReplyToId: init.inReplyToId || null,
     attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename }
       : a.uploadId ? { uploadId: a.uploadId, filename: a.filename, contentType: a.contentType, size: a.size } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
-    draftId, sendKey: sendKey.current,
+    draftId, sendKey: sendKey.current, priority: importance,
   });
 
   // Saves the draft in Halcyon now; returns its id.
@@ -479,6 +480,8 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
           ])}><ChevronDown size={15} /></button>
         </div>
         <button className="icon-btn" title="Attach files" onClick={() => fileInput.current.click()}><Paperclip size={17} /></button>
+        <button className={`icon-btn ${importance !== 'normal' ? 'active' : ''}`} title={`Importance: ${importance} (click to change)`} style={{ fontWeight: 700, color: importance === 'high' ? 'var(--danger)' : importance === 'low' ? 'var(--text-3)' : undefined }}
+          onClick={() => { setImportance({ normal: 'high', high: 'low', low: 'normal' }[importance]); setDirty(true); }}>{importance === 'low' ? '↓' : '!'}</button>
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles([...e.target.files]); e.target.value = ''; }} />
         <span className="grow" />
         <button className="btn sm ghost" title="Save the draft (also in the Drafts folder of your mail server)" onClick={saveToServer}>Save draft</button>

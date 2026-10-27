@@ -7,6 +7,7 @@ import {
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { BackButton } from '../back.js';
+import { extraMenuItems } from './extras.js';
 import { navigate, fmtListDate, toast, toastError } from '../util.js';
 import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
@@ -86,6 +87,7 @@ function FolderNav({ view, open, onNavigate }) {
 
   const folderMenu = (e, acc, f) => openMenu(e, [
     { label: 'Mark all as read', icon: MailOpen, onClick: () => api.post(`/api/folders/${f.id}/read-all`).then(loadFolders) },
+    { label: 'Export as .mbox (backup)', icon: Archive, onClick: () => window.open(api.url(`/api/folders/${f.id}/export.mbox`)) },
     { label: 'New subfolder', icon: Plus, onClick: () => setNewFolder({ accountId: acc.accountId, parentPath: f.path }) },
     !f.specialUse && { label: 'Rename', icon: PenSquare, onClick: () => { const n = prompt('New name', f.name); if (n) api.patch(`/api/folders/${f.id}`, { name: n }).then(() => toast('Renaming…')); } },
     { label: f.syncEnabled ? 'Stop syncing this folder' : 'Sync this folder', icon: RefreshCw, onClick: () => api.patch(`/api/folders/${f.id}`, { syncEnabled: !f.syncEnabled }).then(loadFolders) },
@@ -99,6 +101,9 @@ function FolderNav({ view, open, onNavigate }) {
         <button className="btn primary grow" style={{ justifyContent: 'center', height: 38 }} onClick={() => openComposer({})}><PenSquare size={16} /> New message</button>
       </div>
       <div className="sidebar-scroll">
+        {(store.get().accounts || []).filter((x) => x.autoReplyOn).map((x) => (
+          <div key={`ar${x.id}`} className="notice small" style={{ margin: '0 4px 8px', cursor: 'pointer' }} title="Change or turn off in Settings → Accounts" onClick={() => navigate('#/settings/accounts')}>
+            Automatic replies are on · {x.email}</div>))}
         {SMART.map(([key, Icon, label, countKey]) => (
           <div key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => go(key)}>
             <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && (countKey === 'scheduled' && folders.counts.outboxFailed > 0
@@ -470,6 +475,7 @@ function MessageList({ view, openId, onMenu }) {
       { label: 'Archive', icon: Archive, onClick: () => act('archive', {}, ids) },
       { label: 'Delete', icon: Trash2, onClick: () => act('trash', {}, ids) },
       { label: 'Spam', icon: AlertOctagon, onClick: () => act('spam', {}, ids) },
+      ...extraMenuItems({ msg: m, ids, onDone: () => load(false) }),
       'sep', { section: 'Snooze' },
       ...snoozeOptions().map(([label, until]) => ({ label, icon: Clock, onClick: () => act('snooze', { until }, ids) })),
       'sep', { section: 'Move to' },

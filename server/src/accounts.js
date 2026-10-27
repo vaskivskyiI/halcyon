@@ -16,6 +16,7 @@ export function serializeAccount(a) {
     aliases: json(a.aliases_json, []), hasPassword: !!a.imap_pass_enc, sortOrder: a.sort_order, space: a.space || '',
     syncHistory: a.sync_history || '90', inviteCalendarId: a.invite_calendar_id || null,
     aboutMe: a.about_me || '', learnedAbout: a.learned_about || '', learnedAboutAt: a.learned_about_at || null, contextMode: a.context_mode || '',
+    autoReplyOn: (() => { try { const c = JSON.parse(a.auto_reply_json || '{}'); return !!c.enabled && (!c.end || c.end > Date.now()); } catch { return false; } })(),
   };
 }
 

@@ -372,4 +372,11 @@ export const migrations = [
   ALTER TABLE events ADD COLUMN linked_at INTEGER;
   CREATE INDEX idx_events_linked ON events(linked_cal_id, linked_uid) WHERE linked_cal_id IS NOT NULL;
   `,
+  // 28: automatic replies per account (+ who got one when), muted conversations, quick steps (mail/extras.js).
+  `
+  ALTER TABLE accounts ADD COLUMN auto_reply_json TEXT;
+  CREATE TABLE auto_replied (account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, address TEXT NOT NULL, at INTEGER, PRIMARY KEY (account_id, address));
+  CREATE TABLE muted_threads (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, created_at INTEGER, PRIMARY KEY (user_id, thread_id));
+  CREATE TABLE quick_steps (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, actions_json TEXT, sort_order INTEGER DEFAULT 0, created_at INTEGER);
+  `,
 ];

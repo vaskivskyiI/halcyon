@@ -8,6 +8,7 @@ import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { userAccounts } from '../accounts.js';
 import { stripQuoted, localStamp } from './prompts.js';
 import { getSettings } from '../settings.js';
+import { keywords } from '../util/text.js';
 
 export const categoryById = (userId, id) => get('SELECT * FROM custom_categories WHERE id = ? AND user_id = ?', id, userId);
 
@@ -86,7 +87,7 @@ export function saveCategory(userId, b, id = null) {
   return { id: cid };
 }
 
-const words = (s) => [...new Set((String(s || '').toLowerCase().match(/\p{L}{4,}/gu) || []))].slice(0, 8);
+const words = (s) => [...keywords(s)].slice(0, 8);
 
 /**
  * Past mail (last year): likely candidates — by words of the name and description, and by meaning when the search
