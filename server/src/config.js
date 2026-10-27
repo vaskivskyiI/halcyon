@@ -30,6 +30,9 @@ export const config = {
     google: { clientId: env.GOOGLE_CLIENT_ID || '', clientSecret: env.GOOGLE_CLIENT_SECRET || '' },
     microsoft: { clientId: env.MICROSOFT_CLIENT_ID || '', clientSecret: env.MICROSOFT_CLIENT_SECRET || '', tenant: env.MICROSOFT_TENANT || 'common' },
   },
+  // The Android app (android/README.md): its package and signing-key fingerprint(s), published in assetlinks.json so
+  // Android opens the app without a browser bar.
+  android: { package: env.HALCYON_ANDROID_PACKAGE || '', sha256: (env.HALCYON_ANDROID_SHA256 || '').split(/[\s,]+/).filter(Boolean) },
   logLevel: env.HALCYON_LOG_LEVEL || 'info',
 };
 fs.mkdirSync(config.mailStoreDir, { recursive: true });

@@ -10,6 +10,7 @@ import { pushState, enablePush, disablePush, resetPushCache } from '../push.js';
 const useSettings = () => store.use((s) => s.settings);
 const save = (patch) => saveSettings(patch).catch(toastError);
 
+const SWIPE_OPTIONS = [['read', 'Read / unread'], ['archive', 'Archive'], ['trash', 'Delete'], ['flag', 'Flag'], ['snooze', 'Snooze until tomorrow'], ['none', 'Nothing']].map(([v, l]) => <option key={v} value={v}>{l}</option>);
 const STEP_KINDS = [['markRead', 'Mark as read'], ['markUnread', 'Mark as unread'], ['flag', 'Flag'], ['followUp', 'Follow up (task)'], ['label', 'Add label'], ['category', 'Add to my category'], ['archive', 'Archive'], ['move', 'Move to folder'], ['trash', 'Delete']];
 
 /** Quick steps: one click for a set of actions (e.g. "Done" = mark read + archive), in the reader and the list menu. */
@@ -60,6 +61,11 @@ export function MailPrefs() {
         <label className="field">Undo send window<select className="input" value={s.mail.undoSendSeconds} onChange={(e) => save({ mail: { undoSendSeconds: Number(e.target.value) } })}>{[0, 5, 10, 20, 30, 60].map((n) => <option key={n} value={n}>{n ? `${n} seconds` : 'Off'}</option>)}</select></label>
         <label className="field">Mark as read<select className="input" value={s.mail.markReadAfterMs} onChange={(e) => save({ mail: { markReadAfterMs: Number(e.target.value) } })}><option value={0}>Immediately</option><option value={1500}>After 1.5 seconds</option><option value={5000}>After 5 seconds</option><option value={-1}>Never automatically</option></select></label>
         <label className="field">Default sending account<select className="input" value={s.mail.defaultAccountId || ''} onChange={(e) => save({ mail: { defaultAccountId: e.target.value ? Number(e.target.value) : null } })}><option value="">First account</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.email}</option>)}</select></label>
+      </div>
+      <h3>Swipe on touch screens</h3>
+      <div className="form-grid">
+        <label className="field">Swipe right<select className="input" value={s.ui.swipeRight || 'read'} onChange={(e) => save({ ui: { swipeRight: e.target.value } })}>{SWIPE_OPTIONS}</select></label>
+        <label className="field">Swipe left<select className="input" value={s.ui.swipeLeft || 'archive'} onChange={(e) => save({ ui: { swipeLeft: e.target.value } })}>{SWIPE_OPTIONS}</select></label>
       </div>
       <QuickSteps />
     </div>

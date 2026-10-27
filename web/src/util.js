@@ -61,7 +61,7 @@ export const toDateInput = (ms) => toLocalInput(ms).slice(0, 10);
 export function notifyDesktop(title, body, onClick, { silent = false, tag } = {}) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification(title, { body, icon: './icon-192.png', silent, tag });
-  n.onclick = () => { window.focus(); onClick?.(); n.close(); };
+  n.onclick = () => { window.halcyonDesktop?.show?.(); window.focus(); onClick?.(); n.close(); };
 }
 
 export const CATEGORY_COLORS = {

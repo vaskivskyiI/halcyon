@@ -156,6 +156,7 @@ ipcMain.handle('connect:save', async (e, { mode, serverUrl }) => {
   saveConfig(config);
   app.relaunch(); quitting = true; app.exit(0);
 });
+ipcMain.on('show', () => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), mode: config.mode, serverUrl: config.serverUrl }));
 
 app.on('second-instance', (e, argv) => {

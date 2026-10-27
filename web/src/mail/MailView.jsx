@@ -225,6 +225,8 @@ function NewFolderModal({ accountId, parentPath, onClose }) {
 
 function MessageList({ view, openId, onMenu }) {
   const settings = store.use((s) => s.settings);
+  const [pull, setPull] = useState(0);
+  const pullStart = useRef(null);
   const folders = store.use((s) => s.folders);
   const [items, setItems] = useState([]);
   const [hasMore, setHasMore] = useState(false);
@@ -547,7 +549,11 @@ function MessageList({ view, openId, onMenu }) {
           <button className="icon-btn" title="More" onClick={(e) => rowMenu(e, items.find((m) => selected.has(m.id)))}><ChevronDown size={16} /></button>
         </div>
       )}
-      <div className={`list ${bulk ? 'selecting' : ''}`} ref={listRef} onScroll={onScroll}>
+      {pull > 0 && <div className="pull-hint" style={{ height: pull }}>{pull > 70 ? 'Release to refresh' : 'Pull to refresh'}</div>}
+      <div className={`list ${bulk ? 'selecting' : ''}`} ref={listRef} onScroll={onScroll}
+        onTouchStart={(e) => { pullStart.current = listRef.current?.scrollTop === 0 ? e.touches[0].clientY : null; }}
+        onTouchMove={(e) => { if (pullStart.current != null) setPull(Math.max(0, Math.min(110, (e.touches[0].clientY - pullStart.current) / 2))); }}
+        onTouchEnd={() => { if (pull > 70) { window.dispatchEvent(new Event('halcyon:sync')); load(false); } pullStart.current = null; setPull(0); }}>
         {items.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => act(a, extra, [m.id])}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}
@@ -568,13 +574,41 @@ function MessageList({ view, openId, onMenu }) {
   );
 }
 
+// Swipe on touch screens (Settings → Mail): what a swipe to the right / left does.
+const SWIPES = { archive: 'Archive', trash: 'Delete', read: 'Read / unread', flag: 'Flag', snooze: 'Snooze', none: 'Nothing' };
+function swipeAct(kind, m, unread, onAct) {
+  if (kind === 'archive' || kind === 'trash') onAct(kind);
+  else if (kind === 'read') onAct(unread ? 'read' : 'unread');
+  else if (kind === 'flag') onAct(m.isFlagged ? 'unflag' : 'flag');
+  else if (kind === 'snooze') onAct('snooze', { until: snoozeOptions().find(([l]) => /Tomorrow morning/.test(l))?.[1] || Date.now() + 864e5 });
+}
+
 function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, onAct, dragIds, showAi }) {
   const unread = threaded ? m.threadUnread > 0 || !m.isRead : !m.isRead;
   const ai = m.ai;
   const expired = !!ai?.expired;
   const important = !expired && ai?.priority >= 70;
+  const ui = store.get().settings?.ui || {};
+  const right = ui.swipeRight || 'read', left = ui.swipeLeft || 'archive';
+  const [dx, setDx] = useState(0);
+  const touch = useRef(null);
+  const swipe = {
+    onTouchStart: (e) => { const t = e.touches[0]; touch.current = { x: t.clientX, y: t.clientY, h: null }; },
+    onTouchMove: (e) => {
+      const s = touch.current; if (!s) return;
+      const t = e.touches[0], ddx = t.clientX - s.x, ddy = t.clientY - s.y;
+      if (s.h === null && Math.abs(ddx) + Math.abs(ddy) > 10) s.h = Math.abs(ddx) > Math.abs(ddy) * 1.5;
+      if (s.h && ((ddx > 0 && right !== 'none') || (ddx < 0 && left !== 'none'))) setDx(Math.max(-160, Math.min(160, ddx)));
+    },
+    onTouchEnd: () => {
+      const d = dx; touch.current = null; setDx(0);
+      if (d > 90) swipeAct(right, m, unread, onAct); else if (d < -90) swipeAct(left, m, unread, onAct);
+    },
+  };
   return (
-    <div className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={onClick} onContextMenu={onContextMenu} draggable
+    <div className={`swipe-wrap ${dx > 0 ? `go-right ${dx > 90 ? 'armed' : ''}` : dx < 0 ? `go-left ${dx < -90 ? 'armed' : ''}` : ''}`} data-right={SWIPES[right]} data-left={SWIPES[left]}>
+    <div className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={(e) => { if (Math.abs(dx) > 5) return; onClick(e); }} onContextMenu={onContextMenu} draggable
+      {...swipe} style={dx ? { transform: `translateX(${dx}px)`, transition: 'none' } : undefined}
       onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'copyMove'; }}>
       <div onClick={(e) => { e.stopPropagation(); onCheck(); }} style={{ cursor: 'pointer' }}>
         {checked ? <div className="avatar" style={{ background: 'var(--accent)' }}><CheckSquare size={18} /></div> : <Avatar name={m.from.name} email={m.from.address} />}
@@ -616,6 +650,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
         <button className="icon-btn" title="Flag (s)" onClick={() => onAct(m.isFlagged ? 'unflag' : 'flag')}><Star size={15} fill={m.isFlagged ? '#f59e0b' : 'none'} color={m.isFlagged ? '#f59e0b' : 'currentColor'} /></button>
         <button className="icon-btn" title="Snooze until tomorrow" onClick={() => onAct('snooze', { until: snoozeOptions().find((o) => o[0] === 'Tomorrow morning')[1] })}><Clock size={15} /></button>
       </div>
+    </div>
     </div>
   );
 }

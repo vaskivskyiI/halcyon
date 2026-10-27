@@ -529,3 +529,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Web: public/sw.js (push → showNotification; click → postMessage navigate / openWindow), src/push.js
   (enable/disable per device; while push is on the open app does not show its own), Settings → Notifications
   rewritten; PNG icons + manifest (maskable, shortcuts) for installing as an app.
+
+### Android app, touch gestures, desktop window from notifications (no migration)
+- Android = Trusted Web Activity built by Bubblewrap: `android/twa-manifest.template.json` + `.github/workflows/android.yml`
+  (manual run with host/name/package/version; signing key only from repository secrets, never uploaded). The server
+  serves `/.well-known/assetlinks.json` from `HALCYON_ANDROID_PACKAGE` / `HALCYON_ANDROID_SHA256` (config.android),
+  so the app opens without a browser bar. Steps for the owner: android/README.md. NOT verified: the workflow itself,
+  service-worker registration and push delivery in real Chrome/Android (the dev preview pane refuses service workers).
+- Touch: swipe a list row (settings `ui.swipeRight` default read, `ui.swipeLeft` default archive; threshold 90 px)
+  and pull the list down to sync; Settings → Mail chooses the swipe actions.
+- sw.js, *.html and the manifest are served `no-cache` so installed apps pick up new versions.
+- Desktop: clicking a notification brings the window to the front (preload `show` → main `ipcMain.on('show')`).

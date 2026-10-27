@@ -11,3 +11,8 @@ deploy/halcyon.env
 /Halcyon-Setup-*.exe
 /halcyon-source.zip
 deploy/pod.options
+# Android build (android/README.md)
+/android/*
+!/android/README.md
+!/android/twa-manifest.template.json
+*.keystore

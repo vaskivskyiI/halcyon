@@ -1,0 +1,89 @@
+name: Android app
+# Builds the Halcyon Android app (a Trusted Web Activity: your server full-screen with its own icon, launcher shortcuts
+# and notifications) for ONE server address. Actions → "Android app" → Run workflow. See android/README.md.
+# Signing key (needed so later builds can update the installed app) comes from the repository secrets
+# ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_PASSWORD — it is never uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: 'Your Halcyon server, without https:// (e.g. mail.example.com)'
+        required: true
+      name:
+        description: 'App name'
+        default: 'Halcyon'
+      package:
+        description: 'Android package id'
+        default: 'cc.halcyon.mail'
+      version:
+        description: 'Version (e.g. 1.0.0)'
+        default: '1.0.0'
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      APP_HOST: ${{ inputs.host }}
+      APP_NAME: ${{ inputs.name }}
+      APP_PACKAGE: ${{ inputs.package }}
+      APP_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Bubblewrap
+        run: npm install -g @bubblewrap/cli
+      - name: Signing key
+        working-directory: android
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS" ]; then
+            echo "::error::Add the repository secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_PASSWORD first (see android/README.md)."
+            exit 1
+          fi
+          echo "$KS" | base64 -d > android.keystore
+      - name: Project
+        working-directory: android
+        run: |
+          node -e '
+            const fs = require("fs"), e = process.env;
+            if (!/^[a-z0-9.-]+(:\d+)?$/i.test(e.APP_HOST)) throw new Error("host: a name like mail.example.com");
+            if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/i.test(e.APP_PACKAGE)) throw new Error("package: like cc.halcyon.mail");
+            const m = JSON.parse(fs.readFileSync("twa-manifest.template.json", "utf8").replace("\"__CODE__\"", "0"),
+              (k, v) => typeof v === "string" ? v.replaceAll("__HOST__", e.APP_HOST).replaceAll("__NAME__", e.APP_NAME)
+                .replaceAll("__PACKAGE__", e.APP_PACKAGE).replaceAll("__VERSION__", e.APP_VERSION) : v);
+            m.appVersionCode = Math.floor(Date.now() / 60000) - 29000000;
+            fs.writeFileSync("twa-manifest.json", JSON.stringify(m, null, 2));
+          '
+          mkdir -p ~/.bubblewrap
+          echo "{\"jdkPath\":\"$JAVA_HOME\",\"androidSdkPath\":\"$ANDROID_HOME\"}" > ~/.bubblewrap/config.json
+          yes | bubblewrap update --skipVersionUpgrade --manifest=./twa-manifest.json
+      - name: Build
+        working-directory: android
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          bubblewrap build --skipPwaValidation --manifest=./twa-manifest.json
+          FP=$(keytool -list -v -keystore android.keystore -alias halcyon -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" | sed -n 's/.*SHA256: //p')
+          rm -f android.keystore
+          {
+            echo "## Halcyon for Android — $APP_HOST"
+            echo "Install **app-release-signed.apk** from the artifacts on the phone (allow installing from this source)."
+            echo ""
+            echo "So the app opens without a browser address bar, set on the server and restart it:"
+            echo '```'
+            echo "HALCYON_ANDROID_PACKAGE=$APP_PACKAGE"
+            echo "HALCYON_ANDROID_SHA256=$FP"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Halcyon-Android
+          path: |
+            android/app-release-signed.apk
+            android/app-release-bundle.aab
+          if-no-files-found: error

@@ -63,6 +63,11 @@ export async function buildServer({ background = true } = {}) {
   });
 
   app.get('/api/health', async () => ({ ok: true, version: '1.0.0', accounts: syncManager.workers.size }));
+  app.get('/.well-known/assetlinks.json', async (req, reply) => {
+    const { package: pkg, sha256 } = config.android;
+    if (!pkg || !sha256.length) return reply.code(404).send([]);
+    return [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: pkg, sha256_cert_fingerprints: sha256 } }];
+  });
 
   // Real-time events: new mail, sync state, AI results, reminders.
   app.get('/api/ws', { websocket: true }, (socket, req) => {
@@ -104,7 +109,8 @@ export async function buildServer({ background = true } = {}) {
     // Hashed assets may be cached; index.html must be revalidated or browsers keep an old UI after an upgrade.
     await app.register(fastifyStatic, {
       root: config.webDir, wildcard: true, maxAge: '1h',
-      setHeaders: (reply, filePath) => { if (filePath.endsWith('.html') || filePath.endsWith('.webmanifest')) reply.header('cache-control', 'no-cache'); },
+      // Pages, the manifest and the service worker are always checked for updates.
+      setHeaders: (reply, filePath) => { if (/\.(html|webmanifest)$|[\\/]sw\.js$/.test(filePath)) reply.header('cache-control', 'no-cache'); },
     });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) return reply.code(404).send({ error: 'Not found' });

@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('halcyonDesktop', {
   setBadge: (count, dataUrl) => ipcRenderer.send('badge', { count, dataUrl }),
   saveConnection: (mode, serverUrl) => ipcRenderer.invoke('connect:save', { mode, serverUrl }),
   info: () => ipcRenderer.invoke('app:info'),
+  // A notification was clicked: bring the window back (also from the tray).
+  show: () => ipcRenderer.send('show'),
 });

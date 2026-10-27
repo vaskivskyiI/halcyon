@@ -9,6 +9,8 @@ import path from 'node:path';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'halcyon-r35-test-'));
 process.env.HALCYON_DATA_DIR = dataDir;
 process.env.HALCYON_LOG_LEVEL = 'error';
+process.env.HALCYON_ANDROID_PACKAGE = 'cc.halcyon.mail';
+process.env.HALCYON_ANDROID_SHA256 = 'AA:BB, CC:DD';
 
 let app, base, cookie = '', db, uid, N, bus;
 async function api(method, url, body) {
@@ -82,4 +84,11 @@ test('mail of a shared space notifies its members (unless they muted it); push s
   await api('POST', '/api/push/unsubscribe', { endpoint: 'https://push.example/abc' });
   assert.equal((await api('GET', '/api/push/devices')).length, 0);
   await assert.rejects(api('POST', '/api/push/subscribe', { subscription: { endpoint: 'x' } }), /Not a push subscription/);
+});
+
+test('the Android app is linked to the server through assetlinks.json', async () => {
+  const r = await fetch(base + '/.well-known/assetlinks.json');
+  assert.equal(r.status, 200);
+  const [link] = await r.json();
+  assert.deepEqual(link.target, { namespace: 'android_app', package_name: 'cc.halcyon.mail', sha256_cert_fingerprints: ['AA:BB', 'CC:DD'] });
 });
