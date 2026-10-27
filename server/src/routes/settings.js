@@ -4,8 +4,29 @@ import { resumeWaiting } from '../ai/queue.js';
 import { backfillAnalysis } from '../mail/pipeline.js';
 import { oauthAvailable } from '../mail/oauth.js';
 import { config } from '../config.js';
+import { run } from '../db/index.js';
+import { vapidKeys, subscribe, unsubscribe, devices, notifyUser } from '../notifications.js';
 
 export default async function settingsRoutes(app) {
+  // ---- Web Push (notifications.js): this device subscribes / unsubscribes; a test notification.
+  app.get('/api/push/key', { preHandler: requireUser }, async () => ({ publicKey: vapidKeys().publicKey }));
+  app.get('/api/push/devices', { preHandler: requireUser }, async (req) => devices(req.person?.id || req.user.id));
+  app.post('/api/push/subscribe', { preHandler: requireUser }, async (req, reply) => {
+    try {
+      subscribe(req.person?.id || req.user.id, req.body?.subscription, req.body?.device);
+      run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('public_host', ?)", String(req.hostname || '').split(':')[0] || 'localhost');
+      return { ok: true };
+    } catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.post('/api/push/unsubscribe', { preHandler: requireUser }, async (req) => ({ removed: unsubscribe(req.person?.id || req.user.id, req.body?.endpoint) }));
+  app.post('/api/push/test', { preHandler: requireUser }, async (req) => {
+    const uid = req.person?.id || req.user.id;
+    const { inQuietHours, prefsOf } = await import('../notifications.js');
+    if (inQuietHours(uid, prefsOf(uid))) return { ok: false, quiet: true };
+    notifyUser(uid, 'reminder', { title: 'Halcyon', body: 'Notifications work on this device.', url: '#/settings/notifications', tag: 'test' });
+    return { ok: true };
+  });
+
   // In a shared space (req.person set) mail, calendar and AI settings are the space's; how the app looks, its language
   // and notifications stay the person's own.
   const PERSONAL = ['ui', 'notifications'];

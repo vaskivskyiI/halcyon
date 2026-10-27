@@ -23,6 +23,7 @@ import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from '
 import { logger } from '../util/log.js';
 import { describedFor, promptBlock, applyAiTags } from './custom.js';
 import { keywords } from '../util/text.js';
+import { notifyUser } from '../notifications.js';
 
 const log = logger('ai');
 
@@ -322,7 +323,11 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
   notifyAI(userId, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(ins) });
   const settings = getSettings(userId);
-  if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
+  if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) {
+    notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
+    // Same tag as the new-mail notification: it replaces it (with the summary) rather than buzzing twice.
+    notifyUser(userId, 'mail', { important: true, title: `Important: ${m.from_name || m.from_addr}`, body: `${m.subject || ''}${ins.summary ? `\n${ins.summary}` : ''}`, url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id });
+  }
   if (!quiet && ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
   if (ins.priority >= 60 && now() - m.date < 36 * 3600e3) scheduleBriefRefresh(userId);
   const count = get('SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND thread_id = ?', userId, m.thread_id).n;

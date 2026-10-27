@@ -58,9 +58,9 @@ export function startOfWeek(d, weekStart = 1) { const x = startOfDay(d); const d
 export const toLocalInput = (ms) => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 export const toDateInput = (ms) => toLocalInput(ms).slice(0, 10);
 
-export function notifyDesktop(title, body, onClick) {
+export function notifyDesktop(title, body, onClick, { silent = false, tag } = {}) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification(title, { body, icon: './icon.svg', silent: false });
+  const n = new Notification(title, { body, icon: './icon-192.png', silent, tag });
   n.onclick = () => { window.focus(); onClick?.(); n.close(); };
 }
 

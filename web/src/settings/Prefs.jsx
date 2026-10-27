@@ -5,6 +5,7 @@ import { store } from '../store.js';
 import { saveSettings, loadLabels } from '../data.js';
 import { Switch, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError } from '../util.js';
+import { pushState, enablePush, disablePush, resetPushCache } from '../push.js';
 
 const useSettings = () => store.use((s) => s.settings);
 const save = (patch) => saveSettings(patch).catch(toastError);
@@ -67,14 +68,46 @@ export function MailPrefs() {
 
 export function Notifications() {
   const s = useSettings();
+  const n = s.notifications;
+  const accounts = store.use((x) => x.accounts).filter((a) => !a.owner);
+  const shared = store.use((x) => x.shared) || [];
+  const [push, setPush] = useState(null);
+  const [devs, setDevs] = useState([]);
+  const refresh = () => { pushState().then(setPush); api.get('/api/push/devices').then(setDevs).catch(() => {}); };
+  useEffect(() => { refresh(); }, []);
+  const mail = n.mail || (n.newMail === false ? 'none' : n.onlyImportant ? 'important' : 'all');
+  const toggleIn = (key, id) => { const cur = (n[key] || []).map(Number); save({ notifications: { [key]: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] } }); };
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   return (
     <div className="settings-section">
       <h2>Notifications</h2>
-      {perm !== 'granted' && <div className="notice warn" style={{ margin: 0 }}>Desktop notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(() => location.reload())}>Allow notifications</button></div>}
-      <Switch label="New mail" checked={s.notifications.newMail} onChange={(v) => save({ notifications: { newMail: v } })} />
-      <Switch label="Only notify for important mail" hint="Uses AI priority — no notifications for newsletters and promotions" checked={s.notifications.onlyImportant} onChange={(v) => save({ notifications: { onlyImportant: v } })} />
-      <Switch label="Event and task reminders" checked={s.notifications.reminders} onChange={(v) => save({ notifications: { reminders: v } })} />
+      <h3>This device</h3>
+      {push?.supported ? <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {push.on ? <><span className="chip ai">Push notifications are on</span><span className="small faint grow">also when Halcyon is closed</span>
+          <button className="btn sm" onClick={() => api.post('/api/push/test').then((r) => toast(r.quiet ? 'Quiet hours now — nothing is shown' : 'Test sent')).catch(toastError)}>Send a test</button>
+          <button className="btn sm ghost" onClick={async () => { await disablePush(); resetPushCache(); refresh(); }}>Turn off here</button></>
+          : <><span className="small grow">Get notifications on this device even when Halcyon is closed (phone, browser, the Android app).</span>
+            <button className="btn sm primary" onClick={async () => { try { await enablePush(); resetPushCache(); toast('Push notifications are on'); refresh(); } catch (e) { toastError(e); } }}>Turn on</button></>}
+      </div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
+      {devs.length > 0 && <div className="small faint">Devices with push: {devs.map((d) => d.device || 'device').join(', ')}</div>}
+
+      <h3>What notifies</h3>
+      <label className="field" style={{ maxWidth: 420 }}>New mail<select className="input" value={mail} onChange={(e) => save({ notifications: { mail: e.target.value } })}>
+        <option value="all">Every new email</option><option value="important">Only important mail (AI priority; with its summary)</option><option value="none">None</option></select></label>
+      <Switch label="Event and task reminders" checked={n.reminders} onChange={(v) => save({ notifications: { reminders: v } })} />
+      <Switch label="Sound" checked={n.sound !== false} onChange={(v) => save({ notifications: { sound: v } })} />
+      <Switch label="Hide content on the lock screen" hint="Only “New email” — no sender, subject or text" checked={!!n.hideContent} onChange={(v) => save({ notifications: { hideContent: v } })} />
+
+      <h3>Quiet hours</h3>
+      <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <Switch label="No notifications between" checked={!!n.quiet?.enabled} onChange={(v) => save({ notifications: { quiet: { ...n.quiet, enabled: v } } })} />
+        <label className="field">From<input className="input" type="time" value={n.quiet?.start || '22:00'} onChange={(e) => save({ notifications: { quiet: { ...n.quiet, start: e.target.value } } })} /></label>
+        <label className="field">Until<input className="input" type="time" value={n.quiet?.end || '07:00'} onChange={(e) => save({ notifications: { quiet: { ...n.quiet, end: e.target.value } } })} /></label>
+      </div>
+
+      {(accounts.length > 1 || shared.length > 0) && <h3>From</h3>}
+      {accounts.length > 1 && accounts.map((a) => <Switch key={a.id} label={a.email} checked={!(n.muteAccounts || []).map(Number).includes(a.id)} onChange={() => toggleIn('muteAccounts', a.id)} />)}
+      {shared.map((x) => <Switch key={`s${x.id}`} label={`${x.name} (shared)`} checked={!(n.muteShared || []).map(Number).includes(x.id)} onChange={() => toggleIn('muteShared', x.id)} />)}
     </div>
   );
 }

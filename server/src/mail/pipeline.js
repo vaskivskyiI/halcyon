@@ -14,6 +14,7 @@ import { logger } from '../util/log.js';
 import { noteCorrespondence } from '../ai/profiles.js';
 import { markReplied } from '../ai/open-items.js';
 import { autoReply, applyMuted } from './extras.js';
+import { notifyUser } from '../notifications.js';
 
 const log = logger('pipeline');
 const NEVER_ANALYZE = ['\\Trash', '\\Junk', '\\Drafts'];
@@ -70,6 +71,11 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
         accountId: account.id, folderId: folder.id, count: unread.length,
         messages: unread.slice(0, 5).map((m) => ({ id: m.id, from: m.from_name || m.from_addr, subject: m.subject, snippet: m.snippet?.slice(0, 120) })),
       });
+      // On the user's devices (and the shared space's members'), as their notification settings allow.
+      const one = unread.length === 1 ? unread[0] : null;
+      notifyUser(account.user_id, 'mail', one
+        ? { title: one.from_name || one.from_addr, body: `${one.subject || '(no subject)'}${one.snippet ? `\n${one.snippet.slice(0, 120)}` : ''}`, url: `#/mail/unified/${one.id}`, tag: `mail-${one.id}`, accountId: account.id }
+        : { title: `${unread.length} new emails`, body: unread.slice(0, 4).map((m) => `${m.from_name || m.from_addr}: ${m.subject || ''}`).join('\n'), url: '#/mail/unified', tag: `mail-batch-${folder.id}`, accountId: account.id });
     }
   }
 }

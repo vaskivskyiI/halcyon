@@ -1,2 +1,22 @@
-{ "name": "Halcyon", "short_name": "Halcyon", "start_url": "./", "display": "standalone", "background_color": "#ffffff", "theme_color": "#2563eb",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
+{
+  "id": "./",
+  "name": "Halcyon",
+  "short_name": "Halcyon",
+  "description": "Mail, calendar, contacts and tasks with an AI assistant",
+  "start_url": "./#/mail/unified",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "New message", "url": "./#/compose", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Calendar", "url": "./#/calendar", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Tasks", "url": "./#/tasks", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+  ]
+}

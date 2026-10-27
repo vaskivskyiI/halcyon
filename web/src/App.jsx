@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.js';
 import './back.js';
+import { pushIsOn } from './push.js';
 import { loadQuickSteps } from './mail/extras.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
@@ -67,7 +68,6 @@ function Shell() {
   const insightTimer = useRef();
 
   useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     const reload = () => { clearTimeout(reloadTimer.current); reloadTimer.current = setTimeout(() => { loadFolders(); }, 300); };
     // Our own changes: refresh now, and once more after the server has applied follow-up work (sent copy, recounts).
     const mutated = () => { reload(); setTimeout(reload, 2500); };
@@ -77,15 +77,13 @@ function Shell() {
       switch (e.type) {
         case 'connected': store.set({ connected: true }); reload(); break;
         case 'disconnected': store.set({ connected: false }); break;
-        case 'mail:new':
-          reload();
-          if (s.notifications.newMail && !s.notifications.onlyImportant) for (const m of e.payload.messages) notifyDesktop(m.from, `${m.subject}\n${m.snippet || ''}`, () => navigate(`#/mail/unified/${m.id}`));
-          break;
-        case 'mail:important':
-          if (s.notifications.newMail && s.notifications.onlyImportant) notifyDesktop(`Important: ${e.payload.from}`, `${e.payload.subject}\n${e.payload.summary || ''}`, () => navigate(`#/mail/unified/${e.payload.id}`));
+        case 'mail:new': reload(); break;
+        // What notifies is decided on the server (Settings → Notifications); with push on this device the service
+        // worker shows it, otherwise the open app does.
+        case 'notify:show':
+          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !store.get().settings?.ui?.showShared ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag }); });
           break;
         case 'reminder':
-          notifyDesktop(e.payload.title, `${new Date(e.payload.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e.payload.location ? ` · ${e.payload.location}` : ''}`, () => navigate('#/calendar'));
           toast(`Reminder: ${e.payload.title} at ${new Date(e.payload.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, { duration: 15000, action: e.payload.onlineMeeting ? { label: 'Join', onClick: () => window.open(e.payload.onlineMeeting, '_blank') } : undefined });
           break;
         case 'mail:sendError': toast(`Sending failed: ${e.payload.error}`, { kind: 'error', duration: 10000 }); reload(); break;
@@ -97,15 +95,10 @@ function Shell() {
         default: break;
       }
     });
-    // The other mail (a shared space, or one's own while in a shared space): notify about new mail there and keep its
-    // unread count in the space switcher current.
+    // The other mail (a shared space, or one's own while in a shared space): keep its unread count in the space
+    // switcher current (its notifications come from the server, see notifications.js).
     let sharedTimer = null;
     const offOther = onOtherEvent((e) => {
-      const s = store.get().settings;
-      if (e.type === 'mail:new') {
-        const where = e.as ? (store.get().shared || []).find((x) => x.id === e.as)?.name || 'Shared' : 'My mail';
-        if (s?.notifications.newMail && !s.notifications.onlyImportant) for (const m of e.payload.messages) notifyDesktop(`${where}: ${m.from}`, `${m.subject}\n${m.snippet || ''}`, () => enterShared(e.as || null));
-      }
       if (['mail:new', 'mail:changed', 'folder:synced'].includes(e.type) && !sharedTimer) sharedTimer = setTimeout(() => { sharedTimer = null; loadShared(); }, 3000);
     });
     const offShared = onEvent((e) => { if (e.type === 'shared:changed') loadShared(); });

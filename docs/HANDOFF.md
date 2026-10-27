@@ -519,3 +519,13 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   count; reader banner with Nudge (AI follow-up draft) / Stop waiting (dismiss). `meetingPrep` (`POST
   /api/events/:id/prep`, streamed): mail with the participants (90 days) + title keywords, open items, tasks →
   cited briefing; "Prepare with AI" in the event editor.
+
+### Notifications + push (migration 30)
+- notifications.js: `notifyUser(ownerId, 'mail'|'reminder', data)` decides per recipient (a shared space → its
+  members) by `settings.notifications` (`mail`: all | important | none — older newMail/onlyImportant still read;
+  reminders, sound, hideContent, quiet {enabled,start,end} in the user's zone, muteAccounts, muteShared); sends the
+  socket event `notify:show` and Web Push (web-push, VAPID keys in app_state 'vapid', `push_subscriptions`;
+  404/410 → removed). Triggers: new mail (pipeline), important mail after analysis (same tag → replaces), reminders.
+- Web: public/sw.js (push → showNotification; click → postMessage navigate / openWindow), src/push.js
+  (enable/disable per device; while push is on the open app does not show its own), Settings → Notifications
+  rewritten; PNG icons + manifest (maskable, shortcuts) for installing as an app.

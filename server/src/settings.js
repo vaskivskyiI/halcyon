@@ -9,7 +9,8 @@ export const DEFAULT_SETTINGS = {
   },
   calendar: { defaultDurationMin: 30, defaultReminderMin: 15, workStart: '08:00', workEnd: '17:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, tzAuto: true },
   // tzAuto: the web client keeps `timezone` equal to the browser's zone (a server in a container usually runs in UTC).
-  notifications: { newMail: true, onlyImportant: false, reminders: true },
+  // mail: 'all' | 'important' | 'none'; quiet hours in the user's time zone; muted accounts / shared spaces (ids).
+  notifications: { newMail: true, onlyImportant: false, reminders: true, hideContent: false, sound: true, quiet: { enabled: false, start: '22:00', end: '07:00' }, muteAccounts: [], muteShared: [] },
   ai: {
     enabled: true,
     // Each route: { providerId, model }. null providerId → first enabled provider.

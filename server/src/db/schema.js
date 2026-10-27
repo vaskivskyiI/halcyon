@@ -383,4 +383,11 @@ export const migrations = [
   `
   ALTER TABLE ai_insights ADD COLUMN expects_reply INTEGER DEFAULT 0;
   `,
+  // 30: Web Push subscriptions (phones, browsers, the Android app), see notifications.js.
+  `
+  CREATE TABLE push_subscriptions (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, endpoint TEXT NOT NULL UNIQUE,
+    keys_json TEXT NOT NULL, device TEXT, created_at INTEGER, last_ok_at INTEGER
+  );
+  `,
 ];
