@@ -20,6 +20,7 @@ const SMART = [
   ['important', Flame, 'Important'],
   ['needsreply', CornerUpLeft, 'Needs reply', 'needsreply'],
   ['needsaction', ClipboardCheck, 'Action needed', 'needsaction'],
+  ['waiting', Hourglass, 'Waiting for reply', 'waiting'],
   ['flagged', Star, 'Flagged'],
   ['snoozed', Clock, 'Snoozed', 'snoozed'],
   ['scheduled', SendIcon, 'Outbox & drafts', 'scheduled'],
@@ -31,7 +32,7 @@ const listCache = new Map();
 const tabByView = new Map();
 const TabCount = ({ n }) => (n > 0 ? <span className="tab-count">{n > 999 ? '999+' : n}</span> : null);
 
-const COUNT_TITLES = { unified: 'Unread conversations', needsreply: 'Conversations waiting for your reply', needsaction: 'Open action items', snoozed: 'Snoozed conversations', scheduled: 'Messages waiting to be sent' };
+const COUNT_TITLES = { unified: 'Unread conversations', needsreply: 'Conversations waiting for your reply', needsaction: 'Open action items', snoozed: 'Snoozed conversations', scheduled: 'Messages waiting to be sent', waiting: 'Your emails that asked something and have no answer yet' };
 const FOLDER_ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Archive': Archive, '\\Trash': Trash2, '\\Junk': AlertOctagon, '\\Flagged': Star };
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
 

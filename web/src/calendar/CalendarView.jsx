@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus } from 'lucide-react';
-import { api, onEvent } from '../api.js';
+import { api, onEvent, stream } from '../api.js';
 import { store } from '../store.js';
-import { Modal, useMenu, Spinner } from '../components/common.jsx';
+import { Modal, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { toast, toastError, startOfDay, addDays, startOfWeek, toLocalInput, toDateInput, fmtTime, navigate } from '../util.js';
 
 const HOUR_PX = 48;
@@ -523,6 +523,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
       <button className="btn" onClick={onClose}>Cancel</button>
       <button className="btn primary" onClick={() => save()}>{sendInvites && ev.attendees.length ? 'Save & send' : 'Save'}</button>
     </>}>
+      {isExisting && store.get().settings?.ai?.enabled && <MeetingPrep eventId={initial.seriesId || initial.id} />}
       {initial.linkedFrom && <div className="notice small" style={{ margin: 0 }}><Link2 size={14} /><span className="grow">Added from “{initial.linkedFromName || 'another calendar'}” — it follows the original: when that moves or changes, this copy does too.</span>
         <button className="btn sm ghost" onClick={async () => { try { await api.post(`/api/events/${initial.seriesId || initial.id}/unlink`); toast('No longer follows the original'); onSaved?.(); } catch (e) { toastError(e); } }}>Stop following</button></div>}
       <input className="input" style={{ fontSize: 17, height: 42 }} placeholder="Add a title" value={ev.title} onChange={(e) => set('title', e.target.value)} autoFocus={!isExisting} disabled={readonly} />
@@ -605,4 +606,17 @@ function LinkToMine({ ev, onDone }) {
     openMenu(e, [{ section: 'Add to my calendar' }, ...targets.map((c) => ({ label: c.name, hint: c.isDefault ? 'default' : '', onClick: () => add(c) }))]);
   };
   return <><button className="btn" title="A copy in your own calendar that follows this event when it moves or changes" onClick={(e) => { e.persist?.(); choose(e); }}><CalendarPlus size={15} /> Add to my calendar</button>{menuNode}</>;
+}
+
+/** A briefing before the meeting, from recent mail with its participants and about its subject (streamed). */
+function MeetingPrep({ eventId }) {
+  const [text, setText] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true); setText('');
+    try { let t = ''; const r = await stream(`/api/events/${eventId}/prep`, {}, { onToken: (x) => { t += x; setText(t); } }); setText(r || t); } catch (e) { toastError(e); setText(null); } finally { setBusy(false); }
+  };
+  if (text === null) return <div><button className="btn sm ai" onClick={run}><Sparkles size={13} /> Prepare with AI</button> <span className="small faint">a briefing from recent mail with the participants</span></div>;
+  return <div className="card ai-card" style={{ margin: 0 }}><div className="title"><Sparkles size={15} /> Preparation{busy && <Spinner size={13} />}</div>
+    <Markdown text={text || '…'} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} /></div>;
 }

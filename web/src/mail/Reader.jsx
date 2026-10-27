@@ -275,6 +275,13 @@ export default function Reader({ id, view }) {
             })])}><Tag size={11} /> ▾</button>}
         </div>
 
+        {/* The user's own email that asked something and has no answer yet: nudge, or stop waiting. */}
+        {target.insight?.expectsReply && !target.insight.dismissed && !msgs.some((x) => x.date > target.date && x.folder?.specialUse !== '\\Sent') && (
+          <div className="notice action-needed" style={{ margin: '0 0 12px' }}><Hourglass size={15} />
+            <span className="grow"><b>Waiting for a reply</b> since {new Date(target.date).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} ({Math.max(0, Math.floor((Date.now() - target.date) / 864e5))} days)</span>
+            <button className="btn sm ai" title="A short, polite follow-up drafted by the AI — you check it before sending" onClick={() => openComposer(replyPayload('replyAll', target, store.get().accounts, { aiIntent: 'A short, polite follow-up to my previous email — they have not answered yet: ask whether they had a chance to look at it and briefly repeat the main question.' }))}><Sparkles size={13} /> Nudge</button>
+            <button className="btn sm ghost" title="Not waiting any more — it leaves “Waiting for reply”" onClick={async () => { try { await api.post(`/api/messages/${target.id}/dismiss`, { resolution: 'done' }); toast('No longer waiting'); load(); } catch (e) { toastError(e); } }}>Stop waiting</button>
+          </div>)}
         {msgs.some((m) => m.notOnServer) && (
           <div className="banner warn">
             <CloudOff size={15} /><span className="grow">Sent, but the copy is not saved on the mail server yet — other mail apps will not show it in Sent.</span>

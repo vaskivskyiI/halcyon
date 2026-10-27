@@ -22,7 +22,7 @@ import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
-import { openReplySql, openActionSql, openChecker, supersededSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
+import { openReplySql, openActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
 
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
@@ -64,6 +64,7 @@ function scopeFor(userId, q, sc) {
   else if (view === 'unified') where.push("m.folder_id IN (SELECT f.id FROM folders f WHERE f.special_use = '\\Inbox')");
   else if (view === 'flagged') where.push("m.is_flagged = 1 AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))");
   else if (view === 'snoozed') where.push('m.snoozed_until IS NOT NULL');
+  else if (view === 'waiting') where.push(waitingSql(userId));
   // Open items: one definition for lists, counts, search and the brief (ai/open-items.js).
   else if (view === 'needsreply') where.push(`${openReplySql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
   else if (view === 'needsaction') where.push(`${openActionSql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
@@ -117,7 +118,7 @@ export default async function mailRoutes(app) {
     const unreadIn = (ids) => (ids.length ? get(`SELECT COUNT(${threaded ? 'DISTINCT thread_id' : '*'}) AS n FROM messages
       WHERE folder_id IN (${ids.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL`, ...ids).n : 0);
     const counts = {
-      unified: unreadIn(out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox').map((f) => f.id))), needsreply: countView('needsreply'), needsaction: countView('needsaction'), snoozed: countView('snoozed'),
+      unified: unreadIn(out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox').map((f) => f.id))), needsreply: countView('needsreply'), needsaction: countView('needsaction'), snoozed: countView('snoozed'), waiting: countView('waiting'),
       scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, uid).n,
       // Messages that could not be sent (or are retrying after an error): the Outbox count turns red.
       outboxFailed: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (status = 'failed' OR (status = 'queued' AND error IS NOT NULL))`, uid).n,
@@ -295,7 +296,7 @@ export default async function mailRoutes(app) {
     return { items: rows.slice(0, limit).map((r) => listItem(r, open)), hasMore: rows.length > limit };
   }
   // Views that can include the shared spaces' mail (not folders — a folder belongs to one of them).
-  const MERGE_VIEWS = new Set(['unified', 'needsreply', 'needsaction', 'important', 'flagged', 'snoozed', 'category', 'topic']);
+  const MERGE_VIEWS = new Set(['unified', 'needsreply', 'needsaction', 'important', 'flagged', 'snoozed', 'category', 'topic', 'waiting']);
   app.get('/api/messages', async (req) => {
     const q = req.query;
     const own = await listMessages(req.user.id, q, scope(req.user.id, reqSpace(req)));

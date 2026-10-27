@@ -379,4 +379,8 @@ export const migrations = [
   CREATE TABLE muted_threads (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, created_at INTEGER, PRIMARY KEY (user_id, thread_id));
   CREATE TABLE quick_steps (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, actions_json TEXT, sort_order INTEGER DEFAULT 0, created_at INTEGER);
   `,
+  // 29: the user's own email waits for an answer (asked something / requested something) — "Waiting for a reply".
+  `
+  ALTER TABLE ai_insights ADD COLUMN expects_reply INTEGER DEFAULT 0;
+  `,
 ];

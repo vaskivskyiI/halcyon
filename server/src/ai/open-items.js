@@ -28,6 +28,17 @@ export function supersededSql(what, m = 'm') {
     AND ${flag} AND n.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox'))`;
 }
 
+/**
+ * SQL: the user's own email still waiting for an answer — it asked something (expects_reply), is recent, not set
+ * aside, and nobody else has written in its conversation since.
+ */
+export function waitingSql(userId, i = 'i', m = 'm') {
+  const mine = [...ownAddresses(userId)].map((a) => `'${a.replace(/'/g, "''")}'`).join(',') || "''";
+  return `(${i}.expects_reply = 1 AND ${i}.dismissed_at IS NULL AND ${m}.date >= ${now() - 30 * 864e5}
+    AND ${m}.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Sent')
+    AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.user_id = ${m}.user_id AND r.thread_id = ${m}.thread_id AND r.date > ${m}.date AND lower(r.from_addr) NOT IN (${mine})))`;
+}
+
 /** SQL condition (aliases i = ai_insights, m = messages): a reply is still expected from the user. */
 export function openReplySql(userId, i = 'i', m = 'm') {
   const { days, min } = openSettings(userId);

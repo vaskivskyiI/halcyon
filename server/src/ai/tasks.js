@@ -22,6 +22,7 @@ import { splitPlainQuote } from '../util/quotes.js';
 import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from './verify.js';
 import { logger } from '../util/log.js';
 import { describedFor, promptBlock, applyAiTags } from './custom.js';
+import { keywords } from '../util/text.js';
 
 const log = logger('ai');
 
@@ -59,7 +60,7 @@ export function serializeInsight(r) {
     actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []),
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
-    needsAction: !!r.needs_action, actionSummary: r.action_summary || null,
+    needsAction: !!r.needs_action, actionSummary: r.action_summary || null, expectsReply: !!r.expects_reply,
     topic: r.topic || null, dismissed: !!r.dismissed_at,
     // How a requested action was settled ('done' | 'skipped') and when.
     resolution: r.dismissed_at ? r.resolution || 'done' : null, resolvedAt: r.dismissed_at || null, resolvedBy: r.resolved_by || null,
@@ -109,6 +110,8 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null,
     d.topic || null, dismissed, prev?.needs_reply_user ?? null, needsAction, needsAction ? String(d.action_summary || '').slice(0, 160) || null : null);
   if (prev?.resolution) run('UPDATE ai_insights SET resolution = ?, resolved_by = ? WHERE message_id = ?', prev.resolution, prev.resolved_by, messageId);
+  // The user's own email that waits for an answer ("Waiting for a reply"; only for mail sent from here or elsewhere).
+  if (d.expects_reply !== undefined) run('UPDATE ai_insights SET expects_reply = ? WHERE message_id = ?', d.expects_reply && !quiet ? 1 : 0, messageId);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
 }
 
@@ -538,6 +541,39 @@ The user corrected the AI: they marked the email below as ${verdict}. Suggest th
     temperature: 0.3, maxTokens: 160, interactive: true,
   });
   return res.text.trim().replace(/^["“]|["”]$/g, '').slice(0, 500);
+}
+
+/**
+ * Preparing for a meeting: recent mail with its participants and about its subject, open items and tasks — a short
+ * briefing (what it is about, where things stand, what is expected of the user, what to prepare), citing emails [#id].
+ */
+export async function meetingPrep(userId, eventId, onToken) {
+  const e = get('SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ?', eventId, userId);
+  if (!e) throw new Error('Event not found');
+  const { ctx, settings } = ctxFor(userId);
+  const tz = settings.calendar.timezone;
+  const own = ownAddresses(userId);
+  const people = [...json(e.attendees_json, []).map((a) => a.email), json(e.organizer_json, null)?.email].filter(Boolean).map((x) => String(x).toLowerCase()).filter((x) => !own.has(x)).slice(0, 10);
+  const since = now() - 90 * 864e5;
+  const byPeople = people.length ? all(`SELECT * FROM messages WHERE user_id = ? AND date > ? AND (lower(from_addr) IN (${people.map(() => '?').join(',')}) OR ${people.map(() => 'lower(to_json) LIKE ?').join(' OR ')})
+    ORDER BY date DESC LIMIT 12`, userId, since, ...people, ...people.map((p) => `%"${p}"%`)) : [];
+  const ids = new Set(byPeople.map((m) => m.id));
+  const topicIds = [...new Set([...keywords(e.title)].slice(0, 4).flatMap((w) => keywordSearch(userId, w, { limit: 6 })))];
+  const byTopic = topicIds.map((id) => get('SELECT * FROM messages WHERE id = ? AND user_id = ? AND date > ?', id, userId, since)).filter((m) => m && !ids.has(m.id)).slice(0, 8);
+  const mails = [...byPeople, ...byTopic].slice(0, 16);
+  if (!mails.length) return 'No recent mail with the participants or about this subject was found.';
+  const lines = mails.map((m) => {
+    const i = get('SELECT summary, needs_reply, needs_action, action_summary, dismissed_at FROM ai_insights WHERE message_id = ?', m.id);
+    return `[#${m.id}] ${P.localStamp(m.date, tz).slice(0, 16)} · ${P.whoWrote(m, own)} · ${m.subject}\n  ${(i?.summary || P.stripQuoted(m.body_text).slice(0, 300)).replace(/\s+/g, ' ')}${i && !i.dismissed_at && (i.needs_reply || i.needs_action) ? ` (OPEN for the user${i.action_summary ? `: ${i.action_summary}` : ''})` : ''}`;
+  }).join('\n');
+  const tasks = all('SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND source_message_id IN (' + (mails.map((m) => m.id).join(',') || 0) + ')', userId).map((t) => `- ${t.title}${t.due ? ` (due ${P.localStamp(t.due, tz).slice(0, 10)})` : ''}`).join('\n');
+  const res = await chat(userId, 'compose', {
+    system: `${ctx}
+Prepare the user for the meeting below in ${LANG_NAMES[settings.ui.language] || 'English'}: 3-7 short bullet points — what it is about, where things stand (latest decisions, numbers, dates), what the participants expect from the user, open questions, and what to prepare or bring. Use only the emails given; cite them as [#id]. "THE USER" is the person you write for — address them as "you". No preamble.`,
+    messages: [{ role: 'user', content: `MEETING: ${e.title} · ${e.all_day ? P.localStamp(e.start, tz).slice(0, 10) : P.localStamp(e.start, tz)}${e.location ? ` · ${e.location}` : ''}\nParticipants: ${people.join(', ') || '(none listed)'}${e.description ? `\nDescription: ${String(e.description).slice(0, 800)}` : ''}\n\nRECENT EMAILS:\n${lines}${tasks ? `\n\nOPEN TASKS:\n${tasks}` : ''}` }],
+    temperature: 0.2, maxTokens: 700, onToken, interactive: true,
+  });
+  return res.text.trim();
 }
 
 export async function composeNew(userId, { instruction, to, accountId = null }, onToken) {

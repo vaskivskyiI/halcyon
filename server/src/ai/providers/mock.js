@@ -20,6 +20,11 @@ export function mock() {
         const ids = last.split(/\n(?=\[\d+\])/).filter((e) => e.toLowerCase().includes(name)).map((e) => Number((e.match(/^\[(\d+)\]/) || [])[1])).filter(Boolean);
         return { text: JSON.stringify({ ids }), usage: { input: 1, output: 1 } };
       }
+      // Meeting briefing: one bullet per email it was given (tests check which emails reach the prompt).
+      if (!json && /Prepare the user for the meeting/.test(system)) {
+        const title = (last.match(/^MEETING: ([^·\n]+)/m) || [])[1]?.trim() || '';
+        return { text: `- ${title}\n${[...last.matchAll(/^\[#(\d+)\]/gm)].map((x) => `- see [#${x[1]}]`).join('\n')}`, usage: { input: 1, output: 1 } };
+      }
       // Second opinion (ai/verify.js): quotes the sentence with a question / a request word from THE EMAIL.
       if (json && /check another assistant's triage/.test(system)) {
         const sentences = last.slice(last.lastIndexOf('THE EMAIL:')).split(/\n\n/).slice(1).join('\n').split(/(?<=[.?!])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
@@ -64,6 +69,7 @@ export function mock() {
             ? [{ description: 'requested email', keywords: [...new Set((last.split(/\n\n/).pop().match(/\p{L}{7,}/gu) || []).map((w) => w.toLowerCase()))].slice(0, 6),
               quote: (email.split(/(?<=[.?!])\s+|\n+/).find((x) => /forward|posreduj|send me|pošlji/i.test(x)) || '').trim() }] : [],
           subject: `Re: ${subject}`, body: 'Thanks for your message. I will follow up shortly.',
+          expects_reply: /SENT BY THE USER/.test(system) ? /\?/.test(email) : undefined,
           my_categories: [...system.matchAll(/· "([^"]+)": /g)].map((x) => x[1]).filter((n) => email.toLowerCase().includes(n.toLowerCase())),
           resolves: [...(system.includes('OPEN REQUESTS') ? system.split('OPEN REQUESTS').pop() : '').matchAll(/\[(\d+)\][^·\n]*· ([^—→\n]+)/g)].filter((r) => email.toLowerCase().includes(r[2].trim().toLowerCase())).map((r) => Number(r[1])),
         });

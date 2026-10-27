@@ -514,3 +514,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   replies archived + read), block sender (a rule "Blocked: <addr>" → spam, + existing Inbox mail), sweep
   (`/api/messages/from-sender`), follow-up (flag + "Follow up:" task with due), quick steps (`quick_steps`; run on
   the client, web/src/mail/extras.js), folder export as mbox (mboxrd). Composer importance (payload.priority).
+- AI: `ai_insights.expects_reply` (migration 29) from the analysis of the user's own mail; view `waiting`
+  (`waitingSql`: sent, last 30 days, no later message from others in the conversation, not dismissed) with a
+  count; reader banner with Nudge (AI follow-up draft) / Stop waiting (dismiss). `meetingPrep` (`POST
+  /api/events/:id/prep`, streamed): mail with the participants (90 days) + title keywords, open items, tasks →
+  cited briefing; "Prepare with AI" in the event editor.

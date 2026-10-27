@@ -170,6 +170,9 @@ export default async function aiRoutes(app) {
     try { return { summary: await T.threadSummary(req.user.id, req.body.threadId) }; } catch (e) { return httpError(reply, 400, e.message); }
   });
 
+  // A briefing before a meeting (streamed): recent mail with its participants and about its subject.
+  app.post('/api/events/:id/prep', async (req, reply) => streamNdjson(req, reply, (onToken) => T.meetingPrep(req.user.id, Number(req.params.id), onToken)));
+
   // A suggested reason for a correction (prefilled in the "why?" box; the user edits it before it is saved).
   app.post('/api/messages/:id/suggest-reason', async (req, reply) => {
     const { kind, value } = req.body || {};
