@@ -12,13 +12,14 @@ import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
 import { crlf } from '../util/crlf.js';
 import { parseRaw } from './store.js';
+import { readUpload, saveUpload } from './uploads.js';
 
 const log = logger('send');
 const fmtAddr = (a) => (a.name ? `"${a.name.replace(/"/g, '')}" <${a.address}>` : a.address);
 const normAddrs = (list) => (list || []).map((a) => (typeof a === 'string' ? { name: '', address: a.trim() } : a)).filter((a) => a.address);
 
 /**
- * payload: { accountId, from?, to[], cc[], bcc[], subject, html, text, attachments:[{filename, contentType, contentBase64} | {fromMessageId, index}],
+ * payload: { accountId, from?, to[], cc[], bcc[], subject, html, text, attachments:[{uploadId} | {filename, contentType, contentBase64} | {fromMessageId, index}],
  *            inReplyToId?, forwardOfId?, icalEvent?, requestReadReceipt?, priority? }
  */
 export async function buildMime(account, p) {
@@ -44,6 +45,10 @@ export async function buildMime(account, p) {
       const parsed = await parseRaw(raw);
       const att = parsed.attachments?.[a.index];
       if (att) attachments.push({ filename: att.filename, content: att.content, contentType: att.contentType, cid: att.cid });
+    } else if (a.uploadId) {
+      const u = readUpload(account.user_id, a.uploadId);
+      if (!u) throw new Error(`The attachment “${a.filename || 'file'}” is no longer available — attach it again`);
+      attachments.push({ filename: a.filename || u.meta.filename, content: u.content, contentType: a.contentType || u.meta.contentType });
     } else if (a.contentBase64) {
       attachments.push({ filename: a.filename, content: Buffer.from(a.contentBase64, 'base64'), contentType: a.contentType });
     }
@@ -125,7 +130,7 @@ export async function draftFromMessage(userId, msgId) {
   for (const a of parsed?.attachments || []) {
     const cid = a.cid && html.includes(`cid:${a.cid}`);
     if (cid) html = html.split(`cid:${a.cid}`).join(`data:${a.contentType};base64,${a.content.toString('base64')}`);
-    else attachments.push({ filename: a.filename || 'attachment', contentType: a.contentType, size: a.size, contentBase64: a.content.toString('base64') });
+    else attachments.push(saveUpload(userId, { filename: a.filename || 'attachment', contentType: a.contentType, content: a.content }));
   }
   const parent = m.in_reply_to && get('SELECT id FROM messages WHERE user_id = ? AND message_id = ? ORDER BY date LIMIT 1', userId, m.in_reply_to);
   return { accountId: m.account_id, from: { name: m.from_name, address: m.from_addr }, to: json(m.to_json, []), cc: json(m.cc_json, []), bcc: json(m.bcc_json, []),

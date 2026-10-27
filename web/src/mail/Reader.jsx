@@ -31,6 +31,10 @@ export default function Reader({ id, view }) {
   const [openMenu, menuNode] = useMenu();
   const settings = store.use((s) => s.settings);
   const folders = store.use((s) => s.folders);
+  const scroller = useRef();
+  // Opening a conversation: start at its first unread message (as it was when opened), else at the top.
+  const placedFor = useRef(null);
+  const firstUnread = useRef(null);
   const labels = store.use((s) => s.labels);
   const conv = settings.ui.conversationView;
 
@@ -58,6 +62,18 @@ export default function Reader({ id, view }) {
       if (e.status === 404) window.dispatchEvent(new Event('halcyon:poll')); else toastError(e);
     } finally { setLoading(false); }
   }, [id, conv, allowImages]);
+
+  useEffect(() => {
+    if (!thread || thread.current?.id !== Number(id) || placedFor.current === id) return;
+    placedFor.current = id;
+    const unread = thread.messages.find((m) => !m.isRead && !m.isDraft);
+    firstUnread.current = unread?.id || null;
+    requestAnimationFrame(() => {
+      const el = unread && scroller.current?.querySelector(`[data-msg="${unread.id}"]`);
+      if (el && thread.messages.length > 1) el.scrollIntoView({ block: 'start' });
+      else if (scroller.current) scroller.current.scrollTop = 0;
+    });
+  }, [thread, id]);
 
   // Opened = read (after the configured delay, if it is still the message shown): every unread message shown here.
   // Runs again whenever what is unread changes (a cached copy is shown first, then the fresh one), and always includes
@@ -238,7 +254,7 @@ export default function Reader({ id, view }) {
         <button className="icon-btn" title="Flag (s)" onClick={() => act(target.isFlagged ? 'unflag' : 'flag')}><Star size={17} fill={target.isFlagged ? '#f59e0b' : 'none'} color={target.isFlagged ? '#f59e0b' : 'currentColor'} /></button>
         <button className="icon-btn" title="More" onClick={moreMenu}><MoreHorizontal size={17} /></button>
       </div>
-      <div className="reader-scroll">
+      <div className="reader-scroll" ref={scroller}>
         <h1>{target.subject || '(no subject)'}</h1>
         <div className="row" style={{ gap: 6, marginTop: -6, marginBottom: 12, flexWrap: 'wrap' }}>
           {target.folder && <span className="chip"><Folder size={11} /> {target.folder.name}</span>}
@@ -493,7 +509,7 @@ function ServerDraft({ m, onDone }) {
 function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
   return (
-    <div className={`card msg-card ${expanded ? '' : 'collapsed'}`}>
+    <div className={`card msg-card ${expanded ? '' : 'collapsed'}`} data-msg={m.id}>
       <div className="msg-card-head" onClick={toggle}>
         <Avatar name={m.from.name} email={m.from.address} />
         <div className="grow" style={{ minWidth: 0 }}>

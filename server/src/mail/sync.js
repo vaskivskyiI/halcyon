@@ -259,8 +259,13 @@ export class AccountSync {
           if (useModseq) opts.changedSince = BigInt(folder.highest_modseq);
           const updates = [];
           for await (const msg of client.fetch(`1:${folder.last_uid}`, { uid: true, flags: true }, opts)) updates.push(msg);
+          // Changes made here that have not reached the server yet win over what the server reported a moment ago
+          // (otherwise a conversation marked read during a sync shows unread again until the next one).
+          const pending = new Set(all("SELECT payload_json FROM pending_ops WHERE account_id = ? AND op = 'flags'", this.accountId)
+            .map((o) => json(o.payload_json, {})).filter((p) => p.folder === folder.path).flatMap((p) => p.uids || []));
           tx(() => {
             for (const msg of updates) {
+              if (pending.has(msg.uid)) continue;
               const f = flagsToCols([...(msg.flags || [])]);
               run('UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ?, is_forwarded = ? WHERE folder_id = ? AND uid = ?',
                 f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, folder.id, msg.uid);

@@ -18,6 +18,7 @@ import { scope, reqSpace, inIds } from '../spaces.js';
 import { sharedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
+import { saveUpload, readUpload } from '../mail/uploads.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
 import { openReplySql, openActionSql, openChecker, supersededSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
@@ -601,6 +602,20 @@ export default async function mailRoutes(app) {
   app.delete('/api/drafts/:id', async (req) => { deleteDraft(req.user.id, Number(req.params.id)); return { ok: true }; });
   app.post('/api/drafts/:id/save-to-server', async (req, reply) => {
     try { return await saveDraftToServer(req.user.id, Number(req.params.id)); } catch (e) { return httpError(reply, 400, e.message); }
+  });
+
+  // ---- attachments of messages being written (mail/uploads.js)
+  app.post('/api/uploads', async (req, reply) => {
+    const b = req.body || {};
+    try { return saveUpload(req.user.id, { filename: b.filename, contentType: b.contentType, content: Buffer.from(String(b.contentBase64 || ''), 'base64') }); } catch (e) { return httpError(reply, 400, e.message); }
+  });
+  app.get('/api/uploads/:id', async (req, reply) => {
+    const u = readUpload(req.user.id, req.params.id);
+    if (!u) return httpError(reply, 404, 'Not found');
+    const inline = req.query.inline === '1' && /^(image\/|application\/pdf|text\/plain)/.test(u.meta.contentType);
+    reply.header('content-type', u.meta.contentType).header('content-disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(u.meta.filename)}`);
+    if (inline) reply.header('content-security-policy', "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox");
+    return reply.send(u.content);
   });
 
   // ---- the user's own categories (ai/custom.js)

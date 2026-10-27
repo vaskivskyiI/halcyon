@@ -63,6 +63,19 @@ export function replyPayload(mode, msg, accounts, extra = {}) {
   };
 }
 
+/** An attachment of a message being written: added here (kept in the draft) or taken from an earlier email. */
+function openAttachment(a) {
+  if (a.fromMessageId != null) { window.open(api.url(`/api/messages/${a.fromMessageId}/attachments/${a.index}?inline=1`), '_blank'); return; }
+  if (a.uploadId) { window.open(api.url(`/api/uploads/${a.uploadId}?inline=1`), '_blank'); return; }
+  if (!a.contentBase64) return;
+  const bytes = Uint8Array.from(atob(a.contentBase64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: a.contentType || 'application/octet-stream' }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: a.filename || 'attachment' });
+  if (/^(image\/|application\/pdf|text\/)/.test(a.contentType || '')) { link.removeAttribute('download'); link.target = '_blank'; }
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60e3);
+}
+
 export default function ComposerDock() {
   const composers = store.use((s) => s.composers);
   return <div className="composer-dock">{composers.map((c) => <Composer key={c.id} id={c.id} init={c.init} minimized={c.minimized} />)}</div>;
@@ -280,14 +293,15 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   const payload = () => ({
     accountId: account?.id, from: { address: fromId?.address || account?.email, name: fromId?.name || account?.displayName || '' }, to, cc, bcc, subject,
     html: editor.current.innerHTML, inReplyToId: init.inReplyToId || null,
-    attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
+    attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename }
+      : a.uploadId ? { uploadId: a.uploadId, filename: a.filename, contentType: a.contentType, size: a.size } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
     draftId, sendKey: sendKey.current,
   });
 
   // Saves the draft in Halcyon now; returns its id.
   const saveNow = async () => {
     const p = payload();
-    const r = await api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined, attachments: p.attachments.filter((a) => a.fromMessageId != null || (a.contentBase64?.length || 0) < 2e6) });
+    const r = await api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined });
     setDraftId(r.id); setDirty(false);
     return r.id;
   };
@@ -364,7 +378,8 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     const list = [];
     for (const f of files) {
       if (f.size > 25 * 1024 * 1024) { toast(`${f.name} is larger than 25 MB`, { kind: 'error' }); continue; }
-      list.push({ filename: f.name, contentType: f.type || 'application/octet-stream', size: f.size, contentBase64: await fileToBase64(f) });
+      // Uploaded once; the draft only refers to it (autosave stays small, nothing is left out of a saved draft).
+      try { list.push(await api.post('/api/uploads', { filename: f.name, contentType: f.type || 'application/octet-stream', contentBase64: await fileToBase64(f) })); } catch (e) { toastError(e); }
     }
     setAttachments((a) => [...a, ...list]); setDirty(true);
   };
@@ -439,7 +454,9 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
       <div ref={editor} className="editor" contentEditable suppressContentEditableWarning onInput={() => setDirty(true)}
         onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); } }} />
       {attachments.length > 0 && <div className="att-list">{attachments.map((a, i) => (
-        <span key={i} className="chip"><Paperclip size={12} /> {a.filename} {a.size ? `· ${fmtSize(a.size)}` : ''}<button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}><X size={12} /></button></span>
+        <span key={i} className="chip"><Paperclip size={12} />
+          <a href="#" className="att-dl" title="Open / download" onClick={(e) => { e.preventDefault(); openAttachment(a); }}>{a.filename}</a> {a.size || a.contentBase64 ? `· ${fmtSize(a.size || Math.round((a.contentBase64.length * 3) / 4))}` : ''}
+          <button className="icon-btn" style={{ width: 18, height: 18 }} title="Remove" onClick={() => { setAttachments(attachments.filter((_, j) => j !== i)); setDirty(true); }}><X size={12} /></button></span>
       ))}</div>}
       {settings.ai.enabled && (
         <div className="ai-bar">

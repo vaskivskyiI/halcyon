@@ -344,7 +344,9 @@ function MessageList({ view, openId, onMenu }) {
     }
     if (e.type === 'ai:insight') {
       const i = e.payload.insight;
-      setItems((cur) => cur.map((m) => (m.id === e.payload.messageId ? { ...m, ai: { summary: i.summary, category: i.category, priority: i.priority, needsReply: i.needsReply, isPhishing: i.isPhishing, hasDraft: !!i.draftReply, topic: i.topic, expired: i.expired } } : m)));
+      // Merged into what the row already has (action, open-item state, etc. are kept).
+      setItems((cur) => cur.map((m) => (m.id === e.payload.messageId ? { ...m, ai: { ...(m.ai || {}), summary: i.summary, category: i.category, priority: i.priority, needsReply: i.needsReply && !i.dismissed,
+        needsAction: i.needsAction && !i.dismissed, actionSummary: i.actionSummary, isPhishing: i.isPhishing, hasDraft: !!i.draftReply, topic: i.topic, expired: i.expired } } : m)));
     }
     if (e.type === 'ai:draft') setItems((cur) => cur.map((m) => (m.id === e.payload.messageId && m.ai ? { ...m, ai: { ...m.ai, hasDraft: true } } : m)));
   }), [params]);

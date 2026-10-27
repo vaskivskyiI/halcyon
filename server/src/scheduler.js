@@ -16,6 +16,7 @@ import { notify } from './util/events.js';
 import { logger } from './util/log.js';
 import { markRepliedHistory } from './ai/open-items.js';
 import { syncLinked } from './calendar/linked.js';
+import { cleanUploads } from './mail/uploads.js';
 
 const log = logger('scheduler');
 const davBusy = new Set();
@@ -111,6 +112,7 @@ export function startScheduler() {
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(() => { try { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); } catch (e) { log.error(e); } }, 3600e3).unref();
   setInterval(() => { try { expireInsights(); } catch (e) { log.error(e); } }, 2 * 60e3).unref();
+  setInterval(() => { try { cleanUploads(); } catch (e) { log.error(e); } }, 864e5).unref();
   // Linked event copies follow their originals (subscriptions and server calendars change them in the background).
   setInterval(() => { try { syncLinked(); } catch (e) { log.error(e); } }, 60e3).unref();
   setTimeout(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 60e3).unref();
