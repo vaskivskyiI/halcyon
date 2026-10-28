@@ -447,3 +447,9 @@ div.provider { cursor: default; background: var(--panel-2); }
 .recent-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; margin: 0 -8px; border-radius: 6px; color: inherit; text-decoration: none; min-width: 0; }
 .recent-row:hover { background: var(--panel-2); }
 .recent-row.unread .grow { font-weight: 600; }
+/* Actions of a conversation, each settled on its own (reader) */
+.notice.action-list { display: block; }
+.action-list .action-group { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.action-list .action-group + .action-group { border-top: 1px solid var(--border); padding-top: 8px; }
+.action-item { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.action-item.settled .text { text-decoration: line-through; opacity: .65; }

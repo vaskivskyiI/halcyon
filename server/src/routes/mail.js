@@ -22,7 +22,7 @@ import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
-import { openReplySql, openActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE, ownAddresses } from '../ai/open-items.js';
+import { openReplySql, openActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE, ownAddresses, repeatsOf } from '../ai/open-items.js';
 
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
@@ -541,16 +541,20 @@ export default async function mailRoutes(app) {
     const copies = m.message_id ? all('SELECT id FROM messages WHERE user_id = ? AND message_id = ?', req.user.id, m.message_id).map((r) => r.id) : [];
     let targets = [...new Set([m.id, ...copies])];
     const inThread = req.body?.thread && m.thread_id;
+    // Older emails repeating the same request go with it (see repeatsOf).
     if (undo) {
       const at = get('SELECT dismissed_at FROM ai_insights WHERE message_id = ?', m.id)?.dismissed_at;
+      if (at) targets = [...new Set([...targets, ...repeatsOf(req.user.id, m.id, at)])];
       if (inThread && at) targets = [...new Set([...targets, ...all(`SELECT i.message_id AS id FROM ai_insights i JOIN messages x ON x.id = i.message_id
         WHERE x.user_id = ? AND x.thread_id = ? AND i.dismissed_at = ? AND i.resolved_by IS NULL`, req.user.id, m.thread_id, at).map((r) => r.id)])];
-    } else if (inThread) {
-      targets = [...new Set([...targets, ...all(`SELECT i.message_id AS id FROM ai_insights i JOIN messages x ON x.id = i.message_id
+    } else {
+      targets = [...new Set([...targets, ...repeatsOf(req.user.id, m.id)])];
+      if (inThread) targets = [...new Set([...targets, ...all(`SELECT i.message_id AS id FROM ai_insights i JOIN messages x ON x.id = i.message_id
         WHERE x.user_id = ? AND x.thread_id = ? AND i.dismissed_at IS NULL AND (i.needs_action = 1 OR i.needs_reply = 1 OR i.needs_reply_user = 1)`, req.user.id, m.thread_id).map((r) => r.id)])];
     }
     const t = Date.now();
-    tx(() => { for (const id of targets) run('UPDATE ai_insights SET dismissed_at = ?, resolution = ? WHERE message_id = ?', undo ? null : t, undo ? null : resolution, id); });
+    // Undo reopens the whole email: its items too.
+    tx(() => { for (const id of targets) run(`UPDATE ai_insights SET dismissed_at = ?, resolution = ?${undo ? ', action_state_json = NULL' : ''} WHERE message_id = ?`, undo ? null : t, undo ? null : resolution, id); });
     for (const id of targets) {
       const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', id);
       if (ins) notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(ins) });
@@ -558,6 +562,40 @@ export default async function mailRoutes(app) {
     notify(req.user.id, 'mail:changed', { ids: targets });
     scheduleBriefRefresh(req.user.id);
     return { ok: true, count: targets.length };
+  });
+
+  // One action item of an email settled ('done' | 'skipped') or reopened (resolution null). The email leaves Action
+  // needed and the brief once all its items are settled, and comes back when one is reopened. Every copy goes along.
+  app.post('/api/messages/:id/action-item', async (req, reply) => {
+    const m = get('SELECT id, thread_id, message_id FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const key = String(req.body?.text || '').trim().toLowerCase();
+    if (!m || !key) return httpError(reply, m ? 400 : 404, m ? 'Which item?' : 'Not found');
+    const resolution = ['done', 'skipped'].includes(req.body?.resolution) ? req.body.resolution : null;
+    const at = get('SELECT dismissed_at FROM ai_insights WHERE message_id = ?', m.id)?.dismissed_at;
+    const ids = [...new Set([m.id, ...(m.message_id ? all('SELECT id FROM messages WHERE user_id = ? AND message_id = ?', req.user.id, m.message_id).map((r) => r.id) : []),
+      ...repeatsOf(req.user.id, m.id), ...(at ? repeatsOf(req.user.id, m.id, at) : [])])];
+    const t = Date.now();
+    tx(() => {
+      for (const id of ids) {
+        const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', id);
+        if (!ins) continue;
+        const state = json(ins.action_state_json, {});
+        const items = json(ins.action_items_json, []).map((x) => String(x.text || '').trim().toLowerCase()).filter(Boolean);
+        // Settled by its items (or reopened): only touch dismissal the items decide, not one the user or a reply made.
+        const byItems = !ins.dismissed_at || (['done', 'skipped'].includes(ins.resolution) && !ins.resolved_by);
+        // The whole email was settled at once: its items count as settled the same way (reopening one keeps the others).
+        if (byItems && ins.dismissed_at) for (const k of items) state[k] ||= { resolution: ins.resolution || 'done', at: ins.dismissed_at };
+        if (resolution) state[key] = { resolution, at: t }; else delete state[key];
+        const settled = items.length > 0 && items.every((k) => state[k]);
+        const dismissed = !byItems ? ins.dismissed_at : settled ? (ins.dismissed_at || t) : null;
+        const res = !byItems ? ins.resolution : settled ? (items.every((k) => state[k].resolution === 'skipped') ? 'skipped' : 'done') : null;
+        run('UPDATE ai_insights SET action_state_json = ?, dismissed_at = ?, resolution = ? WHERE message_id = ?', JSON.stringify(state), dismissed, res, id);
+      }
+    });
+    for (const id of ids) notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', id)) });
+    notify(req.user.id, 'mail:changed', { ids });
+    scheduleBriefRefresh(req.user.id);
+    return { insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) };
   });
 
   // Corrections that teach the AI: kind = important | unimportant | category (value = category name).

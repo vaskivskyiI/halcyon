@@ -25,7 +25,25 @@ export function supersededSql(what, m = 'm') {
   const flag = what === 'reply' ? '(ni.needs_reply = 1 OR ni.needs_reply_user = 1)' : 'ni.needs_action = 1';
   return `EXISTS (SELECT 1 FROM messages n JOIN ai_insights ni ON ni.message_id = n.id WHERE n.user_id = ${m}.user_id AND n.subject_key = ${m}.subject_key
     AND COALESCE(${m}.subject_key, '') != '' AND n.from_addr = ${m}.from_addr AND n.id != ${m}.id AND (n.date > ${m}.date OR (n.date = ${m}.date AND n.id > ${m}.id))
-    AND ${flag} AND n.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox'))`;
+    AND ${flag} AND ni.dismissed_at IS NULL AND n.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox'))`;
+}
+
+/**
+ * Older emails that repeat this one's request (same sender, same conversation or subject, same action or items — a
+ * reminder, the request sent again, the same notice every day): settled together with it. `at` given: those settled
+ * at that moment (for undo).
+ */
+export function repeatsOf(userId, msgId, at = null) {
+  const m = get(`SELECT m.id, m.from_addr, m.thread_id, m.subject_key, m.date, i.action_summary, i.action_items_json FROM messages m JOIN ai_insights i ON i.message_id = m.id
+    WHERE m.id = ? AND m.user_id = ?`, msgId, userId);
+  if (!m?.thread_id && !m?.subject_key) return [];
+  const items = (j) => json(j, []).map((x) => String(x.text || '').trim().toLowerCase()).filter(Boolean).sort().join('\n');
+  const mine = items(m.action_items_json), sum = String(m.action_summary || '').trim().toLowerCase();
+  return all(`SELECT m.id, i.action_summary, i.action_items_json FROM messages m JOIN ai_insights i ON i.message_id = m.id
+      WHERE m.user_id = ? AND (m.thread_id = ? OR (COALESCE(?, '') != '' AND m.subject_key = ?)) AND lower(m.from_addr) = lower(?) AND m.date <= ? AND m.id != ? AND i.needs_action = 1
+        AND ${at ? 'i.dismissed_at = ? AND i.resolved_by IS NULL' : 'i.dismissed_at IS NULL AND ? IS NULL'}`, userId, m.thread_id || '', m.subject_key, m.subject_key, m.from_addr, m.date, m.id, at)
+    .filter((r) => (sum && String(r.action_summary || '').trim().toLowerCase() === sum) || (mine && items(r.action_items_json) === mine))
+    .map((r) => r.id);
 }
 
 /**

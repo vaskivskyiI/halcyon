@@ -176,6 +176,21 @@ export default function Reader({ id, view }) {
     await api.del(`/api/drafts/${draftId}`).catch(toastError);
     load();
   };
+  // Actions requested in this conversation (by others; not expired), oldest first. A reminder repeating an earlier
+  // request shows once (the server settles both together).
+  const sameAsk = (a, b) => a.from.address?.toLowerCase() === b.from.address?.toLowerCase()
+    && ((a.insight.actionSummary && a.insight.actionSummary.toLowerCase() === b.insight.actionSummary?.toLowerCase())
+      || ((a.insight.actionItems || []).length > 0 && (a.insight.actionItems || []).map((x) => x.text.toLowerCase()).sort().join('\n') === (b.insight.actionItems || []).map((x) => x.text.toLowerCase()).sort().join('\n')));
+  const asked = msgs.filter((m) => m.insight?.needsAction && !m.insight.expired && !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent');
+  const actions = asked.filter((m, i) => !asked.slice(i + 1).some((n) => sameAsk(m, n))).map((m) => ({ m, ins: m.insight }));
+  const settleItem = async (mid, text, resolution) => {
+    try {
+      const r = await api.post(`/api/messages/${mid}/action-item`, { text, resolution });
+      setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === mid ? { ...m, insight: r.insight } : m)), current: t.current.id === mid ? { ...t.current, insight: r.insight } : t.current }));
+      window.dispatchEvent(new Event('halcyon:poll'));
+      if (r.insight?.dismissed && resolution) toast('All its actions are settled — removed from Action needed');
+    } catch (e) { toastError(e); }
+  };
   const toggleTask = async (t) => { await api.patch(`/api/tasks/${t.id}`, { done: !t.done }).catch(toastError); load(); };
   const setNeedsReply = async (value) => {
     try { await api.post('/api/messages/needs-reply', { ids: [latest.id], value }); toast(value ? 'Marked as needs reply' : 'Removed “needs reply”'); load(); } catch (e) { toastError(e); }
@@ -310,13 +325,13 @@ export default function Reader({ id, view }) {
 
         {settings.ai.enabled && !isDraftMsg(latest) && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}
-          onDone={async (resolution = 'done', undo = false) => {
+          actions={actions} onItem={settleItem}
+          onDone={async (mid, resolution = 'done', undo = false) => {
             try {
-              // The message whose insight the card shows (the newest one may have none); the server settles its copies and
-              // the conversation's other open items with it.
-              await api.post(`/api/messages/${latest.insight ? latest.id : target.id}/dismiss`, undo ? { dismissed: false, thread: true } : { resolution, thread: true });
+              // That email only (and its copies): the conversation's other actions are settled on their own.
+              await api.post(`/api/messages/${mid}/dismiss`, undo ? { dismissed: false } : { resolution });
               window.dispatchEvent(new Event('halcyon:poll'));
-              toast(undo ? 'Back in Action needed' : resolution === 'skipped' ? 'Noted: not doing it — removed from Action needed' : resolution === 'wrong' ? 'Noted: not an action — the AI will learn from this' : 'Marked as done');
+              toast(undo ? 'Back in Action needed' : resolution === 'skipped' ? 'Noted: not doing it' : resolution === 'wrong' ? 'Noted: not an action — the AI will learn from this' : 'Marked as done');
               load();
             } catch (e) { toastError(e); }
           }} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
@@ -360,7 +375,55 @@ const AI_STATUS_TEXT = {
 
 const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, related, onTask }) {
+const SETTLED = { done: 'Done', skipped: 'Not doing it', wrong: 'Not an action', replied: 'Answered' };
+const shortDate = (t) => new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' });
+
+/**
+ * Every action requested in the conversation (one email can ask for several things, several emails can ask), each
+ * settled on its own: done, or not doing it. An email leaves Action needed and the brief when all its items are settled.
+ */
+function ActionList({ actions, needsReply, onDone, onItem }) {
+  if (!actions?.length) return null;
+  const rows = actions.flatMap(({ m, ins }) => {
+    const items = (ins.actionItems || []).filter((x) => String(x.text || '').trim());
+    const whole = ins.dismissed ? { resolution: ins.resolution, at: ins.resolvedAt, by: ins.resolvedBy } : null;
+    if (!items.length) return [{ m, ins, text: ins.actionSummary || 'see the email', state: whole, single: true }];
+    return items.map((x) => ({ m, ins, text: x.text, due: x.due, state: ins.actionState?.[x.text.trim().toLowerCase()] || whole }));
+  });
+  const open = rows.filter((r) => !r.state).length;
+  const many = actions.length > 1;
+  return (
+    <div className={`notice action-needed action-list ${open ? '' : 'done'}`} style={{ margin: '8px 0 0' }}>
+      <div className="row" style={{ gap: 6 }}><ClipboardCheck size={15} />
+        <b className="grow">{open ? `Action needed${needsReply ? '' : ' (no reply needed)'}` : 'Actions settled'}{rows.length > 1 ? ` · ${open} of ${rows.length} open` : ''}</b></div>
+      {actions.map(({ m, ins }) => {
+        const mine = rows.filter((r) => r.m.id === m.id);
+        const left = mine.filter((r) => !r.state);
+        return (
+          <div key={m.id} className="action-group">
+            {many && <div className="small faint">{m.from.name || m.from.address} · {shortDate(m.date)}</div>}
+            {mine.map((r, i) => (
+              <div key={i} className={`action-item ${r.state ? 'settled' : ''}`}>
+                <span className="grow"><span className="text">{r.text}</span>{r.due && <span className="faint"> · by {shortDate(Date.parse(r.due))}</span>}
+                  {r.state && <span className="faint"> — {SETTLED[r.state.resolution] || 'Done'}{r.state.by ? <> by <a href={`#/mail/unified/${r.state.by}`}>your email</a></> : ''}{r.state.at ? ` ${shortDate(r.state.at)}` : ''}</span>}</span>
+                {r.state
+                  ? <button className="btn sm ghost" title="Put it back in Action needed" onClick={() => (r.single ? onDone(m.id, null, true) : onItem(m.id, r.text, null))}>{r.state.by ? 'Still open' : 'Undo'}</button>
+                  : <>
+                    <button className="btn sm" title="You did it" onClick={() => (r.single ? onDone(m.id, 'done') : onItem(m.id, r.text, 'done'))}>✓ Done</button>
+                    <button className="btn sm ghost" title="You decided not to do it — it stays recorded as not done" onClick={() => (r.single ? onDone(m.id, 'skipped') : onItem(m.id, r.text, 'skipped'))}>Not doing it</button>
+                  </>}
+              </div>))}
+            {left.length > 0 && <div className="row" style={{ gap: 10 }}>
+              {left.length > 1 && <button className="link-btn small" title="Every item of this email is done" onClick={() => onDone(m.id, 'done')}>All done</button>}
+              <button className="link-btn small" title="The AI was wrong: this email asks nothing of you (it learns this for the sender)" onClick={() => onDone(m.id, 'wrong')}>Not an action</button>
+            </div>}
+          </div>);
+      })}
+    </div>
+  );
+}
+
+function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, onItem, actions, related, onTask }) {
   const [openMenu, menuNode] = useMenu();
   const [suggesting, setSuggesting] = useState(false);
   // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
@@ -409,16 +472,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
         <CornerUpLeft size={15} /><span className="grow"><b>Answered</b>{ins.resolvedBy ? <> by <a href={`#/mail/unified/${ins.resolvedBy}`}>your email</a></> : ''}{ins.resolvedAt ? ` of ${new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}` : ''}</span>
         <button className="btn sm ghost" title="Your email did not answer it: put it back in Needs reply" onClick={() => onNeedsReply(true)}>Still needs a reply</button>
       </div>}
-      {ins?.needsAction && !ins.expired && <div className={`notice action-needed ${ins.dismissed ? 'done' : ''}`} style={{ margin: '8px 0 0' }}>
-        <ClipboardCheck size={15} />
-        <span className="grow"><b>{ins.dismissed ? ({ skipped: 'Not doing it', wrong: 'Not an action', replied: 'Answered' }[ins.resolution] || 'Done') : `Action needed${ins.needsReply ? '' : ' (no reply needed)'}`}:</b> {ins.actionSummary || 'see the email'}
-          {ins.dismissed && ins.resolvedAt && <span className="faint"> · {ins.resolvedBy ? <a href={`#/mail/unified/${ins.resolvedBy}`}>by your email</a> : ins.resolution === 'skipped' ? 'decided' : 'marked'} {new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}</span>}</span>
-        {ins.dismissed ? <button className="btn sm ghost" title="Put it back in Action needed" onClick={() => onDone(null, true)}>{ins.resolvedBy ? 'Still open' : 'Undo'}</button> : <>
-          <button className="btn sm" title="You did it — it leaves Action needed and the brief" onClick={() => onDone('done')}>✓ Done</button>
-          <button className="btn sm ghost" title="You decided not to act on it — it leaves Action needed and the brief, and stays recorded as not done" onClick={() => onDone('skipped')}>Not doing it</button>
-          <button className="link-btn small" title="The AI was wrong: this is not something for you to do (it learns this for the sender)" onClick={() => onDone('wrong')}>Not an action</button>
-        </>}
-      </div>}
+      <ActionList actions={actions} needsReply={ins?.needsReply} onDone={onDone} onItem={onItem} />
       {ins?.requests?.map((rq, i) => (
         <div key={i} className="notice" style={{ display: 'block', margin: '8px 0 0' }}>
           <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Forward size={13} /> {requester?.name || requester?.address} asks for an earlier email{rq.description && rq.description !== 'requested email' ? `: ${rq.description}` : ''}</div>

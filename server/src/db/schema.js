@@ -390,4 +390,6 @@ export const migrations = [
     keys_json TEXT NOT NULL, device TEXT, created_at INTEGER, last_ok_at INTEGER
   );
   `,
+  // 31: each action item of an email settled on its own ({ "<item text, lower case>": { resolution, at } }).
+  `ALTER TABLE ai_insights ADD COLUMN action_state_json TEXT;`,
 ];

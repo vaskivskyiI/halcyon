@@ -62,6 +62,7 @@ export function serializeInsight(r) {
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
     needsAction: !!r.needs_action, actionSummary: r.action_summary || null, expectsReply: !!r.expects_reply,
+    actionState: json(r.action_state_json, {}),
     topic: r.topic || null, dismissed: !!r.dismissed_at,
     // How a requested action was settled ('done' | 'skipped') and when.
     resolution: r.dismissed_at ? r.resolution || 'done' : null, resolvedAt: r.dismissed_at || null, resolvedBy: r.resolved_by || null,
@@ -95,7 +96,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   let needsAction = d.needs_action && !quiet ? 1 : 0;
   if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; needsAction = 0; } // analysed after it expired
   // What the user decided by hand survives re-analysis.
-  const prev = get('SELECT needs_reply_user, dismissed_at, resolution, resolved_by FROM ai_insights WHERE message_id = ?', messageId);
+  const prev = get('SELECT needs_reply_user, dismissed_at, resolution, resolved_by, action_state_json FROM ai_insights WHERE message_id = ?', messageId);
   if (prev?.needs_reply_user != null) needsReply = prev.needs_reply_user;
   const dismissed = prev?.dismissed_at ?? (quiet ? now() : null);
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
@@ -111,6 +112,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     String(d.language || '').slice(0, 5), d.is_phishing ? 1 : 0, messageId, model, now(), expires, d.requests ? JSON.stringify(d.requests) : null,
     d.topic || null, dismissed, prev?.needs_reply_user ?? null, needsAction, needsAction ? String(d.action_summary || '').slice(0, 160) || null : null);
   if (prev?.resolution) run('UPDATE ai_insights SET resolution = ?, resolved_by = ? WHERE message_id = ?', prev.resolution, prev.resolved_by, messageId);
+  if (prev?.action_state_json) run('UPDATE ai_insights SET action_state_json = ? WHERE message_id = ?', prev.action_state_json, messageId); // items settled by hand
   // The user's own email that waits for an answer ("Waiting for a reply"; only for mail sent from here or elsewhere).
   if (d.expects_reply !== undefined) run('UPDATE ai_insights SET expects_reply = ? WHERE message_id = ?', d.expects_reply && !quiet ? 1 : 0, messageId);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
@@ -260,9 +262,9 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   let model;
   if (dup) {
     run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary)
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply)
       SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId, m.account_id);

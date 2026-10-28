@@ -553,3 +553,15 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - `GET /api/messages/:id` for a shared space's message without acting as it → 404 with `owner` (members only); api.js
   repeats the request as that space. Links to such mail (reload, Recent with, citations) used to say "no longer here".
 - List: selected row highlight was hidden by the swipe wrapper's background (now only while swiping).
+
+### Each action settled on its own (migration 31)
+- `ai_insights.action_state_json` { "<item text, lower case>": { resolution: done|skipped, at } }, kept across re-analysis
+  and copied to duplicate copies (with resolution, resolved_by, needs_reply_user, expects_reply).
+- `POST /api/messages/:id/action-item { text, resolution|null }`: settles / reopens one item (all copies and repeats);
+  the email is dismissed when every item is settled (all skipped → 'skipped', else 'done') and reopened when one is
+  reopened. Whole-email Done makes its items count as settled; reopening one keeps the others; whole-email Undo clears.
+- Reader: ActionList in the AI card — every email of the conversation that asks something (reminders repeating a request
+  shown once), each item with Done / Not doing it, per email "All done" and "Not an action". Settles that email only.
+- `supersededSql` counts only a newer request that is still open (a different request of the same sender and subject
+  comes back into view when the newer is settled); true repeats (same sender, same conversation or subject, same action
+  or items: `repeatsOf`) are settled and undone together. The brief's Done is per email again.
