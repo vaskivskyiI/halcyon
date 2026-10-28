@@ -20,6 +20,7 @@
   "signingKey": { "path": "./android.keystore", "alias": "halcyon" },
   "appVersionName": "__VERSION__",
   "appVersionCode": "__CODE__",
+  "minSdkVersion": 24,
   "shortcuts": [
     { "name": "New message", "shortName": "Write", "url": "/#/compose", "chosenIconUrl": "https://__HOST__/icon-192.png" },
     { "name": "Calendar", "shortName": "Calendar", "url": "/#/calendar", "chosenIconUrl": "https://__HOST__/icon-192.png" },

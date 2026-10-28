@@ -15,4 +15,6 @@ deploy/pod.options
 /android/*
 !/android/README.md
 !/android/twa-manifest.template.json
+!/android/build-local.sh
 *.keystore
+/dist-apps/

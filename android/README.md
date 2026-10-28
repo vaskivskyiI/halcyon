@@ -15,17 +15,19 @@ On the phone, the app gives you:
 ## Build it (GitHub Actions)
 
 1. **Make a signing key once, and keep it safe.** Every later build must be signed with the same key, or Android
-   will not update the installed app. Create it on any computer that has Java:
+   will not update the installed app. Create it on any computer that has Java. Use the same password for the
+   keystore and the key:
    ```bash
    keytool -genkeypair -keystore halcyon-android.keystore -alias halcyon -keyalg RSA -keysize 2048 -validity 10000
    ```
-2. **Add three repository secrets** in GitHub → Settings → Secrets and variables → Actions:
+   If you already built the app locally (below), you already have a key: use `halcyon-android.keystore` and
+   `password.txt` from the `halcyon-android-signing` folder.
+2. **Add two repository secrets** in GitHub → Settings → Secrets and variables → Actions:
    - `ANDROID_KEYSTORE_BASE64`: the output of `base64 -w0 halcyon-android.keystore`
-   - `ANDROID_KEYSTORE_PASSWORD`: the keystore password
-   - `ANDROID_KEY_PASSWORD`: the key password. With the command above, this is the same as the keystore password.
+   - `ANDROID_KEYSTORE_PASSWORD`: its password
 3. **Run the build.** Go to Actions → **Android app** → Run workflow, and enter your server's address, for example
    `mail.example.com`.
-4. **Install the app.** Download `app-release-signed.apk` from the run's artifacts and install it on the phone. You
+4. **Install the app.** Download `Halcyon-<version>.apk` from the run's artifacts and install it on the phone. You
    will have to allow installing from that source. The `.aab` file is for the Play Store, if you ever publish there.
 5. **Link the app to your server.** The run's summary shows two lines. Add them to your server environment
    (`deploy/halcyon.env` for podman, `.env` for docker compose) and restart the server:
@@ -36,20 +38,27 @@ On the phone, the app gives you:
    The server then publishes `/.well-known/assetlinks.json`, and Android opens the app without a browser address
    bar. Until you do this, the app still works but shows a small address bar at the top.
 
-The server must be reachable over HTTPS at that address from the phone.
+The phone must reach the server over HTTPS at that address, with a certificate the phone trusts. If the certificate
+comes from your own CA, install that CA on the phone: Settings → Security → Encryption & credentials → Install a
+certificate → CA certificate. Without it, Chrome refuses the page, and with it notifications cannot work either.
+Android may also keep showing the address bar with such a certificate. A publicly trusted certificate, for example
+from Let's Encrypt, avoids both problems.
 
 ## Build it locally
 
-You need Node 20 or newer, JDK 17 and the Android SDK. Bubblewrap can download the JDK and SDK itself.
+On Linux or WSL you need Node 20 or newer and python3. `android/build-local.sh` expects these in `~/android-build`:
+- JDK 17 in `jdk/`
+- the Android SDK in `sdk/`, with `cmdline-tools/latest`, `platforms;android-36` and `build-tools;36.1.0`
+- `npm i @bubblewrap/cli` installed in `bw/`
+
+`JAVA_HOME`, `ANDROID_HOME` and `BW` override these paths.
 
 ```bash
-npm i -g @bubblewrap/cli
-cd android
-# Copy twa-manifest.template.json to twa-manifest.json, then replace __HOST__, __NAME__, __PACKAGE__ and
-# __VERSION__, and set appVersionCode to a number that grows with each build.
-bubblewrap update --manifest=./twa-manifest.json
-bubblewrap build
+HOST=mail.example.com ./android/build-local.sh
 ```
+
+On the first run, the script creates the signing key in `../halcyon-android-signing/`, next to the checkout. Keep
+that folder. It writes `dist-apps/Halcyon-<version>.apk` and `.aab`, and prints the two server lines from step 5.
 
 ## Windows
 
