@@ -5,6 +5,7 @@ import { regroupConversations } from './mail/store.js';
 import { wakeSnoozed } from './mail/actions.js';
 import { listRange } from './calendar/repo.js';
 import { syncCalDav } from './calendar/caldav.js';
+import { dropStarters } from './bootstrap.js';
 import { syncCardDav } from './contacts/carddav.js';
 import { enqueue } from './ai/queue.js';
 import { backfillAnalysis, purgeMemory } from './mail/pipeline.js';
@@ -45,6 +46,7 @@ export function syncDav(account) {
         log.warn(`DAV sync ${account.email}: ${out.error}`);
         notify(account.user_id, 'dav:error', { accountId: account.id, error: out.error });
       }
+      if (out.calendars || out.books) dropStarters(account.user_id);
       notify(account.user_id, 'calendar:changed', {});
       notify(account.user_id, 'contacts:changed', {});
     } finally {

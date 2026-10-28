@@ -64,10 +64,11 @@ export default function MailView({ route }) {
 
 /** Unread conversations: the important ones stand out, the rest is shown faded next to them. */
 function UnreadCount({ n, important = 0, title = 'Unread conversations' }) {
+  const kind = store.get().folders.counts?.emphasis || 'important';
   if (!n) return null;
   const rest = n - important;
   return (
-    <span className="count-pair" title={important ? `${important} important unread · ${rest} other unread` : title}>
+    <span className="count-pair" title={important ? `${important} ${kind} unread · ${rest} other unread` : title}>
       {important > 0 && <span className="count imp">{important}</span>}
       {rest > 0 && <span className="count rest">{rest}</span>}
     </span>);
@@ -294,9 +295,13 @@ function MessageList({ view, openId, onMenu }) {
   const searchRef = useRef();
   const anchor = useRef(null);
   const threaded = settings.ui.conversationView;
+  // Each conversation (or message) once — pages and refreshes can bring another message of a conversation already shown.
+  const dedupe = (list) => { const seen = new Set(); return list.filter((m) => { const k = `${m.owner || ''}|${threaded && m.threadId ? m.threadId : `#${m.id}`}`; if (seen.has(k)) return false; seen.add(k); return true; }); };
   // Sort order is a per-device choice; newest first pages by date, other orders by offset.
   const [sort, setSortState] = useState(() => { try { return JSON.parse(localStorage.getItem('halcyon.sort')) || { key: 'date', dir: 'desc' }; } catch { return { key: 'date', dir: 'desc' }; } });
-  const setSort = (s) => { setSortState(s); try { localStorage.setItem('halcyon.sort', JSON.stringify(s)); } catch { /* private mode */ } };
+  // A new order puts the open message where it belongs in it (not kept on top): it is looked up and scrolled to.
+  const seekOpen = useRef(0), seekLive = useRef(false);
+  const setSort = (s) => { seekOpen.current = 6; seekLive.current = false; setSortState(s); try { localStorage.setItem('halcyon.sort', JSON.stringify(s)); } catch { /* private mode */ } };
   const byDate = sort.key === 'date' && sort.dir === 'desc';
 
   // A folder of one account puts that account in focus (new mail defaults to it).
@@ -321,13 +326,15 @@ function MessageList({ view, openId, onMenu }) {
     return p;
   }, [view, effectiveTab, activeQuery, threaded, sort]);
 
-  // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one.
+  // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one —
+  // not in the AI views: an action done or a reply sent takes it off Action needed / Needs reply at once. A
+  // conversation already in the new list (with another of its messages) is not added a second time.
   const openRef = useRef(openId);
   const keepOpen = (next, cur) => {
     const id = openRef.current;
-    if (!id || next.some((m) => m.id === id)) return next;
+    if (!id || next.some((m) => m.id === id) || ['needsaction', 'needsreply', 'waiting', 'important', 'snoozed'].includes(view)) return next;
     const i = cur.findIndex((m) => m.id === id);
-    if (i < 0) return next;
+    if (i < 0 || (threaded && cur[i].threadId && next.some((m) => m.threadId === cur[i].threadId))) return next;
     const out = [...next];
     out.splice(Math.min(i, out.length), 0, cur[i]);
     return out;
@@ -347,7 +354,8 @@ function MessageList({ view, openId, onMenu }) {
       const before = append && items.length && byDate ? items[items.length - 1].date : null;
       const r = await api.get(`/api/messages?${params(before, append ? items.length : 0)}`);
       setItems((cur) => {
-        const next = append ? [...cur, ...r.items] : keepOpen(r.items, cur);
+        const next = append ? dedupe([...cur, ...r.items]) : seekOpen.current ? r.items : keepOpen(r.items, cur);
+        if (!append && seekOpen.current) seekLive.current = true;
         if (!activeQuery) listCache.set(cacheKey, { items: next, hasMore: r.hasMore, scroll: listCache.get(cacheKey)?.scroll || 0 });
         return next;
       });
@@ -376,6 +384,16 @@ function MessageList({ view, openId, onMenu }) {
     loadTabCounts();
   }, [params]);
 
+  // After a new order: the open message is found (more pages loaded, a few at most) and scrolled into view.
+  useEffect(() => {
+    if (!seekOpen.current || !seekLive.current || loading || !openId) return;
+    if (items.some((m) => m.id === openId)) {
+      seekOpen.current = 0;
+      requestAnimationFrame(() => listRef.current?.querySelector(`.msg-row[data-id="${openId}"]`)?.scrollIntoView({ block: 'center' }));
+    } else if (hasMore && --seekOpen.current > 0) load(true);
+    else seekOpen.current = 0;
+  }, [items, loading]);
+
   // The tab counts (Focused / Other / All) follow every change to mail — reading a conversation opened in Focused
   // also reads its messages counted under Other — and every refresh of the list.
   useEffect(() => {
@@ -386,8 +404,23 @@ function MessageList({ view, openId, onMenu }) {
     return () => { clearTimeout(t); kinds.forEach((k) => window.removeEventListener(k, later)); };
   }, [view, activeQuery]);
 
-  // Live updates.
+  // Live updates: the first page is asked again and merged with what is shown (rows further down stay).
   const reloadTimer = useRef();
+  const refresh = (ms = 300) => {
+    clearTimeout(reloadTimer.current);
+    reloadTimer.current = setTimeout(async () => {
+      const r = await api.get(`/api/messages?${params(null)}`).catch(() => null);
+      if (r) setItems((cur) => keepOpen(dedupe([...r.items, ...cur.slice(r.items.length).filter((x) => !r.items.some((y) => y.id === x.id))].slice(0, Math.max(cur.length, r.items.length))), cur));
+    }, ms);
+  };
+  // Our own changes (read, moved, flagged, an action done, a reply marked…): the list follows at once, and once more
+  // when the server has applied follow-up work.
+  useEffect(() => {
+    let later = null;
+    const h = () => { refresh(150); clearTimeout(later); later = setTimeout(() => refresh(0), 2500); };
+    window.addEventListener('halcyon:mutated', h);
+    return () => { clearTimeout(later); window.removeEventListener('halcyon:mutated', h); };
+  }, [params]);
   // Periodic refresh when the live connection is down (see App), and after "Sync now".
   useEffect(() => {
     const h = () => { clearTimeout(reloadTimer.current); reloadTimer.current = setTimeout(() => load(false), 200); };
@@ -397,18 +430,12 @@ function MessageList({ view, openId, onMenu }) {
 
   useEffect(() => onEvent((e) => {
     // A finished analysis can move a message between Focused and Other: re-query those tabs.
-    if (e.type === 'ai:insight' && (effectiveTab === 'focused' || effectiveTab === 'other')) {
-      clearTimeout(reloadTimer.current);
-      reloadTimer.current = setTimeout(async () => { const r = await api.get(`/api/messages?${params(null)}`).catch(() => null); if (r) setItems((cur) => keepOpen(r.items, cur)); }, 800);
-    }
+    // A finished analysis can move a message between Focused and Other, or in / out of the AI views: re-query those.
+    if (e.type === 'ai:insight' && (effectiveTab === 'focused' || effectiveTab === 'other' || ['needsaction', 'needsreply', 'important', 'waiting'].includes(view))) refresh(800);
     if (['mail:changed', 'folder:synced', 'mail:unsnoozed', 'mail:new'].includes(e.type)) {
       if (e.type === 'folder:synced' && !e.payload.newCount) return;
       window.dispatchEvent(new Event('halcyon:tabcounts'));
-      clearTimeout(reloadTimer.current);
-      reloadTimer.current = setTimeout(async () => {
-        const r = await api.get(`/api/messages?${params(null)}`).catch(() => null);
-        if (r) setItems((cur) => keepOpen([...r.items, ...cur.slice(r.items.length).filter((x) => !r.items.some((y) => y.id === x.id))].slice(0, Math.max(cur.length, r.items.length)), cur));
-      }, 400);
+      refresh(400);
     }
     if (e.type === 'ai:insight') {
       const i = e.payload.insight;
@@ -576,7 +603,7 @@ function MessageList({ view, openId, onMenu }) {
         </div>
         <form className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); }}>
           <Search size={15} />
-          <input ref={searchRef} className="input" placeholder="Search mail — try from:anna has:attachment or plain words" value={query} onChange={(e) => { setQuery(e.target.value); if (!e.target.value) setActiveQuery(''); }} />
+          <input ref={searchRef} className="input" placeholder='Search mail — words, or from:anna received:"last week" hasattachments:yes' value={query} onChange={(e) => { setQuery(e.target.value); if (!e.target.value) setActiveQuery(''); }} />
           <button type="button" className={`icon-btn ${filtersOpen ? 'active' : ''}`} style={{ position: 'absolute', right: query ? 28 : 2, top: 1 }} title="Filters" onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={15} /></button>
           {query && <button type="button" className="icon-btn" style={{ position: 'absolute', right: 2, top: 1 }} onClick={() => { setQuery(''); setActiveQuery(''); }}><X size={15} /></button>}
         </form>
@@ -667,7 +694,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
   };
   return (
     <div className={`swipe-wrap ${dx > 0 ? `go-right ${dx > 90 ? 'armed' : ''}` : dx < 0 ? `go-left ${dx < -90 ? 'armed' : ''}` : ''}`} data-right={SWIPES[right]} data-left={SWIPES[left]}>
-    <div className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={(e) => { if (Math.abs(dx) > 5) return; onClick(e); }} onContextMenu={onContextMenu} draggable
+    <div data-id={m.id} className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={(e) => { if (Math.abs(dx) > 5) return; onClick(e); }} onContextMenu={onContextMenu} draggable
       {...swipe} style={dx ? { transform: `translateX(${dx}px)`, transition: 'none' } : undefined}
       onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'copyMove'; }}>
       <div onClick={(e) => { e.stopPropagation(); onCheck(); }} style={{ cursor: 'pointer' }}>
@@ -806,9 +833,13 @@ function AiApprovals() {
 const FILTER_CATS = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsletter', 'promotion', 'social', 'notification', 'security', 'calendar', 'support', 'other'];
 
 /** Filter controls for search: they edit the operators in the query (category:, topic:, is:, has:, newer_than:). */
+const SEARCH_HELP = [['from:anna', 'sender'], ['to:', 'recipient'], ['cc:', ''], ['participants:', 'anyone on it'], ['subject:(budget plan)', ''], ['body:', 'text'],
+  ['hasattachments:yes', ''], ['attachments:report.pdf', 'file name'], ['isread:no', ''], ['isflagged:yes', ''], ['received:today', '/ yesterday / "this week" / "last month" / 2026-01-15 / >=1.3.2026 / 2026-01-01..2026-02-01'],
+  ['sent:', 'same as received'], ['importance:high', ''], ['folder:Projects', ''], ['category:', 'AI category'], ['is:needsreply', ''], ['is:action', '']];
+
 function SearchFilters({ query, onChange }) {
   const folders = store.use((s) => s.folders);
-  const tokens = query.match(/-?\w+:("[^"]*"|\S+)|"[^"]*"|\S+/g) || [];
+  const tokens = query.match(/-?\w+:(\([^)]*\)|"[^"]*"|\S+)|"[^"]*"|\S+/g) || [];
   const get = (key) => { const t = tokens.find((x) => x.toLowerCase().startsWith(`${key}:`)); return t ? t.slice(key.length + 1).replace(/^"|"$/g, '') : ''; };
   const has = (tok) => tokens.some((x) => x.toLowerCase() === tok);
   const set = (key, value) => {
@@ -831,6 +862,11 @@ function SearchFilters({ query, onChange }) {
       </select>
       {[['is:needsreply', 'Needs reply'], ['is:action', 'Action needed'], ['is:done', 'Done'], ['is:skipped', 'Not doing it'], ['is:unread', 'Unread'], ['has:attachment', 'Attachment']].map(([tok, label]) => (
         <button key={tok} type="button" className={`chip clickable ${has(tok) ? 'on' : ''}`} onClick={() => toggle(tok)}>{label}</button>))}
+      <details className="search-help small">
+        <summary className="faint">Search keywords</summary>
+        <div className="muted">As in Outlook: {SEARCH_HELP.map(([k, d]) => <span key={k}><code>{k}</code> {d}; </span>)}
+          words in quotes match as a phrase, <code>NOT</code> or <code>-</code> excludes, <code>OR</code> finds either word.</div>
+      </details>
     </div>
   );
 }

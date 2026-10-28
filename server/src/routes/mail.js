@@ -127,11 +127,14 @@ export default async function mailRoutes(app) {
     const folderIds = out.flatMap((a) => a.folders.map((f) => f.id));
     const unreadByFolder = new Map(folderIds.length ? all(`SELECT folder_id AS id, COUNT(${threaded ? 'DISTINCT thread_id' : '*'}) AS n FROM messages
       WHERE folder_id IN (${folderIds.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL GROUP BY folder_id`, ...folderIds).map((r) => [r.id, r.n]) : []);
-    // Of those, the important ones (as in the Important view): shown stronger than the rest.
-    const importantByFolder = new Map(folderIds.length ? all(`SELECT m.folder_id AS id, COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id
-      WHERE m.folder_id IN (${folderIds.map(() => '?').join(',')}) AND m.is_read = 0 AND m.snoozed_until IS NULL AND i.priority >= 70 AND i.dismissed_at IS NULL
-        AND (i.expires_at IS NULL OR i.expires_at > ?) AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} GROUP BY m.folder_id`, ...folderIds, Date.now()).map((r) => [r.id, r.n]) : []);
+    // Of those, the ones shown stronger than the rest: with Focused Inbox on, the focused ones (the same number as
+    // the Focused tab); otherwise the important ones (as in the Important view).
+    const importantSql = getSettings(uid).mail.focusedInbox ? FOCUSED
+      : `i.priority >= 70 AND i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${Date.now()}) AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE}`;
+    const importantByFolder = new Map(folderIds.length ? all(`SELECT m.folder_id AS id, COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id
+      WHERE m.folder_id IN (${folderIds.map(() => '?').join(',')}) AND m.is_read = 0 AND m.snoozed_until IS NULL AND ${importantSql} GROUP BY m.folder_id`, ...folderIds).map((r) => [r.id, r.n]) : []);
     for (const a of out) for (const f of a.folders) { f.unread = unreadByFolder.get(f.id) || 0; f.important = Math.min(f.unread, importantByFolder.get(f.id) || 0); }
+    counts.emphasis = getSettings(uid).mail.focusedInbox ? 'focused' : 'important';
     counts.unifiedImportant = out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox')).reduce((n, f) => n + f.important, 0);
     // Dynamic AI views (topics, AI categories, own categories) are the costly part of this list, which is asked for
     // often: kept for 30 s, and dropped at once when mail changes (read, moved, new) — not for every AI result.
@@ -587,7 +590,9 @@ export default async function mailRoutes(app) {
         const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', id);
         if (!ins) continue;
         const state = json(ins.action_state_json, {});
-        const items = json(ins.action_items_json, []).map((x) => String(x.text || '').trim().toLowerCase()).filter(Boolean);
+        // No separate items: the action summary is the one item (as the reader shows it).
+        const listed = json(ins.action_items_json, []).map((x) => String(x.text || '').trim().toLowerCase()).filter(Boolean);
+        const items = listed.length ? listed : [String(ins.action_summary || '').trim().toLowerCase()].filter(Boolean);
         // Settled by its items (or reopened): only touch dismissal the items decide, not one the user or a reply made.
         const byItems = !ins.dismissed_at || (['done', 'skipped'].includes(ins.resolution) && !ins.resolved_by);
         // The whole email was settled at once: its items count as settled the same way (reopening one keeps the others).
@@ -830,13 +835,14 @@ export default async function mailRoutes(app) {
   app.get('/api/search/semantic', async (req) => {
     const sc = scope(req.user.id, reqSpace(req));
     const f = parseQuery(req.query.q);
-    if (!f.terms.length) return { items: [] };
-    const query = await embedQuery(req.user.id, f.terms.join(' '));
+    const words = [...f.terms.filter((t) => t !== 'OR'), ...f.bodyTerms];
+    if (!words.length) return { items: [] };
+    const query = await embedQuery(req.user.id, words.join(' '));
     if (!query) return { items: [], unavailable: true };
     const exclude = new Set(ids(req.query.exclude));
     const hits = messageHits(req.user.id, query, 40, sc).filter((h) => !exclude.has(h.id) && h.score > 0.3);
     if (!hits.length) return { items: [] };
-    const { where, params } = buildWhere(req.user.id, { ...f, terms: [] }, sc);
+    const { where, params } = buildWhere(req.user.id, { ...f, terms: [], bodyTerms: [] }, sc);
     const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
     const byId = new Map(rows.map((r) => [r.id, r]));
     const open = openChecker(req.user.id);

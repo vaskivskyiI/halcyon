@@ -466,3 +466,7 @@ div.provider { cursor: default; background: var(--panel-2); }
 .nav-item .count-pair .count { margin-left: 0; }
 .nav-item .count.imp, .nav-item.active .count.imp { color: #fff; background: var(--accent); border-radius: 999px; padding: 0 6px; font-weight: 700; }
 .nav-item .count.rest, .nav-item.active .count.rest { color: var(--text-3); font-weight: 500; }
+/* Search keywords (Outlook / Gmail operators) under the search filters */
+.search-help { width: 100%; margin: 4px 0 0; line-height: 1.6; }
+.search-help summary { cursor: pointer; }
+.search-help code { font-size: 11px; padding: 0 3px; border-radius: 4px; background: var(--panel-2); }

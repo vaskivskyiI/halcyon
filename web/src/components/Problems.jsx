@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, RefreshCw, Send, FileText, X, CloudUpload, Settings, Trash2 } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Send, FileText, X, CloudUpload, Settings, Trash2, EyeOff } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { toast, toastError, navigate } from '../util.js';
@@ -35,6 +35,7 @@ export const davFound = (d) => [d?.calendars != null && `${d.calendars} calendar
 
 export default function Problems() {
   const [problems, setProblems] = useState([]);
+  const [hidden, setHidden] = useState(0);
   const [busy, setBusy] = useState(null);
   const open = store.use((s) => s.problemsOpen);
   const known = useRef(null);
@@ -42,6 +43,9 @@ export default function Problems() {
 
   const load = () => api.get('/api/status/problems').then((r) => {
     setProblems(r.problems);
+    setHidden(r.hidden || 0);
+    // Nothing (left) to show: the panel goes away by itself — no "all is well" message to close.
+    if (!r.problems.length) store.set({ problemsOpen: false });
     // Announce problems that appeared while the app is open (not the ones already there when it loaded).
     if (known.current) {
       for (const p of r.problems) {
@@ -72,8 +76,12 @@ export default function Problems() {
     try { const msg = await ACTIONS[name].run(p); if (typeof msg === 'string') toast(msg); } catch (e) { toastError(e); } finally { setBusy(null); soon(1500); }
   };
 
+  // Put problems aside (all, or one): hidden until they change or come back; nothing is retried, dropped or deleted.
+  const dismiss = (keys) => api.post('/api/status/problems/dismiss', keys ? { keys } : {}).then(load).catch(toastError);
+  const restore = () => api.post('/api/status/problems/dismiss', { restore: true }).then(load).catch(toastError);
+
   const errors = problems.filter((p) => p.level === 'error').length;
-  if (!problems.length && !open) return null;
+  if (!problems.length) return null;
   return <>
     {problems.length > 0 && (
       <button className={`problems-btn ${errors ? 'error' : 'warn'}`} title={`${problems.length} problem${problems.length > 1 ? 's' : ''} with mail servers or sending`} aria-label="Problems" onClick={() => store.set({ problemsOpen: !open })}>
@@ -82,11 +90,13 @@ export default function Problems() {
     )}
     {open && (
       <div className="problems-panel" role="dialog" aria-label="Problems">
-        <div className="row"><b className="grow">Mail servers and sending</b><button className="icon-btn" onClick={() => store.set({ problemsOpen: false })} aria-label="Close"><X size={16} /></button></div>
-        {!problems.length && <div className="small muted">Everything works — no problems right now.</div>}
+        <div className="row"><b className="grow">Mail servers and sending</b>
+          {problems.length > 1 && <button className="btn sm" title="Hide all these problems until they change or happen again — nothing is retried or deleted" onClick={() => dismiss()}><EyeOff size={13} /> Dismiss all</button>}
+          <button className="icon-btn" onClick={() => store.set({ problemsOpen: false })} aria-label="Close"><X size={16} /></button></div>
         {problems.map((p) => (
           <div key={p.key} className={`problem ${p.level}`}>
-            <div className="t">{p.title}</div>
+            <div className="row" style={{ alignItems: 'flex-start' }}><div className="t grow">{p.title}</div>
+              <button className="icon-btn" title="Dismiss — hide until it changes or happens again" aria-label="Dismiss" onClick={() => dismiss([p.key])}><X size={13} /></button></div>
             {p.text && <div className="small muted">{p.text}</div>}
             {p.actions?.length > 0 && <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
               {p.actions.map((a) => { const A = ACTIONS[a]; return A && (
@@ -95,6 +105,7 @@ export default function Problems() {
             </div>}
           </div>
         ))}
+        {hidden > 0 && <button className="btn ghost sm" onClick={restore}>Show {hidden} dismissed</button>}
       </div>
     )}
   </>;

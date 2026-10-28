@@ -415,4 +415,10 @@ export const migrations = [
   ALTER TABLE accounts ADD COLUMN tls_ca TEXT;
   ALTER TABLE accounts ADD COLUMN tls_insecure INTEGER DEFAULT 0;
   `,
+  // 35: problems the user put aside (hidden while they stay the same; forgotten once the problem is gone).
+  `
+  CREATE TABLE problem_dismissals (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, key TEXT NOT NULL, sig TEXT, at INTEGER, PRIMARY KEY (user_id, key)
+  );
+  `,
 ];

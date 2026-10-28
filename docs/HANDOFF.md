@@ -632,3 +632,23 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Accounts: `tls_ca` (PEM, added to Node's roots) / `tls_insecure`; used by IMAP, SMTP (tlsOf) and DAV (undici Agent
   via tsdav's `fetch`). Certificate errors explain what to do (certHint, davReason). Settings → Accounts: "Server
   certificate" in the mail editor and the calendar / contacts dialog. HALCYON_TLS_INSECURE=1 still works server-wide.
+
+### Counts, lists that follow changes, Outlook search, problems put aside (migration 35)
+- Folder counts: with Focused Inbox on, `f.important` / `counts.unifiedImportant` are the *focused* unread (same rule
+  as the Focused tab, `FOCUSED` in routes/mail.js), otherwise priority ≥ 70; `counts.emphasis` says which.
+- Mail list (MailView): reloads its first page on `halcyon:mutated` (own changes; again after 2.5 s) and on AI results in
+  the AI views; rows are de-duplicated per conversation (`dedupe`). The open message is kept in the list only for the
+  read-state tabs, not in Action needed / Needs reply / Waiting / Important / Snoozed, and never next to another
+  message of its conversation. A new sort order loads pages until the open message is found and scrolls to it.
+- action-item: an email without listed items has its action summary as its one item.
+- Search (search.js): Outlook keywords mapped onto the Gmail-style ones — cc:, bcc:, participants:, body:,
+  subject:(a b), hasattachments:yes/no, attachments:<name>, isread:, isflagged:, received:/sent: (today, yesterday,
+  this/last week|month|year, dates incl. 15.1.2026, >=, <, a..b — `dateRange()`), importance:, folder:; NOT / -word
+  (as an FTS NOT IN), OR between words, "from: x" tolerated. Help under the search filters.
+- Problems: `problem_dismissals` (user, key, sig = level + error text). POST /api/status/problems/dismiss {keys?} /
+  {restore}; GET hides matching ones (`hidden` count, `?all=1`); a dismissal is forgotten once its problem is gone.
+  Nothing is retried, dropped or deleted. The panel closes itself when nothing is left (no "all is well" message).
+- Starter calendar / address book (bootstrap `dropStarters`): the empty local "Calendar" / "Contacts" are dropped once
+  a synced CalDAV / CardDAV one exists (after each DAV sync); its origin reads "Kept in Halcyon only". The default
+  calendar can be removed when another writable one takes over. Diagnostics page crash (api.js read its numeric
+  `folders` as a list) fixed.

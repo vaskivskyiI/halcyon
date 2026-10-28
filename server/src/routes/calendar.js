@@ -95,8 +95,12 @@ export default async function calendarRoutes(app) {
   app.delete('/api/calendars/:id', async (req, reply) => {
     const c = repo.userCalendar(req.user.id, req.params.id);
     if (!c) return httpError(reply, 404, 'Not found');
-    if (c.is_default && c.source === 'local') return httpError(reply, 400, 'Cannot delete the default calendar');
+    // The default calendar can go when another writable one takes its place (which then becomes the default).
+    const next = c.is_default ? get('SELECT id FROM calendars WHERE user_id = ? AND id != ? AND readonly = 0 ORDER BY id LIMIT 1', req.user.id, c.id) : null;
+    if (c.is_default && !next) return httpError(reply, 400, 'This is your only calendar you can add events to — add another one first');
     run('DELETE FROM calendars WHERE id = ?', c.id);
+    if (next) run('UPDATE calendars SET is_default = 1 WHERE id = ?', next.id);
+    notify(req.user.id, 'calendar:changed', {});
     return { ok: true };
   });
 

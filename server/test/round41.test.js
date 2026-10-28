@@ -81,6 +81,8 @@ test('unread counts tell the important ones apart', async () => {
     if (priority != null) db.prepare("INSERT INTO ai_insights (message_id, priority, category, created_at) VALUES (?, ?, 'work', ?)").run(id, priority, Date.now());
   };
   add(90); add(80); add(30); add(null); add(95, 1);
+  // Without Focused Inbox the strong count is the important mail (with it: the Focused count, see round42).
+  await api('PATCH', '/api/settings', { mail: { focusedInbox: false } });
   const f = await api('GET', '/api/folders');
   const box = f.accounts.find((a) => a.accountId === acc).folders.find((x) => x.id === inbox);
   assert.deepEqual([box.unread, box.important], [4, 2]);

@@ -11,7 +11,7 @@ function originOf(x) {
   if (x.email) return `${x.email} · ${x.source === 'caldav' || x.source === 'carddav' ? 'synced' : 'from this account'}`;
   if (x.sourceName || x.sourceUrl) return `${x.sourceName || host(x.sourceUrl)} · ${x.readonly ? 'read-only' : 'synced'}`;
   if (x.url) return `${host(x.url)} · ${x.readonly ? 'subscribed (read-only)' : 'synced'}`;
-  return 'Kept in Halcyon';
+  return 'Kept in Halcyon only (on no other server)';
 }
 
 export default async function spaceRoutes(app) {

@@ -130,7 +130,7 @@ export default function CalendarView() {
         <MiniMonth date={date} onPick={(d) => { setDate(d); if (view === 'month') setView('day'); }} weekStart={weekStart} />
         <div className="sidebar-scroll">
           <div className="nav-section" style={{ cursor: 'default' }}><span className="grow">Calendars</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="Add calendar" onClick={() => setNewCal(true)}><Plus size={13} /></button></div>
-          {calendars.map((c) => <CalendarItem key={c.id} c={c} reload={() => { loadCals(); load(); }} />)}
+          {calendars.map((c) => <CalendarItem key={c.id} c={c} calendars={calendars} reload={() => { loadCals(); load(); }} />)}
           {hasInfo && <label className="row small muted" style={{ padding: '6px 10px' }} title="Calendars set to “Just for information”">
             <input type="checkbox" checked={!hideInfo} onChange={toggleInfo} /> Show informational events</label>}
         </div>
@@ -157,7 +157,7 @@ export default function CalendarView() {
   );
 }
 
-function CalendarItem({ c, reload }) {
+function CalendarItem({ c, calendars, reload }) {
   const [openMenu, menuNode] = useMenu();
   const fileRef = useRef();
   return (
@@ -172,7 +172,9 @@ function CalendarItem({ c, reload }) {
       !c.readonly && { label: 'Import .ics', icon: Upload, onClick: () => fileRef.current.click() },
       c.source !== 'local' && { label: 'Refresh', icon: RefreshCw, onClick: () => api.post(`/api/calendars/${c.id}/refresh`).then(reload) },
       c.sourceId ? { label: 'Remove this CalDAV server (all its calendars)', icon: Trash2, danger: true, onClick: () => confirm('Remove all calendars from this server from Halcyon? Nothing on that server is changed.') && api.del(`/api/calendar-sources/${c.sourceId}`).then(reload) }
-        : !c.isDefault && { label: 'Remove calendar', icon: Trash2, danger: true, onClick: () => confirm(c.readonly ? `Unsubscribe from ${c.name}?` : `Remove ${c.name}?`) && api.del(`/api/calendars/${c.id}`).then(reload) },
+        : (!c.isDefault || calendars.some((o) => o.id !== c.id && !o.readonly)) && { label: 'Remove calendar', icon: Trash2, danger: true,
+          onClick: () => confirm(c.readonly ? `Unsubscribe from ${c.name}?` : c.source === 'local' ? `Delete ${c.name} and its events? This calendar is kept in Halcyon only, so its events are not anywhere else.` : `Remove ${c.name}?`)
+            && api.del(`/api/calendars/${c.id}`).then(reload).catch(toastError) },
     ])}>
       <input type="checkbox" checked={c.enabled} style={{ accentColor: c.color }} onChange={(e) => api.patch(`/api/calendars/${c.id}`, { enabled: e.target.checked }).then(reload)} />
       <span className="truncate grow" title={c.readonly ? `${c.name} — read-only${c.lastSyncAt ? `, refreshed ${new Date(c.lastSyncAt).toLocaleString()}` : ''}` : c.name}>{c.name}</span>

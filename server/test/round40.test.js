@@ -86,7 +86,7 @@ test('address books are renamed and one is the default; calendars and books say 
   const books = await api('GET', '/api/address-books');
   assert.deepEqual(books.filter((x) => x.isDefault).map((x) => x.name), ['Family']);
   const sp = await api('GET', '/api/spaces');
-  assert.equal(sp.addressBooks.find((x) => x.id === b).origin, 'Kept in Halcyon');
+  assert.equal(sp.addressBooks.find((x) => x.id === b).origin, 'Kept in Halcyon only (on no other server)');
   assert.ok(sp.calendars.every((x) => x.origin));
   const c = await api('POST', '/api/contacts', { displayName: 'Bob' });
   assert.equal(c.addressBookId, b, 'new contacts go to the default address book');

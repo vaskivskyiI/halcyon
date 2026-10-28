@@ -1,4 +1,4 @@
-import { get, all, run, update, now, json } from '../db/index.js';
+import { get, all, run, update, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { userAccounts, userAccount, serializeAccount, accountFields, createAccount, ACCOUNT_COLS } from '../accounts.js';
@@ -75,9 +75,29 @@ export default async function accountRoutes(app) {
   // Everything that currently needs the user's attention (shown as the red indicator): mail server connections,
   // sending, server changes that failed, sent mail that is not on the server yet. Never silent.
   app.get('/api/status/problems', { preHandler: requireUser }, async (req) => {
+    const out = currentProblems(req.user.id);
+    // Put aside by the user: hidden while unchanged; a problem that went away is forgotten, so it shows when it returns.
+    const put = new Map(all('SELECT key, sig FROM problem_dismissals WHERE user_id = ?', req.user.id).map((d) => [d.key, d.sig]));
+    for (const k of put.keys()) if (!out.some((p) => p.key === k)) run('DELETE FROM problem_dismissals WHERE user_id = ? AND key = ?', req.user.id, k);
+    const shown = req.query.all ? out : out.filter((p) => put.get(p.key) !== problemSig(p));
+    return { problems: shown, hidden: out.length - out.filter((p) => put.get(p.key) !== problemSig(p)).length };
+  });
+  // Hide problems (the given ones, or all shown now) — nothing is retried, dropped or deleted; { restore: true } shows them again.
+  app.post('/api/status/problems/dismiss', { preHandler: requireUser }, async (req) => {
+    const b = req.body || {};
+    if (b.restore) { run('DELETE FROM problem_dismissals WHERE user_id = ?', req.user.id); return { ok: true }; }
+    const keys = Array.isArray(b.keys) ? new Set(b.keys.map(String)) : null;
+    const list = currentProblems(req.user.id).filter((p) => !keys || keys.has(p.key));
+    tx(() => { for (const p of list) run('INSERT OR REPLACE INTO problem_dismissals (user_id, key, sig, at) VALUES (?, ?, ?, ?)', req.user.id, p.key, problemSig(p), now()); });
+    return { ok: true, dismissed: list.length };
+  });
+  // Same problem = same level and error text (titles carry retry times that change).
+  const problemSig = (p) => `${p.level}|${p.text || ''}`;
+
+  function currentProblems(userId) {
     const out = [];
     const t = now();
-    for (const a of userAccounts(req.user.id)) {
+    for (const a of userAccounts(userId)) {
       const who = a.email;
       const st = syncManager.status(a.id);
       if (a.sync_enabled && !st?.connected && (a.sync_state === 'error' || st?.lastError)) {
@@ -111,19 +131,19 @@ export default async function accountRoutes(app) {
         a.id, t - 120e3, a.id).n;
       if (unsaved) out.push({ key: `unsaved:${a.id}`, level: 'error', accountId: a.id, title: `${who}: ${unsaved} sent message${unsaved > 1 ? 's are' : ' is'} not saved on the server`, text: 'They were sent, but other mail apps will not show them in Sent.', actions: ['save-unsaved'] });
     }
-    for (const a of userAccounts(req.user.id)) {
+    for (const a of userAccounts(userId)) {
       const d = davStatus.get(a.id);
       if (d?.error && (a.caldav_url || a.carddav_url)) out.push({ key: `dav:${a.id}`, level: 'error', accountId: a.id, title: `${a.email}: calendars / contacts are not synced`, text: d.error, at: d.at, actions: ['retry-dav'] });
     }
-    for (const c of all('SELECT id, name, source, sync_error FROM calendars WHERE user_id = ? AND sync_error IS NOT NULL', req.user.id)) {
+    for (const c of all('SELECT id, name, source, sync_error FROM calendars WHERE user_id = ? AND sync_error IS NOT NULL', userId)) {
       out.push({ key: `cal:${c.id}`, level: c.source === 'caldav' ? 'error' : 'warn', calendarId: c.id,
         title: c.source === 'caldav' ? `Calendar “${c.name}”: changes not saved on the server` : `Calendar “${c.name}” could not be refreshed`, text: c.sync_error, actions: ['refresh-calendar'] });
     }
-    for (const s of all('SELECT id, name, error FROM calendar_sources WHERE user_id = ? AND error IS NOT NULL', req.user.id)) {
+    for (const s of all('SELECT id, name, error FROM calendar_sources WHERE user_id = ? AND error IS NOT NULL', userId)) {
       out.push({ key: `calsrc:${s.id}`, level: 'warn', sourceId: s.id, title: `Calendars from “${s.name}” could not be refreshed`, text: s.error, actions: ['refresh-source'] });
     }
-    return { problems: out.sort((x, y) => (x.level === y.level ? 0 : x.level === 'error' ? -1 : 1)) };
-  });
+    return out.sort((x, y) => (x.level === y.level ? 0 : x.level === 'error' ? -1 : 1));
+  }
 
   // A server change that keeps failing: try it again now, or drop it (only the queued change; local mail stays as it is).
   app.post('/api/accounts/:id/ops/:opId/retry', { preHandler: requireUser }, async (req, reply) => {

@@ -24,7 +24,7 @@ function learn(method, url, data, sent) {
   if (Array.isArray(data.items)) data.items.forEach((m) => noteMsg(m, own(m)));
   if (Array.isArray(data.messages)) data.messages.forEach((m) => noteMsg(m, own(m)));
   if (/^\/api\/messages\/\d+(\?|$)/.test(url)) noteMsg(data, sent);
-  if (Array.isArray(data.accounts)) data.accounts.forEach((a) => { owners.account.set(a.accountId, own(a)); (a.folders || []).forEach((f) => owners.folder.set(f.id, own(a))); });
+  if (Array.isArray(data.accounts)) data.accounts.forEach((a) => { owners.account.set(a.accountId, own(a)); (Array.isArray(a.folders) ? a.folders : []).forEach((f) => owners.folder.set(f.id, own(a))); });
   if (url.startsWith('/api/accounts') && Array.isArray(data)) data.forEach((a) => owners.account.set(a.id, own(a)));
   if (url.startsWith('/api/drafts') && method === 'POST' && data.id) owners.draft.set(data.id, sent);
   if (url === '/api/send' && data.id) owners.outbox.set(data.id, sent);
