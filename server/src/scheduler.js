@@ -62,6 +62,8 @@ function davReason(e) {
   const m = String(e?.message || e);
   if (/401|unauthori[sz]ed|invalid credentials/i.test(m)) return 'the server refused the username or password (set the DAV username / password if they differ from the mail login)';
   if (/404|not found/i.test(m)) return `nothing found at this address (${m})`;
+  const cause = `${e.cause?.code || ''} ${e.cause?.message || ''}`;
+  if (/self.signed|unable to verify|CERT_|leaf signature/i.test(`${m} ${cause}`)) return `the server's certificate is not trusted (${e.cause?.code || e.cause?.message || m}) — add its certificate authority in the account, or choose not to check it`;
   if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|fetch failed|certificate/i.test(m)) return `the server could not be reached (${e.cause?.code || m})`;
   return m;
 }

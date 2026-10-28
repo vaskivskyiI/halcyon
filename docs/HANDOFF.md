@@ -615,3 +615,20 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   `origin` ("x@y · synced", "host · read-only", "Kept in Halcyon"); address books renamed / default
   (`PATCH /api/address-books/:id`, `address_books.is_default`).
 - Calendar: press and drag over empty slots (15-minute steps) → new event for that range (desktop widths).
+
+### Offline-first web app, uploads in pieces, important unread, own certificates (migration 34)
+- web/public/sw.js now also caches: app shell (page network-first, /assets cache-first) and API GETs network-first
+  with a 4 s wait — no network / no answer in time / 502-504 → the saved copy at once (`x-halcyon-offline`), the
+  fresh answer stored and announced (`halcyon:fresh` → app refreshes). Keys include x-halcyon-as / x-halcyon-space.
+  /api/auth/status is cached (the app boots from it), sign-in/out, streams, AI answers, uploads are not. Changes
+  offline → 503 with a clear message. Logout empties the copy. App: refresh on fresh data, back online, `online`,
+  and on return after >30 s hidden (`halcyon:refresh` → folders, list, open conversation `halcyon:reload-open`).
+  The "Offline — saved copy" pill reads the state at mount (`offlineState()`). Verified in an Electron harness
+  (app opens with the server down, list + folders from the copy).
+- Archive uploads in pieces: POST /api/archives/uploads → PUT …/uploads/:id?offset= (409 → continue at size) → import
+  { uploadId }. Client starts at 8 MB and halves on 413, resumes after network errors — no proxy setting needed.
+- Folder counts: `f.important` (unread with priority ≥ 70, live, not noise) and `counts.unifiedImportant`; the
+  sidebar shows them as an accent badge and the rest faded.
+- Accounts: `tls_ca` (PEM, added to Node's roots) / `tls_insecure`; used by IMAP, SMTP (tlsOf) and DAV (undici Agent
+  via tsdav's `fetch`). Certificate errors explain what to do (certHint, davReason). Settings → Accounts: "Server
+  certificate" in the mail editor and the calendar / contacts dialog. HALCYON_TLS_INSECURE=1 still works server-wide.

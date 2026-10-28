@@ -145,6 +145,29 @@ function AccountStatus({ st, test, account, reload }) {
   );
 }
 
+/**
+ * The servers' certificate: checked as usual, checked against the user's own certificate authority (self-signed
+ * certificates, a company or home CA), or not checked (anyone on the way could read along — only for a server you
+ * reach privately).
+ */
+function CertField({ value, onChange }) {
+  const v = value || { ca: '', insecure: false };
+  const mode = v.insecure ? 'skip' : v.ca ? 'ca' : v.mode === 'ca' ? 'ca' : 'check';
+  return (
+    <div className="field full">
+      <label className="field">Server certificate
+        <select className="input" value={mode} onChange={(e) => onChange(e.target.value === 'skip' ? { ca: v.ca, insecure: true } : e.target.value === 'ca' ? { ca: v.ca, insecure: false, mode: 'ca' } : { ca: '', insecure: false })}>
+          <option value="check">Check as usual</option>
+          <option value="ca">Trust my certificate authority (self-signed / own CA)</option>
+          <option value="skip">Do not check (not safe)</option>
+        </select></label>
+      {mode === 'ca' && <textarea className="input" rows={4} style={{ fontFamily: 'monospace', fontSize: 11 }} placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'} value={v.ca} onChange={(e) => onChange({ ...v, ca: e.target.value, insecure: false, mode: 'ca' })} />}
+      {mode === 'ca' && <div className="small faint">The certificate of the authority that signed the server's certificate (or the server's own self-signed certificate), as text. On the server: e.g. <code>/etc/ssl/certs/…</code> or your CA's .crt/.pem file.</div>}
+      {mode === 'skip' && <div className="small error-text">Passwords and mail are still encrypted, but Halcyon cannot tell your server from an impostor. Prefer adding your certificate authority.</div>}
+    </div>);
+}
+const tlsBody = (t) => (t ? { ca: t.insecure ? (t.ca || '') : (t.ca || ''), insecure: !!t.insecure } : undefined);
+
 /** What to add: mail, a calendar, an address book, or (Google) any of them. */
 function AddChooser({ oauth, onPick, onClose }) {
   return (
@@ -163,14 +186,14 @@ function AddChooser({ oauth, onPick, onClose }) {
 /** A calendar (CalDAV) or contacts (CardDAV) service: a new account, or added to / changed on an existing one. */
 function DavService({ service, account, onClose, onDone }) {
   const cal = service === 'calendar';
-  const [f, setF] = useState({ url: (cal ? account?.caldavUrl : account?.carddavUrl) || '', davUser: account?.davUser || '', davPassword: '', name: '' });
+  const [f, setF] = useState({ url: (cal ? account?.caldavUrl : account?.carddavUrl) || '', davUser: account?.davUser || '', davPassword: '', name: '', tls: account?.tls || null });
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
     try {
       const r = account
-        ? await api.post(`/api/accounts/${account.id}/services/${service}`, { url: f.url.trim(), davUser: f.davUser.trim() || undefined, davPassword: f.davPassword || undefined })
-        : await api.post('/api/accounts', { services: [service], [cal ? 'caldavUrl' : 'carddavUrl']: f.url.trim(), davUser: f.davUser.trim(), davPassword: f.davPassword, name: f.name.trim() || undefined, email: f.name.trim() || undefined });
+        ? await api.post(`/api/accounts/${account.id}/services/${service}`, { url: f.url.trim(), davUser: f.davUser.trim() || undefined, davPassword: f.davPassword || undefined, tls: tlsBody(f.tls) })
+        : await api.post('/api/accounts', { services: [service], [cal ? 'caldavUrl' : 'carddavUrl']: f.url.trim(), davUser: f.davUser.trim(), davPassword: f.davPassword, name: f.name.trim() || undefined, email: f.name.trim() || undefined, tls: tlsBody(f.tls) });
       if (r?.dav?.error) { toastError(new Error(r.dav.error)); setBusy(false); if (!account) onDone(null); return; }
       onDone(r);
     } catch (e) { toastError(e); setBusy(false); }
@@ -183,6 +206,7 @@ function DavService({ service, account, onClose, onDone }) {
         <label className="field">Username{account && <span className="faint"> (empty: {account.davUser || account.email})</span>}<input className="input" value={f.davUser} onChange={(e) => setF({ ...f, davUser: e.target.value })} autoComplete="username" /></label>
         <label className="field">Password{account && <span className="faint"> (empty: keep)</span>}<input className="input" type="password" value={f.davPassword} onChange={(e) => setF({ ...f, davPassword: e.target.value })} autoComplete="new-password" /></label>
         {!account && <label className="field full">Name <span className="faint">— optional, e.g. “Family calendar” (default: the username)</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>}
+        <CertField value={f.tls} onChange={(tls) => setF({ ...f, tls })} />
       </div>
       <div className="small faint">Nextcloud: https://your-cloud/remote.php/dav · iCloud: https://caldav.icloud.com (contacts: https://contacts.icloud.com) with an app-specific password · Fastmail: https://caldav.fastmail.com (contacts: https://carddav.fastmail.com). Halcyon looks for the calendars / address books there and says what it found.</div>
     </Modal>
@@ -197,7 +221,7 @@ function AccountEditor({ account, startGoogle = false, addMailTo = null, onClose
     email: account.email, displayName: account.displayName || '', name: account.name || '', signatureHtml: account.signatureHtml || '',
     imap: { ...account.imap, password: '' }, smtp: { ...account.smtp, password: '' }, caldavUrl: account.caldavUrl || '', carddavUrl: account.carddavUrl || '',
     davUser: account.davUser || '', davPassword: '', syncEnabled: account.syncEnabled, aliases: account.aliases || [], inviteCalendarId: account.inviteCalendarId || null,
-    aboutMe: account.aboutMe || '', contextMode: account.contextMode || '',
+    aboutMe: account.aboutMe || '', contextMode: account.contextMode || '', tls: account.tls || null,
   } : { email: addMailTo?.email || '', displayName: '', password: '', imap: { host: '', port: 993, secure: true, user: '' }, smtp: { host: '', port: 465, secure: true, user: '' }, signatureHtml: '' });
   const [disc, setDisc] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -218,7 +242,7 @@ function AccountEditor({ account, startGoogle = false, addMailTo = null, onClose
   };
 
   const body = () => {
-    const b = { ...f };
+    const b = { ...f, tls: tlsBody(f.tls) };
     if (!account) { b.imap = { ...f.imap, password: f.password }; b.smtp = { ...f.smtp, password: f.password }; }
     else { if (!f.imap.password) delete b.imap.password; if (!f.smtp.password) delete b.smtp.password; }
     return b;
@@ -351,6 +375,7 @@ function AccountEditor({ account, startGoogle = false, addMailTo = null, onClose
             </div>
           </div>
         ))}
+        <CertField value={f.tls} onChange={(tls) => setF((x) => ({ ...x, tls }))} />
         <TestResult />
         {account && <>
           <h3 style={{ margin: '6px 0' }}>Signature</h3>

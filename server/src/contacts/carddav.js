@@ -1,5 +1,7 @@
 // CardDAV two-way sync using tsdav.
 import { DAVClient } from 'tsdav';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { tlsOf } from '../mail/connection.js';
 import { get, all, run, now, tx, json } from '../db/index.js';
 import { decrypt } from '../util/crypto.js';
 import { accessToken, isOAuth } from '../mail/oauth.js';
@@ -10,11 +12,22 @@ import { logger } from '../util/log.js';
 
 const log = logger('carddav');
 
+// An account with its own certificate settings talks to its DAV server through an agent that uses them.
+const agents = new Map();
+function davFetch(account) {
+  const t = tlsOf(account);
+  if (t.rejectUnauthorized && !t.ca) return {};
+  const key = `${t.rejectUnauthorized}|${String(account.tls_ca || '').length}|${account.id}`;
+  if (!agents.has(key)) agents.set(key, new Agent({ connect: t }));
+  const dispatcher = agents.get(key);
+  return { fetch: (url, init = {}) => undiciFetch(url, { ...init, dispatcher }) };
+}
+
 export async function davClient(account, serverUrl, accountType) {
   const credentials = isOAuth(account)
     ? { accessToken: await accessToken(account) }
     : { username: account.dav_user || account.imap_user || account.email, password: decrypt(account.dav_pass_enc) || decrypt(account.imap_pass_enc) };
-  const client = new DAVClient({ serverUrl, credentials, authMethod: isOAuth(account) ? 'Oauth' : 'Basic', defaultAccountType: accountType });
+  const client = new DAVClient({ serverUrl, credentials, authMethod: isOAuth(account) ? 'Oauth' : 'Basic', defaultAccountType: accountType, ...davFetch(account) });
   await client.login();
   return client;
 }

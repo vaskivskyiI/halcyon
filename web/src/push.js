@@ -10,7 +10,11 @@ export async function registerWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
   try { reg = await navigator.serviceWorker.register('./sw.js', { scope: './' }); } catch { reg = null; }
   // A tapped notification opens its place in the running app.
-  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data?.type === 'halcyon:open' && e.data.url) navigate(e.data.url); });
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'halcyon:open' && e.data.url) navigate(e.data.url);
+    // The service worker showed its copy and has the fresh answer now: the app asks again.
+    if (e.data?.type === 'halcyon:fresh') window.dispatchEvent(new Event('halcyon:refresh'));
+  });
   return reg;
 }
 

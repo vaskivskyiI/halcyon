@@ -40,21 +40,35 @@ export default function Archives() {
     }
     target.current = id; file.current.click();
   };
-  const send = (f) => {
+  // Sent in pieces (8 MB, smaller when a proxy refuses that much at once), each retried and resumed where the server
+  // has the file up to — a proxy's upload limit and a dropped connection do not stop a large Outlook data file.
+  const send = async (f) => {
     const id = target.current;
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', api.url(`/api/archives/${id}/import?filename=${encodeURIComponent(f.name)}`));
-    xhr.withCredentials = true;
-    xhr.setRequestHeader('content-type', 'application/octet-stream');
-    xhr.upload.onprogress = (e) => e.lengthComputable && setUpload({ name: f.name, pct: Math.round((e.loaded / e.total) * 100) });
-    xhr.onload = () => {
-      setUpload(null);
-      if (xhr.status >= 300) { try { toastError(new Error(JSON.parse(xhr.responseText).error)); } catch { toastError(new Error(`Upload failed (${xhr.status})`)); } return; }
-      toast('Uploaded — importing in the background…'); load();
-    };
-    xhr.onerror = () => { setUpload(null); toastError(new Error('Upload failed — check the connection (and the proxy\'s upload size limit)')); };
     setUpload({ name: f.name, pct: 0 });
-    xhr.send(f);
+    try {
+      const up = await api.post('/api/archives/uploads', { filename: f.name, size: f.size });
+      let offset = 0, piece = 8 << 20, fails = 0;
+      while (offset < f.size) {
+        let r;
+        try {
+          r = await fetch(api.url(`/api/archives/uploads/${up.id}?offset=${offset}`), { method: 'PUT', credentials: 'include', headers: { 'content-type': 'application/octet-stream' }, body: f.slice(offset, offset + piece) });
+        } catch {
+          // Connection lost: wait, ask where the server is, continue from there.
+          if (++fails > 20) throw new Error('Upload stopped — the connection keeps failing. Start it again later; it continues where it stopped.');
+          await new Promise((res) => setTimeout(res, Math.min(30e3, 1000 * fails)));
+          offset = (await api.get(`/api/archives/uploads/${up.id}`).catch(() => ({ size: offset }))).size;
+          continue;
+        }
+        if (r.status === 413 && piece > 256 << 10) { piece = Math.floor(piece / 2); continue; } // the proxy's limit is lower
+        const d = await r.json().catch(() => ({}));
+        if (r.status === 409) { offset = d.size; continue; }
+        if (!r.ok) throw new Error(d.error || `Upload failed (${r.status})`);
+        offset = d.size; fails = 0;
+        setUpload({ name: f.name, pct: Math.floor((offset / f.size) * 100) });
+      }
+      await api.post(`/api/archives/${id}/import`, { uploadId: up.id });
+      toast('Uploaded — importing in the background…'); load();
+    } catch (e) { toastError(e); } finally { setUpload(null); }
   };
   const rename = async (a) => { const n = prompt('Name', a.name); if (n && n !== a.name) { try { await api.patch(`/api/accounts/${a.id}`, { name: n }); refresh(); } catch (e) { toastError(e); } } };
   const remove = async (a) => {
@@ -109,7 +123,7 @@ export default function Archives() {
             </div>);
         })}
       </>}
-      {running.length === 0 && <div className="small faint">Outlook data files: .pst archives and .ost cache files (Outlook 2003 and later). Mail, with its folders, read state and attachments, is imported; calendar items and contacts in them are skipped. Large files may need a higher upload limit on your proxy (nginx: client_max_body_size) — in the desktop app (This PC) files are read where they are.</div>}
+      {running.length === 0 && <div className="small faint">Outlook data files: .pst archives and .ost cache files (Outlook 2003 and later). Mail, with its folders, read state and attachments, is imported; calendar items and contacts in them are skipped. Large files are uploaded in pieces (no proxy setting needed) and continue where they stopped if the connection drops; in the desktop app (This PC) files are read where they are.</div>}
     </div>
   );
 }

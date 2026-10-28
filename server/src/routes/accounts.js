@@ -182,7 +182,7 @@ export default async function accountRoutes(app) {
     if (service === 'calendar' || service === 'contacts') {
       const url = String(b.url || (google ? PROVIDERS.google[service === 'calendar' ? 'caldav' : 'carddav'] : '')).trim();
       if (!/^https?:\/\//.test(url)) return httpError(reply, 400, `Enter the ${service === 'calendar' ? 'CalDAV' : 'CardDAV'} address`);
-      update('accounts', a.id, accountFields({ [service === 'calendar' ? 'caldavUrl' : 'carddavUrl']: url, davUser: b.davUser, davPassword: b.davPassword }), ACCOUNT_COLS);
+      update('accounts', a.id, accountFields({ [service === 'calendar' ? 'caldavUrl' : 'carddavUrl']: url, davUser: b.davUser, davPassword: b.davPassword, tls: b.tls }), ACCOUNT_COLS);
       const fresh = userAccount(req.user.id, a.id);
       const dav = await Promise.race([syncDav(fresh), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
       return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };

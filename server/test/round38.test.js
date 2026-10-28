@@ -147,3 +147,25 @@ test('an Outlook data file is imported with its folders', { skip: !process.env.T
   assert.ok(sample.length);
   console.log(JSON.stringify(db.prepare('SELECT COUNT(*) AS n, SUM(has_attachments) AS att FROM messages WHERE account_id = ?').get(id)));
 });
+
+test('a large file is uploaded in pieces (whatever the proxy limit) and resumes after a lost answer', async () => {
+  const { id } = await api('POST', '/api/archives', { name: 'Pieces' });
+  const mbox = Buffer.concat([1, 2, 3].map((i) => Buffer.concat([Buffer.from(`From x@y Mon Jan  1 10:00:00 2018\n`), eml({ subject: `Piece mail ${i}`, id: `piece-${i}@x` }), Buffer.from('\n')])));
+  const up = await api('POST', '/api/archives/uploads', { filename: 'pieces.mbox', size: mbox.length });
+  const put = (offset, buf) => fetch(`${base}/api/archives/uploads/${up.id}?offset=${offset}`, { method: 'PUT', headers: { cookie, 'content-type': 'application/octet-stream' }, body: buf });
+  const half = Math.floor(mbox.length / 2);
+  assert.equal((await (await put(0, mbox.subarray(0, half))).json()).size, half);
+  // The same piece sent again (its answer was lost): the server says where to continue.
+  const again = await put(0, mbox.subarray(0, half));
+  assert.equal(again.status, 409);
+  assert.equal((await again.json()).size, half);
+  await assert.rejects(api('POST', `/api/archives/${id}/import`, { uploadId: up.id }), /not complete/);
+  assert.equal((await (await put(half, mbox.subarray(half))).json()).size, mbox.length);
+  await api('POST', `/api/archives/${id}/import`, { uploadId: up.id });
+  const jobs = await waitJobs();
+  const job = jobs.find((j) => j.archiveId === id);
+  assert.equal(job.status, 'done', job.error);
+  assert.equal(job.done, 3);
+  // Someone else's upload is not reachable.
+  await assert.rejects(api('GET', '/api/archives/uploads/000000000000000000000000'), /not found/i);
+});

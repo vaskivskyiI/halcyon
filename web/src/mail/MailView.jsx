@@ -62,6 +62,17 @@ export default function MailView({ route }) {
   );
 }
 
+/** Unread conversations: the important ones stand out, the rest is shown faded next to them. */
+function UnreadCount({ n, important = 0, title = 'Unread conversations' }) {
+  if (!n) return null;
+  const rest = n - important;
+  return (
+    <span className="count-pair" title={important ? `${important} important unread · ${rest} other unread` : title}>
+      {important > 0 && <span className="count imp">{important}</span>}
+      {rest > 0 && <span className="count rest">{rest}</span>}
+    </span>);
+}
+
 function FolderNav({ view, open, onNavigate }) {
   const folders = store.use((s) => s.folders);
   const labels = store.use((s) => s.labels);
@@ -111,7 +122,7 @@ function FolderNav({ view, open, onNavigate }) {
             Automatic replies are on · {x.email}</div>))}
         {SMART.map(([key, Icon, label, countKey]) => (
           <div key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => go(key)}>
-            <Icon size={16} /><span className="truncate">{label}</span>{countKey && folders.counts?.[countKey] > 0 && (countKey === 'scheduled' && folders.counts.outboxFailed > 0
+            <Icon size={16} /><span className="truncate">{label}</span>{countKey === 'unified' ? <UnreadCount n={folders.counts?.unified} important={folders.counts?.unifiedImportant} /> : countKey && folders.counts?.[countKey] > 0 && (countKey === 'scheduled' && folders.counts.outboxFailed > 0
               ? <span className="count failed" title={`${folders.counts.outboxFailed} could not be sent — open to retry, edit or keep as draft`}>{folders.counts[countKey]}</span>
               : <span className="count" title={COUNT_TITLES[countKey]}>{folders.counts[countKey]}</span>)}
           </div>
@@ -168,7 +179,7 @@ function FolderNav({ view, open, onNavigate }) {
                   <div key={f.id} className={`nav-item ${view === key ? 'active' : ''} ${dropTarget === key ? 'drop' : ''}`} style={{ paddingLeft: 10 + depth * 14, opacity: f.syncEnabled ? 1 : 0.55 }}
                     onClick={() => go(key)} onContextMenu={(e) => folderMenu(e, acc, f)} {...dropProps(key, f.id)}>
                     <Icon size={16} /><span className="truncate">{f.name}</span>
-                    {f.unread > 0 && !['\\Sent', '\\Trash', '\\Junk', '\\Drafts'].includes(f.specialUse) && <span className="count" title="Unread conversations">{f.unread}</span>}
+                    {f.unread > 0 && !['\\Sent', '\\Trash', '\\Junk', '\\Drafts'].includes(f.specialUse) && <UnreadCount n={f.unread} important={f.important} />}
                     {f.specialUse === '\\Drafts' && f.total > 0 && <span className="count faint">{f.total}</span>}
                   </div>
                 );

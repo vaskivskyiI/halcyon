@@ -127,7 +127,12 @@ export default async function mailRoutes(app) {
     const folderIds = out.flatMap((a) => a.folders.map((f) => f.id));
     const unreadByFolder = new Map(folderIds.length ? all(`SELECT folder_id AS id, COUNT(${threaded ? 'DISTINCT thread_id' : '*'}) AS n FROM messages
       WHERE folder_id IN (${folderIds.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL GROUP BY folder_id`, ...folderIds).map((r) => [r.id, r.n]) : []);
-    for (const a of out) for (const f of a.folders) f.unread = unreadByFolder.get(f.id) || 0;
+    // Of those, the important ones (as in the Important view): shown stronger than the rest.
+    const importantByFolder = new Map(folderIds.length ? all(`SELECT m.folder_id AS id, COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m JOIN ai_insights i ON i.message_id = m.id
+      WHERE m.folder_id IN (${folderIds.map(() => '?').join(',')}) AND m.is_read = 0 AND m.snoozed_until IS NULL AND i.priority >= 70 AND i.dismissed_at IS NULL
+        AND (i.expires_at IS NULL OR i.expires_at > ?) AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} GROUP BY m.folder_id`, ...folderIds, Date.now()).map((r) => [r.id, r.n]) : []);
+    for (const a of out) for (const f of a.folders) { f.unread = unreadByFolder.get(f.id) || 0; f.important = Math.min(f.unread, importantByFolder.get(f.id) || 0); }
+    counts.unifiedImportant = out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox')).reduce((n, f) => n + f.important, 0);
     // Dynamic AI views (topics, AI categories, own categories) are the costly part of this list, which is asked for
     // often: kept for 30 s, and dropped at once when mail changes (read, moved, new) — not for every AI result.
     const cacheKey = `${uid}|${sc?.space || ''}`;
@@ -171,7 +176,7 @@ export default async function mailRoutes(app) {
     for (const sp of mergedSpaces(req)) {
       const other = folderList(sp.id, null);
       own.accounts.push(...other.accounts.map((a) => ({ ...a, owner: sp.id, ownerName: sp.name })));
-      for (const k of ['unified', 'needsreply', 'needsaction', 'snoozed', 'scheduled', 'outboxFailed']) own.counts[k] = (own.counts[k] || 0) + (other.counts[k] || 0);
+      for (const k of ['unified', 'unifiedImportant', 'needsreply', 'needsaction', 'snoozed', 'scheduled', 'outboxFailed']) own.counts[k] = (own.counts[k] || 0) + (other.counts[k] || 0);
     }
     return own;
   });

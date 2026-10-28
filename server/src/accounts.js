@@ -11,6 +11,7 @@ export function serializeAccount(a) {
     id: a.id, kind: a.kind || 'mail', name: a.name, email: a.email, displayName: a.display_name, color: a.color,
     // What this account is used for: mail, calendar (CalDAV), contacts (CardDAV) — each added and removed on its own.
     services: { mail: a.mail !== 0, calendar: !!a.caldav_url, contacts: !!a.carddav_url },
+    tls: { ca: a.tls_ca || '', insecure: !!a.tls_insecure },
     imap: { host: a.imap_host, port: a.imap_port, secure: !!a.imap_secure, user: a.imap_user },
     smtp: { host: a.smtp_host, port: a.smtp_port, secure: !!a.smtp_secure, user: a.smtp_user },
     authType: a.auth_type, signatureHtml: a.signature_html, syncEnabled: !!a.sync_enabled, syncState: a.sync_state,
@@ -38,7 +39,11 @@ export function accountFields(b) {
     // Who the user is in this account (work, private, business) — used for this account's mail instead of all.
     about_me: b.aboutMe === undefined ? undefined : String(b.aboutMe).slice(0, 2000),
     context_mode: b.contextMode === undefined ? undefined : (['account', 'global'].includes(b.contextMode) ? b.contextMode : null),
+    // The servers' certificates: a CA of their own (PEM; empty = the usual ones), or not checked at all.
+    tls_ca: b.tls?.ca === undefined ? undefined : (String(b.tls.ca).trim() || null),
+    tls_insecure: b.tls?.insecure === undefined ? undefined : (b.tls.insecure ? 1 : 0),
   };
+  if (f.tls_ca && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(f.tls_ca)) throw Object.assign(new Error('The certificate must be in PEM form (-----BEGIN CERTIFICATE----- …)'), { statusCode: 400 });
   if (b.imap?.password) f.imap_pass_enc = encrypt(b.imap.password);
   if (b.smtp?.password) f.smtp_pass_enc = encrypt(b.smtp.password);
   if (b.davPassword) f.dav_pass_enc = encrypt(b.davPassword);
@@ -46,7 +51,7 @@ export function accountFields(b) {
 }
 
 export const ACCOUNT_COLS = ['name', 'email', 'display_name', 'color', 'imap_host', 'imap_port', 'imap_secure', 'imap_user', 'imap_pass_enc', 'smtp_host', 'smtp_port',
-  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space', 'sync_history', 'invite_calendar_id', 'about_me', 'context_mode', 'mail'];
+  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space', 'sync_history', 'invite_calendar_id', 'about_me', 'context_mode', 'mail', 'tls_ca', 'tls_insecure'];
 
 export function createAccount(userId, b, extra = {}) {
   const n = all('SELECT id FROM accounts WHERE user_id = ?', userId).length;

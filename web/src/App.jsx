@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers } from 'lucide-react';
-import { api, connectEvents, onEvent, onOtherEvent, setApiActing } from './api.js';
+import { api, connectEvents, onEvent, onOtherEvent, setApiActing, offlineState } from './api.js';
 import './back.js';
 import { pushIsOn } from './push.js';
 import { loadQuickSteps } from './mail/extras.js';
@@ -64,7 +64,7 @@ function Shell() {
   const accountsLoaded = store.use((s) => s.accountsLoaded);
   const readOnly = store.use((s) => s.readOnly);
   const acting = store.use((s) => s.acting);
-  const [offline, setOffline] = useState(null);
+  const [offline, setOffline] = useState(offlineState);
   useEffect(() => { const h = (e) => setOffline(e.detail); window.addEventListener('halcyon:offline', h); return () => window.removeEventListener('halcyon:offline', h); }, []);
   const reloadTimer = useRef();
   const insightTimer = useRef();
@@ -145,6 +145,18 @@ function Shell() {
     return () => clearInterval(t);
   }, [connected]);
 
+  // Fresh data after showing the saved copy (service worker / desktop), back online, or back to the app after a while
+  // (Android app, a tab that slept): everything shown is asked for again — at most once a second.
+  useEffect(() => {
+    let timer = null, hiddenAt = 0;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(() => { loadFolders(); window.dispatchEvent(new Event('halcyon:poll')); window.dispatchEvent(new Event('halcyon:reload-open')); }, 300); };
+    const vis = () => { if (document.hidden) hiddenAt = Date.now(); else if (hiddenAt && Date.now() - hiddenAt > 30e3) refresh(); };
+    window.addEventListener('halcyon:refresh', refresh);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', vis);
+    return () => { clearTimeout(timer); window.removeEventListener('halcyon:refresh', refresh); window.removeEventListener('online', refresh); document.removeEventListener('visibilitychange', vis); };
+  }, []);
+
   // "Sync now": start a full sync of every account, wait until it has finished, then refresh and report.
   const syncNow = async () => {
     if (syncing) return;
@@ -183,8 +195,8 @@ function Shell() {
   });
   return (
     <div className="app">
-      {(readOnly || acting || offline !== null) && <div className={`readonly-pill ${acting && !readOnly && offline === null ? 'shared' : ''}`} title={offline !== null ? 'Halcyon cannot reach your server: you see the copy kept on this PC. Changes (sending, moving, marking) need the connection.' : readOnly ? 'This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.' : `You are working in the shared space “${acting.name}” — its mail, calendar, contacts and tasks are shared with its members.`}>
-        {[offline !== null && 'Offline — copy on this PC', acting && `Shared: ${acting.name}`, readOnly && 'Read-only session'].filter(Boolean).join(' · ')}</div>}
+      {(readOnly || acting || offline !== null) && <div className={`readonly-pill ${acting && !readOnly && offline === null ? 'shared' : ''}`} title={offline !== null ? 'Halcyon cannot reach your server: you see the copy saved on this device. Changes (sending, moving, marking) need the connection.' : readOnly ? 'This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.' : `You are working in the shared space “${acting.name}” — its mail, calendar, contacts and tasks are shared with its members.`}>
+        {[offline !== null && 'Offline — saved copy', acting && `Shared: ${acting.name}`, readOnly && 'Read-only session'].filter(Boolean).join(' · ')}</div>}
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (

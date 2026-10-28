@@ -65,9 +65,16 @@ const merge = (a, b) => {
 // Desktop app in server mode, server unreachable: answers come from the copy on this PC (desktop/offline.js), marked
 // so; the app says it is offline until a live answer comes again.
 let offlineSince = null;
+/** Since when what is shown is a saved copy (null: live) — for views that start after it was noticed. */
+export const offlineState = () => offlineSince;
 function noteOffline(r) {
   const off = r.headers.get('x-halcyon-offline') ? Number(r.headers.get('x-halcyon-cached-at')) || 0 : null;
-  if ((off === null) !== (offlineSince === null)) { offlineSince = off; window.dispatchEvent(new CustomEvent('halcyon:offline', { detail: off })); }
+  if ((off === null) !== (offlineSince === null)) {
+    const back = off === null;
+    offlineSince = off;
+    window.dispatchEvent(new CustomEvent('halcyon:offline', { detail: off }));
+    if (back) window.dispatchEvent(new Event('halcyon:refresh')); // connected again: what is shown is refreshed
+  }
 }
 
 async function request(method, url, body) {

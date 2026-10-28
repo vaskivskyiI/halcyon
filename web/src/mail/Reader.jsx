@@ -130,6 +130,8 @@ export default function Reader({ id, view }) {
     if (e.type === 'mail:sent') load();
   }), [thread]);
   useEffect(() => { const h = () => load(); window.addEventListener('halcyon:sent', h); return () => window.removeEventListener('halcyon:sent', h); }, [thread]);
+  // The open conversation is refreshed when fresh data comes (after the saved copy was shown, back online, …).
+  useEffect(() => { const h = () => id && load(); window.addEventListener('halcyon:reload-open', h); return () => window.removeEventListener('halcyon:reload-open', h); }, [id, load]);
 
   // Keyboard reply shortcuts dispatched from the list.
   useEffect(() => {

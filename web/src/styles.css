@@ -461,3 +461,8 @@ div.provider { cursor: default; background: var(--panel-2); }
 .chip.service.on { background: var(--accent-soft); color: var(--text); }
 .chip.service.add { border: 1px dashed var(--border); background: none; color: var(--text-2); cursor: pointer; }
 .chip.service.add:hover { color: var(--accent); border-color: var(--accent); }
+/* Unread counts: important unread stands out (accent badge), the rest is faded */
+.nav-item .count-pair { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.nav-item .count-pair .count { margin-left: 0; }
+.nav-item .count.imp, .nav-item.active .count.imp { color: #fff; background: var(--accent); border-radius: 999px; padding: 0 6px; font-weight: 700; }
+.nav-item .count.rest, .nav-item.active .count.rest { color: var(--text-3); font-weight: 500; }

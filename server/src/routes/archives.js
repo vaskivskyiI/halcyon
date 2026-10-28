@@ -46,12 +46,60 @@ export default async function archiveRoutes(app) {
 
   app.get('/api/archives/jobs', async (req) => all('SELECT * FROM archive_jobs WHERE user_id = ? ORDER BY id DESC LIMIT 20', req.user.id).map(jobOut));
 
-  // A file into an archive: uploaded (body = the file, ?filename=…), or — desktop app on this computer only — read
-  // where it is ({ path }), so a large Outlook data file is not copied first.
+  // Large files arrive in pieces (a few MB each), so a proxy's upload limit (nginx client_max_body_size) does not
+  // matter and an interrupted upload continues where it stopped: start → pieces at their offset → import { uploadId }.
+  const uploadPaths = (id) => ({ meta: path.join(importDir(), `up-${id}.json`), part: path.join(importDir(), `up-${id}.part`) });
+  const uploadOf = (req, id) => {
+    if (!/^[a-f0-9]{24}$/.test(String(id))) return null;
+    const p = uploadPaths(id);
+    try { const m = JSON.parse(fs.readFileSync(p.meta, 'utf8')); return m.userId === req.user.id ? { ...m, ...p, have: fs.statSync(p.part).size } : null; } catch { return null; }
+  };
+  app.post('/api/archives/uploads', async (req, reply) => {
+    const name = path.basename(String(req.body?.filename || 'import'));
+    const size = Number(req.body?.size);
+    if (!formatOf(name, req.body?.format)) return httpError(reply, 400, 'Unknown file type — use .pst, .ost, .mbox, .eml or .zip');
+    if (!(size > 0)) return httpError(reply, 400, 'Empty file');
+    // Unfinished uploads older than two days are cleared away.
+    for (const f of fs.readdirSync(importDir()).filter((x) => x.startsWith('up-'))) {
+      const full = path.join(importDir(), f);
+      try { if (Date.now() - fs.statSync(full).mtimeMs > 2 * 864e5) fs.rmSync(full, { force: true }); } catch { /* gone */ }
+    }
+    const id = crypto.randomBytes(12).toString('hex');
+    const p = uploadPaths(id);
+    fs.writeFileSync(p.meta, JSON.stringify({ userId: req.user.id, name, size, format: req.body?.format || null, at: Date.now() }));
+    fs.writeFileSync(p.part, '');
+    return { id, size: 0 };
+  });
+  app.get('/api/archives/uploads/:uid', async (req, reply) => {
+    const u = uploadOf(req, req.params.uid);
+    return u ? { id: req.params.uid, size: u.have, total: u.size } : httpError(reply, 404, 'Upload not found');
+  });
+  app.put('/api/archives/uploads/:uid', async (req, reply) => {
+    const u = uploadOf(req, req.params.uid);
+    if (!u) return httpError(reply, 404, 'Upload not found');
+    // A piece for another place than where the file ends (a retry after a lost answer): say where to continue.
+    if (Number(req.query.offset) !== u.have) { req.raw.resume(); return reply.code(409).send({ error: 'Continue at the given size', size: u.have }); }
+    try { await pipeline(req.raw, fs.createWriteStream(u.part, { flags: 'a' })); } catch (e) { return httpError(reply, 400, `Upload interrupted: ${e.message}`); }
+    const size = fs.statSync(u.part).size;
+    if (size > u.size) { fs.truncateSync(u.part, u.have); return httpError(reply, 400, 'More data than the file has'); }
+    return { size };
+  });
+
+  // A file into an archive: uploaded in pieces ({ uploadId }), uploaded at once (body = the file, ?filename=…), or —
+  // desktop app on this computer only — read where it is ({ path }), so a large Outlook data file is not copied first.
   app.post('/api/archives/:id/import', async (req, reply) => {
     const a = archiveOf(req.user.id, req.params.id);
     if (!a) return httpError(reply, 404, 'Archive not found');
     const folder = String(req.query.folder || req.body?.folder || '').trim().slice(0, 200) || null;
+    if (req.body?.uploadId) {
+      const u = uploadOf(req, req.body.uploadId);
+      if (!u) return httpError(reply, 404, 'Upload not found');
+      if (u.have !== u.size) return httpError(reply, 400, `The upload is not complete (${u.have} of ${u.size} bytes)`);
+      const file = path.join(importDir(), `${req.body.uploadId}-${u.name.replace(/[^\w.-]+/g, '_')}`);
+      fs.renameSync(u.part, file);
+      fs.rmSync(u.meta, { force: true });
+      return queueJob(req.user.id, a.id, 'import', { format: formatOf(u.name, u.format), filePath: file, fileName: u.name, params: { folder } });
+    }
     if (req.headers['content-type']?.startsWith('application/octet-stream')) {
       const name = path.basename(String(req.query.filename || 'import'));
       const format = formatOf(name, req.query.format);

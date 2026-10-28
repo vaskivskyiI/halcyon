@@ -1,7 +1,7 @@
 // Per-account IMAP synchronisation: folder list, incremental message download, flag reconciliation,
 // expunge detection, IDLE push for INBOX, and replay of locally queued operations (offline-first).
 import { get, run, all, json, now, tx } from '../db/index.js';
-import { imapClient } from './connection.js';
+import { imapClient, certHint } from './connection.js';
 import { ingestMessage, deleteMessages, recountFolder, flagsToCols } from './store.js';
 import { afterIngest } from './pipeline.js';
 import { config } from '../config.js';
@@ -33,6 +33,7 @@ export class AccountSync {
   setState(state, error = null) {
     const a = this.account;
     if (!a) return;
+    if (error) error = certHint(error);
     run('UPDATE accounts SET sync_state = ?, sync_error = ?, last_sync_at = CASE WHEN ? = \'idle\' THEN ? ELSE last_sync_at END WHERE id = ?', state, error, state, now(), a.id);
     notify(a.user_id, 'sync:state', { accountId: a.id, state, error });
   }

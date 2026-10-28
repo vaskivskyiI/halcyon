@@ -409,4 +409,10 @@ export const migrations = [
   ALTER TABLE accounts ADD COLUMN mail INTEGER DEFAULT 1;
   ALTER TABLE address_books ADD COLUMN is_default INTEGER DEFAULT 0;
   `,
+  // 34: servers with their own certificates (self-signed, a private CA): trusted per account — a CA (PEM) added to
+  // the usual ones, or (insecure) not checked.
+  `
+  ALTER TABLE accounts ADD COLUMN tls_ca TEXT;
+  ALTER TABLE accounts ADD COLUMN tls_insecure INTEGER DEFAULT 0;
+  `,
 ];
