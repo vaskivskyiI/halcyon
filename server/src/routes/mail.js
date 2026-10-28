@@ -1,4 +1,4 @@
-import { db, get, all, run, json, now, update } from '../db/index.js';
+import { db, get, all, run, json, now, update, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { ids, httpError } from './util.js';
 import { serializeMessage, readRaw, parseRaw, messageRow, senderOf, inviteText, icsOf } from '../mail/store.js';
@@ -6,7 +6,7 @@ import { sanitizeEmailHtml, htmlToText } from '../mail/sanitize.js';
 import * as actions from '../mail/actions.js';
 import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft, draftFromMessage } from '../mail/send.js';
 import { queueOp, syncManager } from '../mail/sync.js';
-import { serializeInsight } from '../ai/tasks.js';
+import { serializeInsight, scheduleBriefRefresh } from '../ai/tasks.js';
 import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits } from '../search.js';
 import { invitationFor } from '../calendar/invites.js';
 import { getSettings } from '../settings.js';
@@ -22,7 +22,7 @@ import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
-import { openReplySql, openActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE } from '../ai/open-items.js';
+import { openReplySql, openActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE, ownAddresses } from '../ai/open-items.js';
 
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
@@ -354,7 +354,13 @@ export default async function mailRoutes(app) {
 
   app.get('/api/messages/:id', async (req, reply) => {
     const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
-    if (!m) return httpError(reply, 404, 'Not found');
+    if (!m) {
+      // A message of one of the person's shared spaces opened by link (reload, "Recent with", search): say whose it is,
+      // the app asks again as that space (membership is checked again then).
+      const owner = !req.person && get('SELECT user_id FROM messages WHERE id = ?', req.params.id)?.user_id;
+      const space = owner && sharedOf(req.user.id).find((s) => s.id === owner);
+      return reply.code(404).send({ error: 'Not found', ...(space ? { owner: space.id } : {}) });
+    }
     await senderOf(m);
     await icsOf(m);
     return asLinks(req, { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) });
@@ -403,6 +409,39 @@ export default async function mailRoutes(app) {
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
     for (const m of msgs) { await senderOf(m); await icsOf(m); }
     return { messages: msgs.map((m) => asLinks(req, fullMessage(req.user.id, m, req.query.images === '1'))), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
+  });
+
+  // Other recent conversations with the person of this email (its sender; for the user's own email, its first
+  // recipient), newest first: a reminder of what else is going on with them. Not this conversation; not Trash/Junk/Drafts.
+  app.get('/api/messages/:id/recent-with', async (req, reply) => {
+    const m = get('SELECT id, thread_id, from_name, from_addr, to_json FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!m) return httpError(reply, 404, 'Not found');
+    const mine = ownAddresses(req.user.id);
+    const person = [{ name: m.from_name, address: m.from_addr }, ...json(m.to_json, [])].find((a) => a?.address && !mine.has(String(a.address).toLowerCase()));
+    if (!person) return { person: null, threads: [] };
+    const email = String(person.address).toLowerCase();
+    const sc = scope(req.user.id, reqSpace(req));
+    const limit = Math.min(Number(req.query.limit) || 6, 20);
+    const like = `%"${email.replace(/[%_"]/g, '')}"%`;
+    const rows = all(`SELECT m.id, m.thread_id, m.subject, m.date, m.snippet, m.is_read, m.from_addr, f.special_use FROM messages m JOIN folders f ON f.id = m.folder_id
+      WHERE m.user_id = ? AND ${inIds('m.account_id', sc?.accountIds)} AND m.date > ? AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')
+        AND (lower(m.from_addr) = ? OR lower(m.to_json) LIKE ? OR lower(m.cc_json) LIKE ?)
+      ORDER BY m.date DESC LIMIT 300`, req.user.id, now() - 365 * 864e5, email, like, like);
+    const out = new Map();
+    for (const r of rows) {
+      const key = r.thread_id || `m${r.id}`;
+      if (key === (m.thread_id || `m${m.id}`)) continue;
+      const t = out.get(key);
+      if (t) { t.count++; if (!r.is_read) t.unread++; continue; }
+      if (out.size >= limit) continue;
+      out.set(key, { id: r.id, threadId: r.thread_id, subject: r.subject, date: r.date, snippet: r.snippet, count: 1, unread: r.is_read ? 0 : 1, fromThem: (r.from_addr || '').toLowerCase() === email });
+    }
+    const list = [...out.values()];
+    for (const t of list) {
+      t.summary = (t.threadId && get('SELECT summary FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, t.threadId)?.summary)
+        || get('SELECT summary FROM ai_insights WHERE message_id = ?', t.id)?.summary || null;
+    }
+    return { person: { name: person.name || '', address: person.address }, threads: list };
   });
 
   app.get('/api/messages/:id/raw', async (req, reply) => {
@@ -490,16 +529,35 @@ export default async function mailRoutes(app) {
 
   // "Done" in the brief: the message leaves the brief, Important and Needs reply (it stays in its folder).
   app.post('/api/messages/:id/dismiss', async (req, reply) => {
-    const m = get('SELECT id, thread_id FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const m = get('SELECT id, thread_id, message_id FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!m) return httpError(reply, 404, 'Not found');
     // resolution: 'done' (the user did it) or 'skipped' (decided not to act); both leave Action needed and the brief.
     const undo = req.body?.dismissed === false;
     // 'wrong': the AI was wrong — not an action for the user (learned for this sender, see ai/learning.js).
     const resolution = ['skipped', 'wrong'].includes(req.body?.resolution) ? req.body.resolution : 'done';
     if (!undo && resolution === 'wrong') recordFeedback(req.user.id, get('SELECT * FROM messages WHERE id = ?', m.id), 'noaction');
-    run('UPDATE ai_insights SET dismissed_at = ?, resolution = ? WHERE message_id = ?', undo ? null : Date.now(), undo ? null : resolution, m.id);
-    notify(req.user.id, 'ai:insight', { messageId: m.id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) });
-    return { ok: true };
+    // Every copy of the email (Inbox and Archive, Gmail's All Mail…) is settled with it, or one copy stays open; with
+    // `thread`, also what else is open in the conversation (settled at the same moment, so undo brings back exactly that).
+    const copies = m.message_id ? all('SELECT id FROM messages WHERE user_id = ? AND message_id = ?', req.user.id, m.message_id).map((r) => r.id) : [];
+    let targets = [...new Set([m.id, ...copies])];
+    const inThread = req.body?.thread && m.thread_id;
+    if (undo) {
+      const at = get('SELECT dismissed_at FROM ai_insights WHERE message_id = ?', m.id)?.dismissed_at;
+      if (inThread && at) targets = [...new Set([...targets, ...all(`SELECT i.message_id AS id FROM ai_insights i JOIN messages x ON x.id = i.message_id
+        WHERE x.user_id = ? AND x.thread_id = ? AND i.dismissed_at = ? AND i.resolved_by IS NULL`, req.user.id, m.thread_id, at).map((r) => r.id)])];
+    } else if (inThread) {
+      targets = [...new Set([...targets, ...all(`SELECT i.message_id AS id FROM ai_insights i JOIN messages x ON x.id = i.message_id
+        WHERE x.user_id = ? AND x.thread_id = ? AND i.dismissed_at IS NULL AND (i.needs_action = 1 OR i.needs_reply = 1 OR i.needs_reply_user = 1)`, req.user.id, m.thread_id).map((r) => r.id)])];
+    }
+    const t = Date.now();
+    tx(() => { for (const id of targets) run('UPDATE ai_insights SET dismissed_at = ?, resolution = ? WHERE message_id = ?', undo ? null : t, undo ? null : resolution, id); });
+    for (const id of targets) {
+      const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', id);
+      if (ins) notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(ins) });
+    }
+    notify(req.user.id, 'mail:changed', { ids: targets });
+    scheduleBriefRefresh(req.user.id);
+    return { ok: true, count: targets.length };
   });
 
   // Corrections that teach the AI: kind = important | unimportant | category (value = category name).

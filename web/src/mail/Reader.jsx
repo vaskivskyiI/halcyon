@@ -33,7 +33,7 @@ export default function Reader({ id, view }) {
   const settings = store.use((s) => s.settings);
   const folders = store.use((s) => s.folders);
   const scroller = useRef();
-  // Opening a conversation: start at its first unread message (as it was when opened), else at the top.
+  // Opening a conversation: start at its first unread message (as it was when opened), else at its draft, else at the top.
   const placedFor = useRef(null);
   const firstUnread = useRef(null);
   const labels = store.use((s) => s.labels);
@@ -71,11 +71,26 @@ export default function Reader({ id, view }) {
     placedFor.current = id;
     const unread = thread.messages.find((m) => !m.isRead && !m.isDraft);
     firstUnread.current = unread?.id || null;
-    requestAnimationFrame(() => {
-      const el = unread && scroller.current?.querySelector(`[data-msg="${unread.id}"]`);
-      if (el && thread.messages.length > 1) el.scrollIntoView({ block: 'start' });
-      else if (scroller.current) scroller.current.scrollTop = 0;
-    });
+    // All read but a reply is being written (a draft in Drafts, a Halcyon draft, an unfinished quick reply): go there.
+    // Drafts open asynchronously, so look for a few frames.
+    const rel = thread.related?.drafts || [];
+    const hasDraft = !unread && (rel.length > 0 || thread.messages.some(isDraftMsg));
+    const quick = rel.some((d) => d.quick);
+    let tries = 0;
+    const place = () => {
+      const s = scroller.current;
+      if (!s || placedFor.current !== id) return;
+      if (unread) {
+        const el = s.querySelector(`[data-msg="${unread.id}"]`);
+        if (el && thread.messages.length > 1) el.scrollIntoView({ block: 'start' }); else s.scrollTop = 0;
+        return;
+      }
+      if (!hasDraft) { s.scrollTop = 0; return; }
+      const el = s.querySelector('.composer.inline') || (quick && tries > 5 ? s.querySelector('.quick-reply') : null);
+      if (el) el.scrollIntoView({ block: 'start' });
+      else if (++tries < 30) requestAnimationFrame(place);
+    };
+    requestAnimationFrame(place);
   }, [thread, id]);
 
   // Opened = read (after the configured delay, if it is still the message shown): every unread message shown here.
@@ -297,7 +312,10 @@ export default function Reader({ id, view }) {
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}
           onDone={async (resolution = 'done', undo = false) => {
             try {
-              await api.post(`/api/messages/${latest.id}/dismiss`, undo ? { dismissed: false } : { resolution });
+              // The message whose insight the card shows (the newest one may have none); the server settles its copies and
+              // the conversation's other open items with it.
+              await api.post(`/api/messages/${latest.insight ? latest.id : target.id}/dismiss`, undo ? { dismissed: false, thread: true } : { resolution, thread: true });
+              window.dispatchEvent(new Event('halcyon:poll'));
               toast(undo ? 'Back in Action needed' : resolution === 'skipped' ? 'Noted: not doing it — removed from Action needed' : resolution === 'wrong' ? 'Noted: not an action — the AI will learn from this' : 'Marked as done');
               load();
             } catch (e) { toastError(e); }
@@ -305,6 +323,8 @@ export default function Reader({ id, view }) {
             setAiWorking(true);
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
+
+        {!isDraftMsg(latest) && <RecentWith messageId={latest.id} view={view} />}
 
         {msgs.map((m, i) => {
           if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;
@@ -508,6 +528,32 @@ function AddrLine({ label, list, empty }) {
 // another mail app moved (usually to Trash) — not shown in the conversation (see Reader) and never editable.
 const isDraftMsg = (m) => /Drafts$/.test(m.folder?.specialUse || '');
 const isLeftoverDraft = (m) => m.isDraft && !isDraftMsg(m);
+
+/** Other recent conversations with this person: a reminder of what else is going on with them. */
+function RecentWith({ messageId, view }) {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setData(null); setOpen(false);
+    api.get(`/api/messages/${messageId}/recent-with?limit=6`).then(setData).catch(() => setData(null));
+  }, [messageId]);
+  const list = data?.threads;
+  if (!list?.length) return null;
+  const shown = open ? list : list.slice(0, 2);
+  const name = data.person.name || data.person.address;
+  return (
+    <div className="card recent-with">
+      <div className="row small muted" style={{ gap: 6, marginBottom: 4 }}><MailIcon size={13} /><span className="grow">Recent with <b>{name}</b></span>
+        {list.length > 2 && <button className="btn sm ghost" onClick={() => setOpen(!open)}>{open ? 'Less' : `All ${list.length}`}</button>}</div>
+      {shown.map((t) => (
+        <a key={t.id} className={`recent-row ${t.unread ? 'unread' : ''}`} href={`#/mail/${view}/${t.id}`} onClick={(e) => { e.preventDefault(); jump(`#/mail/${view}/${t.id}`); }}>
+          <span className="row" style={{ gap: 6 }}><span className="grow truncate">{t.subject || '(no subject)'}</span>
+            {t.count > 1 && <span className="chip">{t.count}</span>}<span className="small faint" style={{ flex: 'none' }}>{fmtFull(t.date)}</span></span>
+          <span className="small muted truncate">{t.summary || t.snippet}</span>
+        </a>))}
+    </div>
+  );
+}
 
 /** A draft from the Drafts folder (possibly written in another mail app), editable in place. */
 function ServerDraft({ m, onDone }) {

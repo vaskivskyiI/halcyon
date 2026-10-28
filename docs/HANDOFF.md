@@ -540,3 +540,16 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   and pull the list down to sync; Settings → Mail chooses the swipe actions.
 - sw.js, *.html and the manifest are served `no-cache` so installed apps pick up new versions.
 - Desktop: clicking a notification brings the window to the front (preload `show` → main `ipcMain.on('show')`).
+
+### Draft on open, recent with the sender, settling items fully (no migration)
+- Reader: a conversation whose messages are all read opens at its draft (inline editor, else the quick reply with an
+  unfinished text); otherwise first unread, else top.
+- Reader: "Recent with <person>" — `GET /api/messages/:id/recent-with` (the sender, or for the user's own mail the first
+  recipient; other conversations from/to them in the last year, not Trash/Junk/Drafts, newest first, with summary).
+- `POST /api/messages/:id/dismiss` settles every copy of the email (same Message-ID: Inbox + Archive, Gmail All Mail)
+  and, with `thread: true`, the conversation's other open items at the same moment (undo restores exactly those, not
+  ones the AI closed). The reader settles the message whose insight the AI card shows (was always the newest one, so
+  "Not doing it" on an older message's action did nothing); list (threaded) and brief pass `thread`.
+- `GET /api/messages/:id` for a shared space's message without acting as it → 404 with `owner` (members only); api.js
+  repeats the request as that space. Links to such mail (reload, Recent with, citations) used to say "no longer here".
+- List: selected row highlight was hidden by the swipe wrapper's background (now only while swiping).

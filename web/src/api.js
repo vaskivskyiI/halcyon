@@ -75,6 +75,9 @@ async function request(method, url, body) {
   const data = ct.includes('application/json') ? await r.json() : await r.text();
   if (!r.ok) {
     if (r.status === 401 && !url.startsWith('/api/auth')) window.dispatchEvent(new Event('halcyon:unauthorized'));
+    // A shared space's message opened by link before any list showed it: ask again as that space.
+    const id = r.status === 404 && !as && data?.owner && idOf(/^\/api\/messages\/(\d+)$/, url.split('?')[0]);
+    if (id) { owners.msg.set(Number(id), data.owner); return request(method, url, body); }
     throw new ApiError(data?.error || r.statusText, r.status, data?.code);
   }
   learn(method, url, data, as);

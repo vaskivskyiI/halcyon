@@ -436,7 +436,7 @@ function MessageList({ view, openId, onMenu }) {
   // Requested actions settled from the list: done, or deliberately not acted on.
   const settleMany = async (ids, resolution) => {
     try {
-      for (const id of ids) await api.post(`/api/messages/${id}/dismiss`, { resolution });
+      for (const id of ids) await api.post(`/api/messages/${id}/dismiss`, { resolution, thread: threaded });
       setItems((cur) => (view === 'needsaction' ? cur.filter((x) => !ids.includes(x.id)) : cur.map((x) => (ids.includes(x.id) && x.ai ? { ...x, ai: { ...x.ai, needsAction: false } } : x))));
       setSelected(new Set());
       toast(resolution === 'skipped' ? `Not doing it — ${ids.length} removed from Action needed` : resolution === 'wrong' ? `Not an action — the AI will learn from this` : `Done — ${ids.length} removed from Action needed`);

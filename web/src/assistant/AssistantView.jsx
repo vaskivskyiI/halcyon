@@ -73,8 +73,8 @@ function Brief() {
   const dismiss = async (id) => {
     setBrief((b) => ({ ...b, live: { ...b.live, attention: b.live.attention.filter((m) => m.id !== id), awaiting: b.live.awaiting.filter((m) => m.id !== id), actions: (b.live.actions || []).filter((m) => m.id !== id) } }));
     try {
-      await api.post(`/api/messages/${id}/dismiss`, {});
-      toast('Removed from the brief', { action: { label: 'Undo', onClick: () => api.post(`/api/messages/${id}/dismiss`, { dismissed: false }).then(() => load(false)) } });
+      await api.post(`/api/messages/${id}/dismiss`, { thread: true });
+      toast('Removed from the brief', { action: { label: 'Undo', onClick: () => api.post(`/api/messages/${id}/dismiss`, { dismissed: false, thread: true }).then(() => load(false)) } });
     } catch (e) { toastError(e); load(false); }
   };
   const taskDone = async (t) => {
