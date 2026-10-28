@@ -376,6 +376,16 @@ function MessageList({ view, openId, onMenu }) {
     loadTabCounts();
   }, [params]);
 
+  // The tab counts (Focused / Other / All) follow every change to mail — reading a conversation opened in Focused
+  // also reads its messages counted under Other — and every refresh of the list.
+  useEffect(() => {
+    let t = null;
+    const later = () => { clearTimeout(t); t = setTimeout(loadTabCounts, 400); };
+    const kinds = ['halcyon:mutated', 'halcyon:poll', 'halcyon:tabcounts'];
+    kinds.forEach((k) => window.addEventListener(k, later));
+    return () => { clearTimeout(t); kinds.forEach((k) => window.removeEventListener(k, later)); };
+  }, [view, activeQuery]);
+
   // Live updates.
   const reloadTimer = useRef();
   // Periodic refresh when the live connection is down (see App), and after "Sync now".
@@ -393,6 +403,7 @@ function MessageList({ view, openId, onMenu }) {
     }
     if (['mail:changed', 'folder:synced', 'mail:unsnoozed', 'mail:new'].includes(e.type)) {
       if (e.type === 'folder:synced' && !e.payload.newCount) return;
+      window.dispatchEvent(new Event('halcyon:tabcounts'));
       clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(async () => {
         const r = await api.get(`/api/messages?${params(null)}`).catch(() => null);
