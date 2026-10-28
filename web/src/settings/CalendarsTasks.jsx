@@ -9,7 +9,7 @@ import { Modal, Spinner } from '../components/common.jsx';
 const KINDS = {
   calendar: { title: 'Calendars', icon: CalendarIcon, url: '/api/calendars', move: 'move-events', items: 'events', count: (x) => x.events, event: 'calendar' },
   taskList: { title: 'Task lists', icon: ListTodo, url: '/api/task-lists', move: 'move-tasks', items: 'tasks', count: (x) => x.total, event: 'tasks' },
-  addressBook: { title: 'Address books', icon: Users, url: '/api/address-books', move: null, items: 'contacts', count: (x) => x.contacts, event: 'contacts' },
+  addressBook: { title: 'Address books', icon: Users, url: '/api/address-books', move: 'move-contacts', items: 'contacts', count: (x) => x.contacts, event: 'contacts' },
 };
 const fromServer = (x) => x.source === 'caldav' || x.source === 'carddav';
 
@@ -72,7 +72,7 @@ export default function CalendarsTasks() {
       await load();
       const left = r.skipped;
       // Everything that was not moved is already in the target (same UID): the local one can go.
-      if (confirm(`${r.moved} ${k.items} moved to “${target.name}”${left ? `; ${left} were already there` : ''}.\n\nDelete the now ${left ? 'redundant' : 'empty'} “${from.name}”${left ? ` (its ${left} remaining ${k.items} are copies of ones in “${target.name}”)` : ''}?`)) {
+      if (confirm(`${r.moved} ${k.items} moved to “${target.name}”${r.collected ? ` (and ${r.collected} addresses collected from your mail, kept in Halcyon for suggestions)` : ''}${left ? `; ${left} were already there` : ''}.\n\nDelete the now ${left ? 'redundant' : 'empty'} “${from.name}”${left ? ` (its ${left} remaining ${k.items} are copies of ones in “${target.name}”)` : ''}?`)) {
         await api.del(`${k.url}/${from.id}`);
         toast(`“${from.name}” deleted`);
         await load();
@@ -98,7 +98,8 @@ export default function CalendarsTasks() {
               <select className="input" value={moving.to} onChange={(e) => setMoving({ ...moving, to: Number(e.target.value) })}>
                 {moving.targets.map((t) => <option key={t.id} value={t.id}>{t.name} — {t.origin}</option>)}
               </select></label>
-            <div className="small muted">They are saved on that server{moving.kind === 'calendar' ? ' (no invitations are sent to anyone)' : ''}. Any it already has (the same {moving.kind === 'calendar' ? 'event' : 'task'}, e.g. imported from there earlier) is skipped. Nothing is deleted — afterwards you can delete “{moving.from.name}”.</div>
+            <div className="small muted">They are saved on that server{moving.kind === 'calendar' ? ' (no invitations are sent to anyone)' : ''}. Any it already has ({moving.kind === 'calendar' ? 'the same event' : moving.kind === 'taskList' ? 'the same task' : 'the same person, by UID or email address'}, e.g. imported from there earlier) is skipped.
+              {moving.kind === 'addressBook' && ' Addresses Halcyon collected from your mail (for suggestions while writing) move along but are not uploaded as contacts.'} Nothing is deleted — afterwards you can delete “{moving.from.name}”.</div>
           </div>
         </Modal>
       )}

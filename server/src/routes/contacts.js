@@ -1,4 +1,4 @@
-import { get, all, run, now, json } from '../db/index.js';
+import { get, all, run, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { serializeContact, autocomplete } from '../contacts/service.js';
@@ -8,6 +8,8 @@ import { notify } from '../util/events.js';
 import { serializeMessage } from '../mail/store.js';
 import { scope, reqSpace, spaceMap, inIds, spaceDefault } from '../spaces.js';
 import { originOf } from './spaces.js';
+import { queueMemory } from '../ai/queue.js';
+import { syncDav } from '../scheduler.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
@@ -20,6 +22,34 @@ export default async function contactRoutes(app) {
         (SELECT COUNT(*) FROM contacts c WHERE c.address_book_id = b.id AND c.deleted = 0) AS contacts
       FROM address_books b LEFT JOIN accounts a ON a.id = b.account_id WHERE b.user_id = ? AND ${inIds('b.id', sc?.bookIds)} ${every ? '' : 'AND COALESCE(b.hidden, 0) = 0'} ORDER BY b.name`, req.user.id)
       .map((b) => ({ ...b, readonly: !!b.readonly, isDefault: !!b.isDefault, hidden: !!b.hidden, origin: originOf(b), space: spaces.books.get(b.id) ?? '' }));
+  });
+
+  // Contacts of a local address book moved into another one (e.g. the synced book of an account, so they go to its
+  // server). Saved contacts are uploaded — unless the target already has the person (same UID or a shared email
+  // address): those are skipped and stay. Addresses collected from mail (for suggestions) move along but stay in
+  // Halcyon: they are never uploaded as contacts. Nothing is deleted.
+  app.post('/api/address-books/:id/move-contacts', async (req, reply) => {
+    const from = get('SELECT * FROM address_books WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const to = get('SELECT * FROM address_books WHERE id = ? AND user_id = ? AND readonly = 0', Number(req.body?.to), req.user.id);
+    if (!from || !to || to.id === from.id) return httpError(reply, 404, 'Not found');
+    if (from.source !== 'local') return httpError(reply, 400, 'Only contacts of an address book kept in Halcyon can be moved');
+    const dav = to.source === 'carddav' ? 1 : 0;
+    const uids = new Set(all('SELECT uid FROM contacts WHERE address_book_id = ? AND deleted = 0', to.id).map((r) => r.uid));
+    const emails = new Set(all('SELECT lower(e.email) AS e FROM contact_emails e JOIN contacts c ON c.id = e.contact_id WHERE c.address_book_id = ? AND c.deleted = 0', to.id).map((r) => r.e));
+    let moved = 0, skipped = 0, collected = 0;
+    tx(() => {
+      for (const c of all('SELECT * FROM contacts WHERE address_book_id = ? AND deleted = 0', from.id)) {
+        const mine = all('SELECT lower(email) AS e FROM contact_emails WHERE contact_id = ?', c.id).map((r) => r.e);
+        const saved = !c.auto_collected || c.favorite;
+        if (uids.has(c.uid) || mine.some((e) => emails.has(e))) { skipped++; continue; }
+        run('UPDATE contacts SET address_book_id = ?, href = NULL, etag = NULL, dirty = ?, updated_at = ? WHERE id = ?', to.id, saved ? dav : 0, now(), c.id);
+        if (saved) { moved++; queueMemory(req.user.id, 'contact', c.id); } else collected++;
+      }
+    });
+    const acc = to.account_id && get('SELECT * FROM accounts WHERE id = ?', to.account_id);
+    if (acc?.carddav_url && moved) syncDav(acc).catch(() => {});
+    notify(req.user.id, 'contacts:changed', {});
+    return { moved, skipped, collected };
   });
 
   // A local address book is deleted with its contacts (another one takes over as the default); one from a server

@@ -717,3 +717,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Settings → Calendars & tasks (`settings/CalendarsTasks.jsx`): show / hide, rename, default, "Move all to…" (local →
   synced, using move-events / move-tasks, then offers to delete the emptied local one), delete local ones. Linked from
   the Calendar sidebar (gear) and the calendar / task list menus ("Hide calendar", "Hide list", "Manage all …").
+- Contacts: POST /api/address-books/:id/move-contacts { to } (local → any writable book). Saved contacts move and are
+  uploaded (dirty) unless the target already has the person (same UID or a shared email → skipped); addresses collected
+  from mail (auto_collected, not favourite) move along with dirty = 0, i.e. they stay Halcyon-only suggestions and are
+  never uploaded. Settings → Calendars & tasks offers "Move all to…" for local books; the Contacts page has the
+  LocalDefault notice (kind "addressBook") and a link to the management page.

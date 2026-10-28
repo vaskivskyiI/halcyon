@@ -93,3 +93,27 @@ test('address books: a local one is deleted with its contacts, a synced one hidd
   assert.ok(!db.prepare('SELECT 1 FROM address_books WHERE id = ?').get(local));
   await assert.rejects(api('DELETE', `/api/address-books/${dav}`), /only address book/);
 });
+
+test('contacts move from a local address book: saved ones uploaded, the same person skipped, collected ones kept local', async () => {
+  const local = db.prepare("INSERT INTO address_books (user_id, name, source, created_at) VALUES (?, 'Old contacts', 'local', ?)").run(uid, Date.now()).lastInsertRowid;
+  const dav = db.prepare("SELECT id FROM address_books WHERE user_id = ? AND source = 'carddav'").get(uid).id;
+  const saved = await api('POST', '/api/contacts', { displayName: 'Marko', emails: [{ value: 'marko@x.example' }], addressBookId: local });
+  const twin = await api('POST', '/api/contacts', { displayName: 'Ana (old)', emails: [{ value: 'ANA@x.example' }], addressBookId: local });
+  const { collectAddresses } = await import('../src/contacts/service.js');
+  db.prepare('UPDATE address_books SET is_default = 0 WHERE user_id = ?').run(uid);
+  db.prepare('UPDATE address_books SET is_default = 1 WHERE id = ?').run(local);
+  collectAddresses(uid, [{ address: 'someone@y.example', name: 'Someone' }], Date.now(), true);
+  const coll = db.prepare("SELECT id, address_book_id FROM contacts WHERE emails_json LIKE '%someone@y.example%'").get();
+  db.prepare('UPDATE contacts SET address_book_id = ? WHERE id = ?').run(local, coll.id);
+
+  const r = await api('POST', `/api/address-books/${local}/move-contacts`, { to: dav });
+  assert.deepEqual(r, { moved: 1, skipped: 1, collected: 1 });
+  const m = db.prepare('SELECT address_book_id, dirty FROM contacts WHERE id = ?').get(saved.id);
+  assert.deepEqual([m.address_book_id, m.dirty], [dav, 1], 'uploaded with the next sync');
+  const c = db.prepare('SELECT address_book_id, dirty FROM contacts WHERE id = ?').get(coll.id);
+  assert.deepEqual([c.address_book_id, c.dirty], [dav, 0], 'collected address: kept for suggestions, not uploaded');
+  assert.equal(db.prepare('SELECT address_book_id FROM contacts WHERE id = ?').get(twin.id).address_book_id, local, 'the same person (by email) stays');
+  await assert.rejects(api('POST', `/api/address-books/${dav}/move-contacts`, { to: local }), /kept in Halcyon/);
+  await api('DELETE', `/api/address-books/${local}`);
+  assert.equal(db.prepare('SELECT is_default FROM address_books WHERE id = ?').get(dav).is_default, 1);
+});

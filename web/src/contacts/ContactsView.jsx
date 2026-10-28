@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef, Fragment } from 'react';
-import { Search, Plus, Star, Mail, Phone, Building2, Trash2, Upload, Download, ArrowLeft, Pencil, X, Merge, MapPin, Cake, Globe, Calendar } from 'lucide-react';
+import { Search, Plus, Star, Mail, Phone, Building2, Trash2, Upload, Download, ArrowLeft, Pencil, X, Merge, MapPin, Cake, Globe, Calendar, Settings2 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { Avatar, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError, navigate, fmtListDate } from '../util.js';
 import { openComposer } from '../mail/Composer.jsx';
 import PersonProfile from '../components/PersonProfile.jsx';
+import LocalDefault from '../components/LocalDefault.jsx';
 
 export default function ContactsView({ route }) {
   const selId = route[1] ? Number(route[1]) : null;
@@ -13,6 +14,9 @@ export default function ContactsView({ route }) {
   const [filter, setFilter] = useState('saved');
   const [group, setGroup] = useState('');
   const [groups, setGroups] = useState([]);
+  const [books, setBooks] = useState([]);
+  const loadBooks = () => api.get('/api/address-books').then(setBooks).catch(() => {});
+  useEffect(() => { loadBooks(); }, []);
   const [editing, setEditing] = useState(null);
   const [checked, setChecked] = useState(new Set());
   const fileRef = useRef();
@@ -34,10 +38,14 @@ export default function ContactsView({ route }) {
       <div className="pane-list">
         <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8, borderBottom: '1px solid var(--border)' }}>
           <div className="row"><h3 style={{ margin: 0 }} className="grow">Contacts</h3>
+            <button className="icon-btn" title="Address books (move from local, hide, delete)" onClick={() => navigate('#/settings/calendars')}><Settings2 size={16} /></button>
             <button className="icon-btn" title="Import vCard / CSV" onClick={() => fileRef.current.click()}><Upload size={16} /></button>
             <button className="icon-btn" title="Export vCard" onClick={() => window.open(api.url('/api/contacts/export.vcf'))}><Download size={16} /></button>
             <button className="btn primary sm" onClick={() => setEditing({ emails: [{ type: 'work', value: '' }], phones: [], addresses: [], groups: [] })}><Plus size={14} /> New</button>
             <input ref={fileRef} type="file" accept=".vcf,.csv,text/vcard,text/csv" hidden onChange={(e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ''; }} />
+          </div>
+          <div>
+            <LocalDefault kind="addressBook" items={books} reload={() => { loadBooks(); load(); }} />
           </div>
           <div className="search"><Search size={15} /><input className="input" placeholder="Search contacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
           <div className="row">
