@@ -7,7 +7,7 @@ import {
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { BackButton } from '../back.js';
-import { extraMenuItems } from './extras.js';
+import { extraMenuItems, archives } from './extras.js';
 import { navigate, fmtListDate, toast, toastError } from '../util.js';
 import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
@@ -74,6 +74,8 @@ function FolderNav({ view, open, onNavigate }) {
   const [dropTarget, setDropTarget] = useState(null);
   const [openMenu, menuNode] = useMenu();
   const [newFolder, setNewFolder] = useState(null);
+  const [archiveDlg, setArchiveDlg] = useState(null);
+  const archiveOlder = (acc, f) => setArchiveDlg({ acc, f });
   const go = (v) => { navigate(`#/mail/${v}`); onNavigate(); };
 
   const onDrop = (e, folderId) => {
@@ -89,6 +91,8 @@ function FolderNav({ view, open, onNavigate }) {
   const folderMenu = (e, acc, f) => openMenu(e, [
     { label: 'Mark all as read', icon: MailOpen, onClick: () => api.post(`/api/folders/${f.id}/read-all`).then(loadFolders) },
     { label: 'Export as .mbox (backup)', icon: Archive, onClick: () => window.open(api.url(`/api/folders/${f.id}/export.mbox`)) },
+    { label: 'Export as .eml files (ZIP)', icon: Archive, hint: 'for Outlook & co.', onClick: () => window.open(api.url(`/api/archives/export?folderId=${f.id}`)) },
+    acc.kind !== 'archive' && { label: 'Move older mail to an archive…', icon: Archive, onClick: () => archiveOlder(acc, f) },
     { label: 'New subfolder', icon: Plus, onClick: () => setNewFolder({ accountId: acc.accountId, parentPath: f.path }) },
     !f.specialUse && { label: 'Rename', icon: PenSquare, onClick: () => { const n = prompt('New name', f.name); if (n) api.patch(`/api/folders/${f.id}`, { name: n }).then(() => toast('Renaming…')); } },
     { label: f.syncEnabled ? 'Stop syncing this folder' : 'Sync this folder', icon: RefreshCw, onClick: () => api.patch(`/api/folders/${f.id}`, { syncEnabled: !f.syncEnabled }).then(loadFolders) },
@@ -151,7 +155,8 @@ function FolderNav({ view, open, onNavigate }) {
               <div className="nav-section" onClick={() => setCollapsed({ ...collapsed, [acc.accountId]: !collapsed[acc.accountId] })}>
                 {collapsed[acc.accountId] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 <span className="dot" style={{ background: acc.color }} />
-                <span className="truncate grow" style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>{acc.email}{acc.ownerName ? <span className="faint"> · {acc.ownerName}</span> : ''}</span>
+                {acc.kind === 'archive' && <span title="Archive — kept by Halcyon, on no mail server"><Archive size={13} /></span>}
+                <span className="truncate grow" style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>{acc.kind === 'archive' ? acc.name : acc.email}{acc.ownerName ? <span className="faint"> · {acc.ownerName}</span> : ''}</span>
                 {acc.syncState === 'syncing' && <Spinner size={12} />}
                 {acc.syncState === 'error' && <span title={acc.syncError}><AlertTriangle size={13} color="var(--danger)" /></span>}
               </div>
@@ -183,6 +188,7 @@ function FolderNav({ view, open, onNavigate }) {
       {menuNode}
       {newFolder && <NewFolderModal {...newFolder} onClose={() => setNewFolder(null)} />}
       {editCat && <CategoryEditor cat={editCat} onClose={() => setEditCat(null)} />}
+      {archiveDlg && <ArchiveOlder {...archiveDlg} onClose={() => setArchiveDlg(null)} />}
     </aside>
   );
 }
@@ -212,6 +218,38 @@ function CategoryEditor({ cat, onClose }) {
       <label className="field">Colour<input className="input" type="color" style={{ width: 60, padding: 2 }} value={f.color} onChange={(e) => setF({ ...f, color: e.target.value })} /></label>
     </div>
     <div className="small faint">Right-click an email to add it to the category or take it out — the AI keeps to what you decide.</div>
+  </Modal>;
+}
+
+/** A folder's mail older than a date, into an archive (like Outlook's AutoArchive) — in the background. */
+function ArchiveOlder({ acc, f, onClose }) {
+  const list = archives(acc.owner ?? null);
+  const [archiveId, setArchiveId] = useState(list[0]?.accountId || 'new');
+  const [name, setName] = useState(`Archive ${new Date().getFullYear()}`);
+  const [years, setYears] = useState('1');
+  const [keep, setKeep] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const before = () => { const d = new Date(); d.setFullYear(d.getFullYear() - Number(years)); return d.getTime(); };
+  const go = async () => {
+    setBusy(true);
+    try {
+      // (accountId: sent as the folder's owner — a shared space's archive for its mail.)
+      const id = archiveId === 'new' ? (await api.post('/api/archives', { name, accountId: acc.accountId })).id : archiveId;
+      await api.post(`/api/archives/${id}/move`, { folderId: f.id, before: before(), keep, accountId: acc.accountId });
+      toast('Archiving in the background…', { action: { label: 'Progress', onClick: () => navigate('#/settings/archives') } });
+      loadFolders(); onClose();
+    } catch (e) { toastError(e); setBusy(false); }
+  };
+  return <Modal title={`Move older mail from “${f.name}” to an archive`} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || (archiveId === 'new' && !name.trim())} onClick={go}>Move to archive</button></>}>
+    <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
+      <label className="field">Mail older than<select className="input" value={years} onChange={(e) => setYears(e.target.value)}>
+        {[['1', '1 year'], ['2', '2 years'], ['3', '3 years'], ['5', '5 years'], ['0', 'everything in this folder']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+      <label className="field">Archive<select className="input" value={archiveId} onChange={(e) => setArchiveId(e.target.value === 'new' ? 'new' : Number(e.target.value))}>
+        {list.map((a) => <option key={a.accountId} value={a.accountId}>{a.name}</option>)}<option value="new">New archive…</option></select></label>
+      {archiveId === 'new' && <label className="field">Name<input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>}
+      <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} /> Copy only — keep the mail on the server too</label>
+    </div>
+    <p className="small muted">Each email is copied into the archive (kept by Halcyon, folder “{f.name}”), checked, and then {keep ? 'left where it is' : 'moved to Trash on the mail server — it is removed there when Trash is emptied'}. Only mail Halcyon has downloaded is moved: for older mail, set the account to download all mail first (Settings → Accounts → History).</p>
   </Modal>;
 }
 

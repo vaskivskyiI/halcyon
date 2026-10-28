@@ -62,6 +62,14 @@ const merge = (a, b) => {
   return out;
 };
 
+// Desktop app in server mode, server unreachable: answers come from the copy on this PC (desktop/offline.js), marked
+// so; the app says it is offline until a live answer comes again.
+let offlineSince = null;
+function noteOffline(r) {
+  const off = r.headers.get('x-halcyon-offline') ? Number(r.headers.get('x-halcyon-cached-at')) || 0 : null;
+  if ((off === null) !== (offlineSince === null)) { offlineSince = off; window.dispatchEvent(new CustomEvent('halcyon:offline', { detail: off })); }
+}
+
 async function request(method, url, body) {
   const parts = method !== 'GET' && splitByOwner(body);
   if (parts) { let out = null; for (const [, b] of parts) out = merge(out, await request(method, url, b)); return out; }
@@ -71,6 +79,7 @@ async function request(method, url, body) {
     headers: { ...spaceHeader(), ...(as ? { 'x-halcyon-as': String(as) } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  noteOffline(r);
   const ct = r.headers.get('content-type') || '';
   const data = ct.includes('application/json') ? await r.json() : await r.text();
   if (!r.ok) {
@@ -133,6 +142,8 @@ let ws, retry = 1000, closedByUser = false;
 // Events of the mail being worked in (own, or the shared space entered) go to onEvent; events of the other one (a
 // shared space, or the own mail while in a shared space) go to onOtherEvent — e.g. to notify about new mail there.
 let activeAs = null;
+/** Whose a message is: a shared space's id, or null for the person's own. */
+export const ownerOf = (msgId) => owners.msg.get(Number(msgId)) ?? null;
 export const setApiActing = (id) => { activeAs = id || null; };
 let mergedSpaces = new Set();
 export const setMergedSpaces = (ids) => { mergedSpaces = new Set(ids || []); };

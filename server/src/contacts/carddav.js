@@ -65,4 +65,5 @@ export async function syncCardDav(account) {
       run('UPDATE address_books SET ctag = ? WHERE id = ?', remote.ctag || null, book.id);
     });
   }
+  return { books: books.length };
 }

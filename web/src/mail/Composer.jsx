@@ -55,7 +55,8 @@ export function replyPayload(mode, msg, accounts, extra = {}) {
     : `<div data-quote="1"><br><div>On ${fmtFull(msg.date)}, ${escapeHtml(addrFull(msg.from))} wrote:</div><blockquote>${body}</blockquote></div>`;
   const me = receivingIdentity(msg, accounts);
   return {
-    accountId: me?.accountId ?? msg.accountId, from: me ? { address: me.address, name: me.name } : undefined,
+    // (A reply to archived mail goes out from a mail account: an archive cannot send.)
+    accountId: me?.accountId ?? (accounts.find((a) => a.id === msg.accountId)?.kind === 'archive' ? undefined : msg.accountId), from: me ? { address: me.address, name: me.name } : undefined,
     to: mode === 'forward' ? [] : dedupe(to), cc: dedupe(cc), subject,
     quoteHtml: quote, inReplyToId: mode === 'forward' ? null : msg.id, forwardOfId: mode === 'forward' ? msg.id : null, replyToMessage: mode !== 'forward' ? msg.id : null,
     attachments: mode === 'forward' ? (msg.attachments || []).map((a) => ({ fromMessageId: msg.id, index: a.index, filename: a.filename, size: a.size })) : [],
@@ -141,7 +142,7 @@ const LANGS = ['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian',
 
 /** A compose window in the dock, or (inline) a draft shown as an editor inside its conversation; onDone after it is sent or deleted. */
 export function Composer({ id, init, minimized, inline = false, onDone }) {
-  const accounts = store.use((s) => s.accounts);
+  const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive'); // archives cannot send
   const settings = store.use((s) => s.settings);
   const space = store.get().space;
   const inSpace = accounts.filter((a) => !space || !a.space || a.space === space);

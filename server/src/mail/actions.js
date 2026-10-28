@@ -3,6 +3,7 @@ import { get, all, run, tx, now, json } from '../db/index.js';
 import { queueOp, runningOps } from './sync.js';
 import { recountFolder, deleteMessages, readRaw } from './store.js';
 import { notify } from '../util/events.js';
+import { isArchive, intoArchive } from './archive.js';
 
 function ownedMessages(userId, ids) {
   if (!ids?.length) return [];
@@ -62,14 +63,23 @@ export async function moveMessages(userId, ids, targetFolderId) {
       tx(() => { for (const m of group) { run('UPDATE messages SET folder_id = ?, uid = NULL WHERE id = ?', target.id, m.id); if (m.uid) map[m.uid] = m.id; } });
       const uids = group.map((m) => m.uid).filter(Boolean);
       if (uids.length) queueOp(src.account_id, 'move', { from: src.folder_path, to: target.path, uids, map });
+    } else if (isArchive(target.account_id)) {
+      // Into an archive: copied and checked there first, then the mailbox copy goes to Trash (see archive.js).
+      await intoArchive(userId, group.map((m) => m.id), target);
     } else {
-      // Cross-account move: append the raw message to the target account, then delete at source.
+      // Cross-account move: the raw message is appended to the target account; the source copy is deleted on the
+      // server only after that append worked (chained op), so a failed append loses nothing. Mail moved out of an
+      // archive stays in the archive too (it is a copy there).
+      const fromArchive = isArchive(src.account_id);
+      const gone = [];
       for (const m of group) {
         const raw = readRaw(m);
-        if (raw) queueOp(target.account_id, 'append', { folder: target.path, raw: raw.toString('base64'), flags: m.is_read ? ['\\Seen'] : [] });
-        if (m.uid) queueOp(src.account_id, 'delete', { folder: src.folder_path, uids: [m.uid] });
+        if (!raw) continue;
+        const then = !fromArchive && m.uid ? { accountId: src.account_id, op: 'delete', payload: { folder: src.folder_path, uids: [m.uid] } } : null;
+        queueOp(target.account_id, 'append', { folder: target.path, raw: raw.toString('base64'), flags: m.is_read ? ['\\Seen'] : [], then });
+        if (!fromArchive) gone.push(m.id);
       }
-      deleteMessages(group.map((m) => m.id));
+      deleteMessages(gone);
     }
     recountFolder(src.folder_id);
   }

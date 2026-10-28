@@ -7,7 +7,7 @@ import { testAccount } from '../mail/connection.js';
 import { syncManager } from '../mail/sync.js';
 import { encrypt, randomToken } from '../util/crypto.js';
 import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient } from '../mail/oauth.js';
-import { syncDav } from '../scheduler.js';
+import { syncDav, davStatus } from '../scheduler.js';
 import { getSettings } from '../settings.js';
 import { sharedOf } from '../shared.js';
 import { autoReplyOf, autoReplyActive } from '../mail/extras.js';
@@ -110,6 +110,10 @@ export default async function accountRoutes(app) {
         a.id, t - 120e3, a.id).n;
       if (unsaved) out.push({ key: `unsaved:${a.id}`, level: 'error', accountId: a.id, title: `${who}: ${unsaved} sent message${unsaved > 1 ? 's are' : ' is'} not saved on the server`, text: 'They were sent, but other mail apps will not show them in Sent.', actions: ['save-unsaved'] });
     }
+    for (const a of userAccounts(req.user.id)) {
+      const d = davStatus.get(a.id);
+      if (d?.error && (a.caldav_url || a.carddav_url)) out.push({ key: `dav:${a.id}`, level: 'error', accountId: a.id, title: `${a.email}: calendars / contacts are not synced`, text: d.error, at: d.at, actions: ['retry-dav'] });
+    }
     for (const c of all('SELECT id, name, source, sync_error FROM calendars WHERE user_id = ? AND sync_error IS NOT NULL', req.user.id)) {
       out.push({ key: `cal:${c.id}`, level: c.source === 'caldav' ? 'error' : 'warn', calendarId: c.id,
         title: c.source === 'caldav' ? `Calendar “${c.name}”: changes not saved on the server` : `Calendar “${c.name}” could not be refreshed`, text: c.sync_error, actions: ['refresh-calendar'] });
@@ -166,8 +170,12 @@ export default async function accountRoutes(app) {
     }
     const connChanged = ['imap', 'smtp', 'syncEnabled'].some((k) => req.body?.[k] !== undefined);
     if (connChanged) { if (fresh.sync_enabled) await syncManager.restart(a.id); else await syncManager.stop(a.id); }
-    if (req.body?.caldavUrl !== undefined || req.body?.carddavUrl !== undefined) syncDav(fresh);
-    return serializeAccount(fresh);
+    // Calendars / contacts: the first sync is waited for (up to 30 s), so the user sees what was found — or why not.
+    let dav = null;
+    const davChanged = (fresh.caldav_url || fresh.carddav_url) && (fresh.caldav_url !== a.caldav_url || fresh.carddav_url !== a.carddav_url
+      || fresh.dav_user !== a.dav_user || !!req.body?.davPassword || !davStatus.has(a.id) || !!davStatus.get(a.id)?.error);
+    if (davChanged) dav = await Promise.race([syncDav(fresh), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+    return { ...serializeAccount(fresh), dav };
   });
 
   app.delete('/api/accounts/:id', { preHandler: requireUser }, async (req, reply) => {
@@ -189,6 +197,8 @@ export default async function accountRoutes(app) {
   app.post('/api/accounts/:id/sync', { preHandler: requireUser }, async (req, reply) => {
     const a = userAccount(req.user.id, req.params.id);
     if (!a) return httpError(reply, 404, 'Not found');
+    // ?dav=1: calendars and contacts only, waited for (the problems panel's "Try again").
+    if (req.query.dav === '1') return { ok: true, dav: await syncDav(a) };
     await syncManager.restart(a.id);
     syncDav(a);
     return { ok: true };

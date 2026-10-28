@@ -64,6 +64,8 @@ function Shell() {
   const accountsLoaded = store.use((s) => s.accountsLoaded);
   const readOnly = store.use((s) => s.readOnly);
   const acting = store.use((s) => s.acting);
+  const [offline, setOffline] = useState(null);
+  useEffect(() => { const h = (e) => setOffline(e.detail); window.addEventListener('halcyon:offline', h); return () => window.removeEventListener('halcyon:offline', h); }, []);
   const reloadTimer = useRef();
   const insightTimer = useRef();
 
@@ -181,8 +183,8 @@ function Shell() {
   });
   return (
     <div className="app">
-      {(readOnly || acting) && <div className={`readonly-pill ${acting && !readOnly ? 'shared' : ''}`} title={readOnly ? 'This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.' : `You are working in the shared space “${acting.name}” — its mail, calendar, contacts and tasks are shared with its members.`}>
-        {[acting && `Shared: ${acting.name}`, readOnly && 'Read-only session'].filter(Boolean).join(' · ')}</div>}
+      {(readOnly || acting || offline !== null) && <div className={`readonly-pill ${acting && !readOnly && offline === null ? 'shared' : ''}`} title={offline !== null ? 'Halcyon cannot reach your server: you see the copy kept on this PC. Changes (sending, moving, marking) need the connection.' : readOnly ? 'This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.' : `You are working in the shared space “${acting.name}” — its mail, calendar, contacts and tasks are shared with its members.`}>
+        {[offline !== null && 'Offline — copy on this PC', acting && `Shared: ${acting.name}`, readOnly && 'Read-only session'].filter(Boolean).join(' · ')}</div>}
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (

@@ -20,20 +20,50 @@ import { cleanUploads } from './mail/uploads.js';
 import { notifyUser } from './notifications.js';
 
 const log = logger('scheduler');
-const davBusy = new Set();
+const davBusy = new Map();
+/** The last calendar / contacts sync of each account: { at, calendars, books, error } (shown in the problems panel). */
+export const davStatus = new Map();
 
-export async function syncDav(account) {
-  if (davBusy.has(account.id)) return;
-  davBusy.add(account.id);
-  try {
-    if (account.caldav_url) await syncCalDav(account);
-    if (account.carddav_url) await syncCardDav(account);
-    notify(account.user_id, 'calendar:changed', {});
-    notify(account.user_id, 'contacts:changed', {});
-  } catch (e) {
-    log.warn(`DAV sync ${account.email}: ${e.message}`);
-    notify(account.user_id, 'dav:error', { accountId: account.id, error: e.message });
-  } finally { davBusy.delete(account.id); }
+/**
+ * Calendars and contacts of an account from its CalDAV / CardDAV server. Returns { calendars, books, error }: how many
+ * were found (none found is reported too — a wrong address often answers with an empty list, not an error).
+ */
+export function syncDav(account) {
+  if (davBusy.has(account.id)) return davBusy.get(account.id);
+  const run = (async () => {
+    const out = { at: Date.now(), calendars: null, books: null, error: null };
+    try {
+      if (account.caldav_url) {
+        try { out.calendars = (await syncCalDav(account))?.calendars ?? 0; } catch (e) { out.error = `Calendars (CalDAV): ${davReason(e)}`; }
+      }
+      if (account.carddav_url) {
+        try { out.books = (await syncCardDav(account))?.books ?? 0; } catch (e) { out.error = [out.error, `Contacts (CardDAV): ${davReason(e)}`].filter(Boolean).join(' · '); }
+      }
+      if (!out.error && out.calendars === 0) out.error = 'Calendars (CalDAV): the server lists no calendars at this address — check the URL (e.g. https://cloud.example.com/remote.php/dav) and the DAV username';
+      if (!out.error && out.books === 0) out.error = 'Contacts (CardDAV): the server lists no address books at this address — check the URL and the DAV username';
+      if (out.error) {
+        log.warn(`DAV sync ${account.email}: ${out.error}`);
+        notify(account.user_id, 'dav:error', { accountId: account.id, error: out.error });
+      }
+      notify(account.user_id, 'calendar:changed', {});
+      notify(account.user_id, 'contacts:changed', {});
+    } finally {
+      davStatus.set(account.id, out);
+      davBusy.delete(account.id);
+    }
+    return out;
+  })();
+  davBusy.set(account.id, run);
+  return run;
+}
+
+// What the user can act on: wrong password, wrong address, server not reachable.
+function davReason(e) {
+  const m = String(e?.message || e);
+  if (/401|unauthori[sz]ed|invalid credentials/i.test(m)) return 'the server refused the username or password (set the DAV username / password if they differ from the mail login)';
+  if (/404|not found/i.test(m)) return `nothing found at this address (${m})`;
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|fetch failed|certificate/i.test(m)) return `the server could not be reached (${e.cause?.code || m})`;
+  return m;
 }
 
 function checkReminders() {

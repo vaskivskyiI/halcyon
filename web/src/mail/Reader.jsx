@@ -618,6 +618,26 @@ function ServerDraft({ m, onDone }) {
   return <Composer id={`inline-m${m.id}`} inline init={init} onDone={onDone} />;
 }
 
+/**
+ * Attachments dragged out of the window into Explorer / Finder / the desktop are saved there. The browser downloads
+ * them itself (DownloadURL); the desktop app gets the file ready while the mouse is down and starts a real file drag.
+ */
+function dragOut(m, a) {
+  const url = new URL(api.url(`/api/messages/${m.id}/attachments/${a.index}`), location.href).href;
+  const name = String(a.filename || 'attachment').replace(/[\\/:*?"<>|]+/g, '_');
+  const desk = window.halcyonDesktop;
+  return {
+    draggable: true,
+    onPointerDown: () => desk?.prepareDrag?.(url, name),
+    onDragStart: (e) => {
+      if (desk?.dragFile) { e.preventDefault(); desk.dragFile(url, name); return; }
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('DownloadURL', `${a.contentType || 'application/octet-stream'}:${name}:${url}`);
+      e.dataTransfer.setData('text/uri-list', url);
+    },
+  };
+}
+
 function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
   return (
@@ -638,7 +658,7 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
             : <div className="small muted truncate">{realAtts.length > 0 && <><Paperclip size={11} /> {realAtts.length} · </>}{m.snippet}</div>}
           {/* Attachments right under the header, so they are not missed below a long message. */}
           {expanded && realAtts.length > 0 && <div className="att-chips" onClick={(e) => e.stopPropagation()}>
-            {realAtts.map((a) => <a key={a.index} className="att-chip" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title={`${a.filename} · ${fmtSize(a.size || 0)}`}>
+            {realAtts.map((a) => <a key={a.index} className="att-chip" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title={`${a.filename} · ${fmtSize(a.size || 0)} — drag to a folder to save it there`} {...dragOut(m, a)}>
               <Paperclip size={11} /><span className="truncate">{a.filename}</span></a>)}
           </div>}
         </div>
@@ -654,7 +674,7 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
         {translation && <div className="notice" style={{ display: 'block' }}><div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Languages size={13} /> Translation</div><div style={{ whiteSpace: 'pre-wrap' }}>{translation}</div></div>}
         <div className="msg-body">{m.html ? <HtmlFrame html={m.html} /> : <PlainBody text={m.text} />}</div>
         {m.attachments?.length > 0 && <div className="attachments">{m.attachments.map((a) => (
-          <a key={a.index} className="attachment" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer">
+          <a key={a.index} className="attachment" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title="Open — or drag to a folder (Explorer, desktop) to save it there" {...dragOut(m, a)}>
             <Paperclip size={15} /><span className="truncate grow">{a.filename}</span><span className="faint small">{fmtSize(a.size || 0)}</span>
             <span className="icon-btn" style={{ width: 24, height: 24 }} onClick={(e) => { e.preventDefault(); window.open(api.url(`/api/messages/${m.id}/attachments/${a.index}`)); }}><Download size={14} /></span>
           </a>))}</div>}

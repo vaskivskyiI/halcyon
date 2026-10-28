@@ -452,6 +452,8 @@ export class AccountSync {
           }
         }
         this.dirtyFolders.add(target);
+        // A move between accounts: the source copy is removed only now that this copy is safely on the server.
+        if (p.then) queueOp(p.then.accountId, p.then.op, p.then.payload);
         break;
       }
       case 'deleteByMessageId': {
@@ -490,6 +492,7 @@ class SyncManager {
 
   start(accountId) {
     if (this.workers.has(accountId)) return this.workers.get(accountId);
+    if (isArchive(accountId)) return null; // an archive is on no mail server
     const w = new AccountSync(accountId);
     this.workers.set(accountId, w);
     w.start().finally(() => { if (this.workers.get(accountId) === w) this.workers.delete(accountId); });
@@ -529,7 +532,11 @@ export const syncManager = new SyncManager();
 /** Ids of pending_ops currently being executed against the server (an undo must not edit those). */
 export const runningOps = new Set();
 
+// Archives are on no mail server: what is done to them is done locally only (and is already done when this is called).
+const isArchive = (accountId) => get('SELECT kind FROM accounts WHERE id = ?', accountId)?.kind === 'archive';
+
 export function queueOp(accountId, op, payload) {
+  if (isArchive(accountId)) return;
   run('INSERT INTO pending_ops (account_id, op, payload_json, created_at) VALUES (?, ?, ?, ?)', accountId, op, JSON.stringify(payload), now());
   syncManager.trigger(accountId);
 }

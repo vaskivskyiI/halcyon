@@ -565,3 +565,34 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - `supersededSql` counts only a newer request that is still open (a different request of the same sender and subject
   comes back into view when the newer is settled); true repeats (same sender, same conversation or subject, same action
   or items: `repeatsOf`) are settled and undone together. The brief's Done is per email again.
+
+### Archives, Outlook data files, offline copy in the desktop app, drag attachments out (migration 32)
+- `accounts.kind = 'archive'`: mail kept by Halcyon on no server. `queueOp` drops ops for archives and
+  `SyncManager.start` never starts them, so everything done to archive mail is local. Archives cannot send (send.js,
+  composer hides them, replies to archived mail use a mail account). Settings → Accounts hides them; Settings → Archives.
+- mail/archive.js: `addToArchive` (dedupe by Message-ID per folder, ai_status 'none' — imports are not analysed),
+  `intoArchive` (copy → read back + sha1 compare → carry over insight / tags / tasks / events → mailbox copy to Trash;
+  from another archive: removed there; keep = copy only), jobs (`archive_jobs`, one at a time, progress via
+  `archive:job`, resumed after restart; imports are idempotent). moveMessages: into an archive → intoArchive (no undo);
+  out of an archive → append, archive keeps it.
+- Cross-account moves between mail accounts: the source delete is chained after the append (`then` on the append op)
+  — before, a failed append still deleted the original.
+- mail/importers.js: PST/OST (pst-extractor 1.12, MIT; folders kept, store root folders dropped, original headers,
+  SMTP addresses via PR_SENDER_SMTP_ADDRESS / recipient smtpAddress, attachments incl. embedded messages, read/flag;
+  calendar/contacts skipped), MBOX (chunked, mboxrd), EML, ZIP of EML/MBOX (folders from the ZIP paths).
+  Verified with the library's sample enron.pst (71 mails, 29 with attachments) and an .ost (`TEST_PST=… npm test`).
+- routes/archives.js: list/create, import (octet-stream upload streamed to dataDir/imports, or `{ path }` in the
+  desktop's single-user server only), move (ids, or folder + before date), export ZIP of .eml (util/zip.js: stored,
+  ZIP64; reader handles deflate). Archives are per owner: shared-space mail only into that space's archives.
+  nginx.conf: 50 GB, unbuffered for the import route.
+- Desktop server mode keeps a copy on the PC (desktop/offline.js, `protocol.handle` on the server's scheme): GET
+  answers cached by URL (+ as / space headers; details without space), emails of lists shown prefetched (2 at a
+  time), app shell cached; network error or 502-504 → copy with `x-halcyon-offline`; changes → 503. Logout clears it;
+  tray: clear. Opens offline when the server is down at start. Web shows "Offline — copy on this PC". Verified with
+  an Electron 44 harness (sign-in through the handler, prefetched message readable offline).
+- Attachments drag out: DownloadURL in browsers; desktop fetches to temp on pointerdown and `startDrag` (not tried
+  with a real mouse drag yet).
+- CalDAV / CardDAV: `syncDav` returns { calendars, books, error } (none found is an error too — tsdav answers a wrong
+  address with an empty list); saving an account waits for it (≤30 s) and says the result; failures stay in the
+  problems panel (`dav:<accountId>`, "Try again" = `POST /api/accounts/:id/sync?dav=1`). Before, every DAV failure
+  was only logged.

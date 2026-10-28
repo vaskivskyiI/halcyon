@@ -100,6 +100,7 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
       run('UPDATE calendars SET ctag = ? WHERE id = ?', remote.ctag || null, cal.id);
     });
   }
+  return { calendars: remoteCals.length };
 }
 
 export function importIcsInto(userId, calendarId, ics) {

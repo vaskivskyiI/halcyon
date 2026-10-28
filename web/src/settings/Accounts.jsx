@@ -4,10 +4,11 @@ import { api } from '../api.js';
 import { store } from '../store.js';
 import { loadAccounts, loadFolders } from '../data.js';
 import { Modal, Spinner, Switch } from '../components/common.jsx';
+import { davFound } from '../components/Problems.jsx';
 import { toast, toastError, fmtListDate } from '../util.js';
 
 export default function Accounts() {
-  const accounts = store.use((s) => s.accounts);
+  const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive'); // archives: Settings → Archives
   const user = store.use((s) => s.user);
   const [editing, setEditing] = useState(null);
   const [oauthSetup, setOauthSetup] = useState(null);
@@ -155,8 +156,11 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
     }
     setBusy(true);
     try {
-      if (account) await api.patch(`/api/accounts/${account.id}`, body()); else await api.post('/api/accounts', body());
-      toast(account ? 'Account updated' : 'Account added — syncing your mail…');
+      const r = account ? await api.patch(`/api/accounts/${account.id}`, body()) : await api.post('/api/accounts', body());
+      // Calendars / contacts: what the first sync found, or why it found nothing.
+      if (r?.dav?.error) toastError(new Error(r.dav.error));
+      else if (r?.dav?.pending) toast('Account updated — calendars and contacts are still being synced');
+      else toast(account ? `Account updated${r?.dav ? ` — ${davFound(r.dav)}` : ''}` : 'Account added — syncing your mail…');
       await loadAccounts(); loadFolders(); onClose();
     } catch (e) { toastError(e); } finally { setBusy(false); }
   };

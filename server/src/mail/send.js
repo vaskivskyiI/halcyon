@@ -71,6 +71,7 @@ export async function buildMime(account, p) {
 export function queueSend(userId, payload, { delayMs = 0, sendAt = null } = {}) {
   const account = get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', payload.accountId, userId);
   if (!account) throw new Error('Account not found');
+  if (account.kind === 'archive') throw new Error('An archive cannot send mail — choose a mail account');
   if (!normAddrs(payload.to).length && !normAddrs(payload.cc).length && !normAddrs(payload.bcc).length) throw new Error('Add at least one recipient');
   // A second click on Send (or a retried request) must not send the message twice: the same compose session (sendKey),
   // or the very same message within a minute, returns the message already queued.

@@ -8,7 +8,7 @@ export const userAccount = (userId, id) => get('SELECT * FROM accounts WHERE id 
 
 export function serializeAccount(a) {
   return {
-    id: a.id, name: a.name, email: a.email, displayName: a.display_name, color: a.color,
+    id: a.id, kind: a.kind || 'mail', name: a.name, email: a.email, displayName: a.display_name, color: a.color,
     imap: { host: a.imap_host, port: a.imap_port, secure: !!a.imap_secure, user: a.imap_user },
     smtp: { host: a.smtp_host, port: a.smtp_port, secure: !!a.smtp_secure, user: a.smtp_user },
     authType: a.auth_type, signatureHtml: a.signature_html, syncEnabled: !!a.sync_enabled, syncState: a.sync_state,

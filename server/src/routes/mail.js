@@ -103,7 +103,7 @@ export default async function mailRoutes(app) {
     const accounts = userAccounts(uid).filter((a) => !sc || sc.accountIds.includes(a.id));
     const acc = inIds('m.account_id', sc?.accountIds);
     const out = accounts.map((a) => ({
-      accountId: a.id, email: a.email, name: a.name || a.email, color: a.color, syncState: a.sync_state, syncError: a.sync_error,
+      accountId: a.id, kind: a.kind || 'mail', email: a.email, name: a.name || a.email, color: a.color, syncState: a.sync_state, syncError: a.sync_error,
       folders: all('SELECT id, path, name, delimiter, special_use AS specialUse, parent_path AS parentPath, total, unread, sync_enabled AS syncEnabled FROM folders WHERE account_id = ? ORDER BY path', a.id),
     }));
     // Each count uses the same filter as its list and counts conversations (as the list shows them):
@@ -502,7 +502,9 @@ export default async function mailRoutes(app) {
       target = [...new Set([...target, ...copies])];
     }
     // Everything that moves mail can be undone: remember where it was.
-    const undo = ['archive', 'trash', 'spam', 'notspam', 'move'].includes(action) ? actions.folderSnapshot(u, target) : null;
+    // (Not a move into or out of an archive: those copy — undo would leave the mail twice.)
+    const archiveMove = action === 'move' && get("SELECT 1 AS x FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.kind = 'archive'", Number(req.body?.folderId));
+    const undo = ['archive', 'trash', 'spam', 'notspam', 'move'].includes(action) && !archiveMove ? actions.folderSnapshot(u, target) : null;
     switch (action) {
       case 'read': actions.setFlags(u, target, { read: true }); break;
       case 'unread': actions.setFlags(u, target, { read: false }); break;

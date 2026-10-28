@@ -1,7 +1,7 @@
 // Outlook-style actions shared by the message list and the reader: follow-up flags, block sender, sweep, ignore
 // conversation and quick steps.
-import { Flag, Ban, Brush, BellOff, Zap } from 'lucide-react';
-import { api } from '../api.js';
+import { Flag, Ban, Brush, BellOff, Zap, Archive, Plus } from 'lucide-react';
+import { api, ownerOf } from '../api.js';
 import { store } from '../store.js';
 import { toast, toastError } from '../util.js';
 import { loadFolders } from '../data.js';
@@ -69,7 +69,35 @@ export async function runQuickStep(step, ids, onDone) {
   } catch (e) { toastError(e); }
 }
 
-/** Menu entries for one message (or a selection, ids) — follow-up, quick steps, sweep, block, ignore. */
+/**
+ * The archives (kept by Halcyon, on no mail server) of an owner: the person's own (null) or a shared space's — mail
+ * goes only into an archive of the same owner (business mail stays in the business space).
+ */
+export const archives = (owner = null) => (store.get().folders?.accounts || []).filter((a) => a.kind === 'archive' && (a.owner ?? null) === owner);
+
+/**
+ * Into an archive: copied there and checked, then the mailbox copy goes to Trash on the mail server (recoverable
+ * there until Trash is emptied). Runs in the background (Settings → Archives shows the progress).
+ */
+export async function moveToArchive(ids, archive, onDone) {
+  if (!archive) {
+    const name = prompt('Name of the new archive', `Archive ${new Date().getFullYear()}`);
+    if (!name) return;
+    // (ids: the archive is made where the mail is — in its shared space, if it is from one.)
+    try { const a = await api.post('/api/archives', { name, ids }); await loadFolders(); archive = { accountId: a.id, name: a.name }; } catch (e) { return toastError(e); }
+  }
+  const n = ids.length;
+  if (!confirm(`Move ${n > 1 ? `${n} messages` : 'this message'} to the archive “${archive.name}”?
+
+Each is copied into the archive (kept by Halcyon), checked, and then moved to Trash on your mail server — it is removed from the server when Trash is emptied there.`)) return;
+  try {
+    await api.post(`/api/archives/${archive.accountId}/move`, { ids });
+    toast(`Archiving ${n > 1 ? `${n} messages` : '1 message'}…`, { action: { label: 'Progress', onClick: () => { location.hash = '#/settings/archives'; } } });
+    onDone?.();
+  } catch (e) { toastError(e); }
+}
+
+/** Menu entries for one message (or a selection, ids) — follow-up, quick steps, sweep, block, ignore, archives. */
 export function extraMenuItems({ msg, ids, onDone, muted = false }) {
   const steps = store.get().quickSteps || [];
   const from = msg?.from?.address;
@@ -82,5 +110,8 @@ export function extraMenuItems({ msg, ids, onDone, muted = false }) {
     from && { label: 'Sweep: keep only the newest', icon: Brush, onClick: () => sweep(from, 'archive', true, onDone) },
     msg?.threadId && { label: muted ? 'Stop ignoring this conversation' : 'Ignore conversation', icon: BellOff, hint: muted ? '' : 'new replies → archive', onClick: () => muteThread(msg.threadId, !muted, onDone) },
     from && { label: `Block ${from}`, icon: Ban, danger: true, onClick: () => blockSender(from, onDone) },
+    'sep', { section: 'Move to archive' },
+    ...archives(ownerOf(msg?.id ?? ids[0])).filter((a) => !msg || a.accountId !== msg.accountId).map((a) => ({ label: a.name, icon: Archive, hint: 'off the server', onClick: () => moveToArchive(ids, a, onDone) })),
+    { label: 'New archive…', icon: Plus, onClick: () => moveToArchive(ids, null, onDone) },
   ];
 }

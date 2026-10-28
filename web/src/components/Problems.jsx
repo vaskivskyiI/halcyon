@@ -23,8 +23,15 @@ const ACTIONS = {
   'to-draft': { label: 'Save as draft', icon: FileText, run: (p) => api.post(`/api/outbox/${p.outboxId}/to-draft`).then(() => 'Saved in Outbox & drafts — nothing was sent') },
   'refresh-calendar': { label: 'Try again', icon: RefreshCw, run: (p) => api.post(`/api/calendars/${p.calendarId}/refresh`).then(() => 'Calendar refreshed') },
   'refresh-source': { label: 'Try again', icon: RefreshCw, run: (p) => api.post(`/api/calendar-sources/${p.sourceId}/refresh`).then(() => 'Calendars refreshed') },
+  'retry-dav': {
+    label: 'Try again', icon: RefreshCw,
+    run: (p) => api.post(`/api/accounts/${p.accountId}/sync?dav=1`).then((r) => { if (r.dav?.error) throw new Error(r.dav.error); return davFound(r.dav); }),
+  },
   'save-unsaved': { label: 'Save on server', icon: CloudUpload, run: () => api.post('/api/messages/save-to-server', { all: true }).then((r) => `Saving ${r.queued} message${r.queued === 1 ? '' : 's'} on the server…`) },
 };
+
+/** "2 calendars and 1 address book synced". */
+export const davFound = (d) => [d?.calendars != null && `${d.calendars} calendar${d.calendars === 1 ? '' : 's'}`, d?.books != null && `${d.books} address book${d.books === 1 ? '' : 's'}`].filter(Boolean).join(' and ') + ' synced';
 
 export default function Problems() {
   const [problems, setProblems] = useState([]);

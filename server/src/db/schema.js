@@ -392,4 +392,15 @@ export const migrations = [
   `,
   // 31: each action item of an email settled on its own ({ "<item text, lower case>": { resolution, at } }).
   `ALTER TABLE ai_insights ADD COLUMN action_state_json TEXT;`,
+  // 32: archives — mailboxes kept by Halcyon itself, on no mail server (imported Outlook data files, mail moved out of
+  // a mailbox); their imports / moves run as jobs.
+  `
+  ALTER TABLE accounts ADD COLUMN kind TEXT DEFAULT 'mail';
+  CREATE TABLE archive_jobs (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL, format TEXT, file_path TEXT, file_name TEXT, keep_file INTEGER DEFAULT 0, params_json TEXT,
+    status TEXT DEFAULT 'queued', done INTEGER DEFAULT 0, total INTEGER, skipped INTEGER DEFAULT 0, failed INTEGER DEFAULT 0, error TEXT,
+    created_at INTEGER, finished_at INTEGER
+  );
+  `,
 ];

@@ -9,6 +9,7 @@
   input[type=url] { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; border: 1px solid #d0d5dd; border-radius: 8px; margin-top: 8px; }
   button { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; float: right; }
   .warn { color: #92400e; font-size: 12px; margin-top: 6px; }
+  .keep { display: flex; gap: 8px; font-size: 12px; color: #5b6474; margin-top: 8px; cursor: pointer; }
   .note { font-size: 12px; color: #5b6474; clear: both; padding-top: 14px; }
   .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
 </style></head>
@@ -16,9 +17,10 @@
   <h2>Connection</h2>
   <p>Choose where mail is synced and analysed by AI. Only one place does the work, so nothing is analysed twice.</p>
   <div id="err" class="err" hidden></div>
-  <label class="opt"><input type="radio" name="mode" value="local"><span><b>This PC — local AI</b><small>Mail, calendar and AI run on this computer, e.g. on the NPU of a Surface / Copilot+ PC via Foundry Local, or with Ollama. Works offline; data stays in your user profile.</small></span></label>
+  <label class="opt"><input type="radio" name="mode" value="local"><span><b>This PC — local AI</b><small>Mail accounts are set up here; mail, calendar and AI run on this computer (e.g. on the NPU of a Surface / Copilot+ PC via Foundry Local, or with Ollama). Everything is stored in your user profile and works offline.</small></span></label>
   <label class="opt"><input type="radio" name="mode" value="remote"><span><b>Halcyon server</b><small>Use your self-hosted Halcyon server. AI runs once on the server, even while this PC is off; this PC runs no background AI.</small>
-    <input type="url" id="url" placeholder="https://mail.example.com"><div id="insecure" class="warn" hidden>Plain http: passwords and mail would cross the network unencrypted. Use https, or http only via VPN/LAN.</div></span></label>
+    <input type="url" id="url" placeholder="https://mail.example.com"><div id="insecure" class="warn" hidden>Plain http: passwords and mail would cross the network unencrypted. Use https, or http only via VPN/LAN.</div>
+    <span class="keep"><input type="checkbox" id="offline"> Keep a copy on this PC — mail, conversations and AI results you have seen (and the recent mail of your lists) stay readable when the server cannot be reached</span></span></label>
   <button id="save">Save & restart</button>
   <div class="note">Accounts are not shared between the two modes. Add a mail account in one of them only — an account added to both would be synced and analysed twice.</div>
 <script>
@@ -26,6 +28,7 @@
   document.querySelector(`input[value=${q.get('mode') || 'local'}]`).checked = true;
   const urlInput = document.getElementById('url');
   urlInput.value = q.get('url') || '';
+  document.getElementById('offline').checked = q.get('offline') !== '0';
   const lan = /^http:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^/:]+\.(lan|local|internal)(:|\/|$))/i;
   const checkUrl = () => { document.getElementById('insecure').hidden = !(/^http:/i.test(urlInput.value) && !lan.test(urlInput.value)); };
   urlInput.oninput = checkUrl; checkUrl();
@@ -34,7 +37,7 @@
     const mode = document.querySelector('input[name=mode]:checked').value;
     const url = document.getElementById('url').value.trim();
     if (mode === 'remote' && !/^https?:\/\//.test(url)) { alert('Enter the server URL, e.g. https://mail.example.com'); return; }
-    window.halcyonDesktop.saveConnection(mode, url);
+    window.halcyonDesktop.saveConnection(mode, url, document.getElementById('offline').checked);
   };
 </script>
 </body></html>
