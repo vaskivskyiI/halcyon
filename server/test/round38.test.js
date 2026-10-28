@@ -135,8 +135,13 @@ test('a move between two mail accounts deletes the source only after the copy is
 test('an Outlook data file is imported with its folders', { skip: !process.env.TEST_PST }, async () => {
   const { id } = await api('POST', '/api/archives', { name: 'Outlook' });
   const file = fs.readFileSync(process.env.TEST_PST);
+  // The server keeps answering while the file is read (in a worker thread): no long stall of the main thread.
+  let last = Date.now(), worst = 0;
+  const watch = setInterval(() => { const n = Date.now(); worst = Math.max(worst, n - last - 20); last = n; }, 20);
   await api('POST', `/api/archives/${id}/import?filename=${encodeURIComponent(path.basename(process.env.TEST_PST))}`, file);
   const jobs = await waitJobs();
+  clearInterval(watch);
+  assert.ok(worst < 1000, `the server stalled for ${worst} ms`);
   const job = jobs.find((j) => j.archiveId === id);
   assert.equal(job.status, 'done', job.error);
   const ar = (await api('GET', '/api/archives')).archives.find((x) => x.id === id);

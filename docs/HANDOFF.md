@@ -731,3 +731,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   continues at the server's size (GET /api/archives/uploads/:id → { size, total }); a page close is warned about.
 - Checked on a real install: 8 MB pieces pass its proxy; pst-extractor reads by file descriptor (fine for 4 GB+).
 - A file that is not a PST/OST fails with a readable reason; job errors are stripped of control characters.
+- Outlook data files are read in a worker thread (`mail/pst-worker.js` → `mail/pst.js` `readPst`; importers.js
+  `pstImport` stores each email in the main thread and then asks for the next one). pst-extractor reads synchronously:
+  in the main thread a 4 GB file blocked the whole server for minutes (open + folder count); measured on the 14 MB
+  sample: worst main-thread stall 2.4 s before, 1 ms now. round38's PST test (TEST_PST) asserts the server stays
+  responsive.
