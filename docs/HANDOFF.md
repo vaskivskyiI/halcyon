@@ -704,3 +704,16 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (before: every 30 min all events were deleted and re-inserted → re-embedded, reminders / links reset).
 - Memory backfill skips items whose job finished in the last 6 h (items with nothing to index were re-queued every
   15 min — ~280k memory jobs a week on a real install).
+
+### Calendars & tasks management (migration 37)
+- `hidden` on calendars, task_lists, address_books. A synced one (caldav / carddav) is hidden instead of deleted —
+  deleting its row only made it come back with the next sync. Hidden calendars also get enabled = 0 (so listRange,
+  free/busy, reminders, calendarForAccount skip them); hidden lists / books are left out of GET /api/tasks and
+  /api/contacts. Making one the default shows it again; hiding the default hands the default to another one.
+- DELETE on a synced calendar / list / book hides it ({ hidden: true }); on a local one deletes it with its events /
+  tasks / contacts (default passed on); a subscription is ended. New: DELETE /api/address-books/:id.
+- GET …?all=1 on /api/calendars, /api/task-lists, /api/address-books: every space, hidden ones too, with counts
+  (events / total / contacts) and origin.
+- Settings → Calendars & tasks (`settings/CalendarsTasks.jsx`): show / hide, rename, default, "Move all to…" (local →
+  synced, using move-events / move-tasks, then offers to delete the emptied local one), delete local ones. Linked from
+  the Calendar sidebar (gear) and the calendar / task list menus ("Hide calendar", "Hide list", "Manage all …").

@@ -445,4 +445,11 @@ export const migrations = [
   UPDATE tasks SET list_id = (SELECT l.id FROM task_lists l WHERE l.user_id = tasks.user_id AND l.name = COALESCE(NULLIF(tasks.list, ''), 'Tasks'));
   UPDATE task_lists SET is_default = 1 WHERE id IN (SELECT MIN(id) FROM task_lists GROUP BY user_id);
   `,
+  // 37: calendars, task lists and address books from a server can be hidden (removed from view, still synced, shown
+  // again any time) — deleting their row only made them come back with the next sync.
+  `
+  ALTER TABLE calendars ADD COLUMN hidden INTEGER DEFAULT 0;
+  ALTER TABLE task_lists ADD COLUMN hidden INTEGER DEFAULT 0;
+  ALTER TABLE address_books ADD COLUMN hidden INTEGER DEFAULT 0;
+  `,
 ];

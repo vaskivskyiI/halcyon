@@ -20,7 +20,7 @@ const out = (t) => ({ id: t.id, title: t.title, notes: t.notes, due: t.due, dueA
   list: t.list_name || t.list, listId: t.list_id, rrule: t.rrule || null, readonly: !!t.list_readonly, sourceMessageId: t.source_message_id, createdAt: t.created_at });
 const one = (id) => get('SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t LEFT JOIN task_lists l ON l.id = t.list_id WHERE t.id = ?', id);
 const listOut = (l, m) => ({ id: l.id, name: l.name, color: l.color, source: l.source, accountId: l.account_id, readonly: !!l.readonly, isDefault: !!l.is_default,
-  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0, origin: originOf(l) });
+  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0, total: l.total, origin: originOf(l), hidden: !!l.hidden });
 
 /** A change in a synced list goes to the server at once (in the background; a refusal shows in the problems panel). */
 function pushList(listId) {
@@ -38,11 +38,14 @@ export default async function taskRoutes(app) {
   app.addHook('preHandler', requireUser);
 
   // ---- lists (each in a space, like calendars; synced ones come from an account's CalDAV server)
+  // ?all=1: every list of every space, hidden ones too, with all its tasks counted (Settings → Calendars & tasks).
   app.get('/api/task-lists', async (req) => {
     ensureTaskLists(req.user.id);
-    const sc = scope(req.user.id, reqSpace(req)), m = spaceMap(req.user.id);
-    return all(`SELECT l.*, a.email, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open FROM task_lists l LEFT JOIN accounts a ON a.id = l.account_id
-      WHERE l.user_id = ? AND ${inIds('l.id', sc?.taskListIds)}
+    const every = req.query.all === '1';
+    const sc = every ? null : scope(req.user.id, reqSpace(req)), m = spaceMap(req.user.id);
+    return all(`SELECT l.*, a.email, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id) AS total
+      FROM task_lists l LEFT JOIN accounts a ON a.id = l.account_id
+      WHERE l.user_id = ? AND ${inIds('l.id', sc?.taskListIds)} ${every ? '' : 'AND COALESCE(l.hidden, 0) = 0'}
       ORDER BY l.is_default DESC, l.name`, req.user.id).map((l) => listOut(l, m));
   });
   app.post('/api/task-lists', async (req, reply) => {
@@ -57,10 +60,19 @@ export default async function taskRoutes(app) {
     const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!l) return httpError(reply, 404, 'Not found');
     const b = req.body || {};
+    if (b.hidden !== undefined) {
+      if (b.hidden && l.is_default) {
+        const next = get('SELECT id FROM task_lists WHERE user_id = ? AND id != ? AND readonly = 0 AND COALESCE(hidden, 0) = 0 ORDER BY id LIMIT 1', req.user.id, l.id);
+        if (!next) return httpError(reply, 400, 'This is your only task list — it cannot be hidden');
+        run('UPDATE task_lists SET is_default = 0 WHERE id = ?', l.id);
+        run('UPDATE task_lists SET is_default = 1 WHERE id = ?', next.id);
+      }
+      run('UPDATE task_lists SET hidden = ? WHERE id = ?', b.hidden ? 1 : 0, l.id);
+    }
     if (b.isDefault) {
       if (l.readonly) return httpError(reply, 400, 'A read-only list cannot be the default');
       run('UPDATE task_lists SET is_default = 0 WHERE user_id = ?', req.user.id);
-      run('UPDATE task_lists SET is_default = 1 WHERE id = ?', l.id);
+      run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', l.id);
     }
     run('UPDATE task_lists SET name = COALESCE(?, name), color = COALESCE(?, color) WHERE id = ?', b.name ? String(b.name).trim().slice(0, 80) : null, b.color || null, l.id);
     notify(req.user.id, 'tasks:changed', {});
@@ -87,10 +99,18 @@ export default async function taskRoutes(app) {
   app.delete('/api/task-lists/:id', async (req, reply) => {
     const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!l) return httpError(reply, 404, 'Not found');
-    if (l.source !== 'local') return httpError(reply, 400, 'This list is on your calendar server — remove the calendar service of its account to remove it here');
-    if (!get('SELECT 1 FROM task_lists WHERE user_id = ? AND id != ? AND readonly = 0', req.user.id, l.id)) return httpError(reply, 400, 'This is your only task list');
+    // One from a server is only hidden (it would come back with the next sync; it stays on the server).
+    const next = get('SELECT id FROM task_lists WHERE user_id = ? AND id != ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', req.user.id, l.id);
+    if (!next) return httpError(reply, 400, 'This is your only task list');
+    if (l.source !== 'local') {
+      run('UPDATE task_lists SET hidden = 1, is_default = 0 WHERE id = ?', l.id);
+      if (l.is_default) run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', next.id);
+      notify(req.user.id, 'tasks:changed', {});
+      return { ok: true, hidden: true };
+    }
     run('DELETE FROM tasks WHERE list_id = ?', l.id);
     run('DELETE FROM task_lists WHERE id = ?', l.id);
+    if (l.is_default) run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', next.id);
     ensureTaskLists(req.user.id);
     notify(req.user.id, 'tasks:changed', {});
     return { ok: true };
@@ -103,7 +123,7 @@ export default async function taskRoutes(app) {
     const showDone = req.query.done === '1';
     const listId = Number(req.query.listId) || null;
     return all(`SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t JOIN task_lists l ON l.id = t.list_id
-      WHERE t.user_id = ? AND ${inIds('t.list_id', sc?.taskListIds)} ${listId ? 'AND t.list_id = ?' : ''} ${showDone ? '' : 'AND (t.done = 0 OR t.completed_at > ?)'}
+      WHERE t.user_id = ? AND COALESCE(l.hidden, 0) = 0 AND ${inIds('t.list_id', sc?.taskListIds)} ${listId ? 'AND t.list_id = ?' : ''} ${showDone ? '' : 'AND (t.done = 0 OR t.completed_at > ?)'}
       ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, t.id DESC`, req.user.id, ...(listId ? [listId] : []), ...(showDone ? [] : [now() - 864e5])).map(out);
   });
 

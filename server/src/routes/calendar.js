@@ -14,7 +14,7 @@ import { queueMemory } from '../ai/queue.js';
 import { originOf } from './spaces.js';
 
 const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, sourceId: c.source_id || null, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
-  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, origin: originOf(c), synced: c.source === 'caldav', syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
+  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, origin: originOf(c), synced: c.source === 'caldav', hidden: !!c.hidden, events: c.events, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
 const SHOW_AS = ['busy', 'free', 'info'];
 const sourceOut = (s) => ({ id: s.id, name: s.name, url: s.url, username: s.dav_user, lastSyncAt: s.last_sync_at, error: s.error,
   calendars: get('SELECT COUNT(*) AS n FROM calendars WHERE source_id = ?', s.id).n });
@@ -22,10 +22,13 @@ const sourceOut = (s) => ({ id: s.id, name: s.name, url: s.url, username: s.dav_
 export default async function calendarRoutes(app) {
   app.addHook('preHandler', requireUser);
 
+  // ?all=1: every calendar of every space, hidden ones too, with its number of events (Settings → Calendars & tasks).
   app.get('/api/calendars', async (req) => {
-    const sc = req.query.allSpaces === '1' ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
-    return all(`SELECT c.*, a.email, s.name AS sourceName, s.url AS sourceUrl FROM calendars c LEFT JOIN accounts a ON a.id = c.account_id LEFT JOIN calendar_sources s ON s.id = c.source_id
-      WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} ORDER BY c.is_default DESC, c.name`, req.user.id).map((c) => calOut(c, spaces));
+    const every = req.query.all === '1';
+    const sc = every || req.query.allSpaces === '1' ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
+    return all(`SELECT c.*, a.email, s.name AS sourceName, s.url AS sourceUrl${every ? ', (SELECT COUNT(*) FROM events e WHERE e.calendar_id = c.id AND e.deleted = 0 AND e.recurrence_id IS NULL) AS events' : ''}
+      FROM calendars c LEFT JOIN accounts a ON a.id = c.account_id LEFT JOIN calendar_sources s ON s.id = c.source_id
+      WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} ${every ? '' : 'AND COALESCE(c.hidden, 0) = 0'} ORDER BY c.is_default DESC, c.name`, req.user.id).map((c) => calOut(c, spaces));
   });
 
   app.post('/api/calendars', async (req, reply) => {
@@ -86,8 +89,19 @@ export default async function calendarRoutes(app) {
   app.patch('/api/calendars/:id', async (req, reply) => {
     const c = repo.userCalendar(req.user.id, req.params.id);
     if (!c) return httpError(reply, 404, 'Not found');
-    const { name, color, enabled, isDefault, showAs } = req.body || {};
-    if (isDefault) run('UPDATE calendars SET is_default = 0 WHERE user_id = ?', req.user.id);
+    const { name, color, enabled, isDefault, showAs, hidden } = req.body || {};
+    if (hidden !== undefined) {
+      if (hidden && c.is_default) {
+        const next = get('SELECT id FROM calendars WHERE user_id = ? AND id != ? AND readonly = 0 AND COALESCE(hidden, 0) = 0 ORDER BY id LIMIT 1', req.user.id, c.id);
+        if (!next) return httpError(reply, 400, 'This is your only calendar you can add events to — it cannot be hidden');
+        run('UPDATE calendars SET is_default = 0 WHERE id = ?', c.id);
+        run('UPDATE calendars SET is_default = 1 WHERE id = ?', next.id);
+      }
+      // Hidden: out of every view (events, free / busy, reminders) but still synced, so it can be shown again.
+      run('UPDATE calendars SET hidden = ?, enabled = ? WHERE id = ?', hidden ? 1 : 0, hidden ? 0 : 1, c.id);
+    }
+    if (isDefault && c.readonly) return httpError(reply, 400, 'A read-only calendar cannot be the default');
+    if (isDefault) { run('UPDATE calendars SET is_default = 0 WHERE user_id = ?', req.user.id); run('UPDATE calendars SET hidden = 0, enabled = 1 WHERE id = ?', c.id); }
     if (SHOW_AS.includes(showAs)) run('UPDATE calendars SET show_as = ? WHERE id = ?', showAs, c.id);
     run('UPDATE calendars SET name = COALESCE(?, name), color = COALESCE(?, color), enabled = COALESCE(?, enabled), is_default = COALESCE(?, is_default) WHERE id = ?',
       name ?? null, color ?? null, enabled === undefined ? null : (enabled ? 1 : 0), isDefault ? 1 : null, c.id);
@@ -95,13 +109,24 @@ export default async function calendarRoutes(app) {
     return calOut(repo.userCalendar(req.user.id, c.id), spaceMap(req.user.id));
   });
 
+  // A calendar kept in Halcyon is deleted with its events; a subscription is ended. One from a server (an account's
+  // CalDAV, a CalDAV source) is only hidden: it would come back with the next sync, and stays where it is on the server.
   app.delete('/api/calendars/:id', async (req, reply) => {
     const c = repo.userCalendar(req.user.id, req.params.id);
     if (!c) return httpError(reply, 404, 'Not found');
+    if (c.source === 'caldav') {
+      const next = c.is_default ? get('SELECT id FROM calendars WHERE user_id = ? AND id != ? AND readonly = 0 AND COALESCE(hidden, 0) = 0 ORDER BY id LIMIT 1', req.user.id, c.id) : null;
+      if (c.is_default && !next) return httpError(reply, 400, 'This is your only calendar you can add events to — add another one first');
+      run('UPDATE calendars SET hidden = 1, enabled = 0, is_default = 0 WHERE id = ?', c.id);
+      if (next) run('UPDATE calendars SET is_default = 1 WHERE id = ?', next.id);
+      notify(req.user.id, 'calendar:changed', {});
+      return { ok: true, hidden: true };
+    }
     // The default calendar can go when another writable one takes its place (which then becomes the default).
-    const next = c.is_default ? get('SELECT id FROM calendars WHERE user_id = ? AND id != ? AND readonly = 0 ORDER BY id LIMIT 1', req.user.id, c.id) : null;
+    const next = c.is_default ? get('SELECT id FROM calendars WHERE user_id = ? AND id != ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', req.user.id, c.id) : null;
     if (c.is_default && !next) return httpError(reply, 400, 'This is your only calendar you can add events to — add another one first');
     run('DELETE FROM calendars WHERE id = ?', c.id);
+    if (next) run('UPDATE calendars SET hidden = 0, enabled = 1 WHERE id = ?', next.id);
     if (next) run('UPDATE calendars SET is_default = 1 WHERE id = ?', next.id);
     notify(req.user.id, 'calendar:changed', {});
     return { ok: true };

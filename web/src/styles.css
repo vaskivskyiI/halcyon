@@ -482,3 +482,6 @@ div.provider { cursor: default; background: var(--panel-2); }
 /* The default calendar / task list is local while a synced one exists */
 .notice.local-default { display: grid; gap: 6px; margin: 6px 8px 8px; }
 .task-lists + .notice.local-default { margin: 0 0 12px; }
+/* Settings → Calendars & tasks: hidden ones faded */
+.item-card.faded { opacity: .6; }
+.icon-btn.danger:hover { color: var(--danger); }

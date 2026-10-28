@@ -24,7 +24,7 @@ const userTz = (userId) => getSettings(userId).calendar.timezone || Intl.DateTim
 export function ensureTaskLists(userId) {
   if (!get('SELECT 1 FROM task_lists WHERE user_id = ?', userId)) run("INSERT INTO task_lists (user_id, name, source, is_default, created_at) VALUES (?, 'Tasks', 'local', 1, ?)", userId, now());
   if (!get('SELECT 1 FROM task_lists WHERE user_id = ? AND is_default = 1', userId)) {
-    run('UPDATE task_lists SET is_default = 1 WHERE id = (SELECT id FROM task_lists WHERE user_id = ? ORDER BY readonly, id LIMIT 1)', userId);
+    run('UPDATE task_lists SET is_default = 1 WHERE id = (SELECT id FROM task_lists WHERE user_id = ? ORDER BY readonly, COALESCE(hidden, 0), id LIMIT 1)', userId);
   }
   const loose = all('SELECT id, list_id FROM tasks WHERE user_id = ? AND (uid IS NULL OR list_id IS NULL OR list_id NOT IN (SELECT id FROM task_lists WHERE user_id = ?))', userId, userId);
   if (!loose.length) return;
@@ -47,11 +47,11 @@ export function defaultTaskList(userId, space = '') {
   if (chosen) return get('SELECT * FROM task_lists WHERE id = ?', chosen);
   if (space) {
     const ids = [...spaceMap(userId).taskLists].filter(([, s]) => s === space).map(([id]) => id);
-    const l = ids.length && get(`SELECT * FROM task_lists WHERE id IN (${ids.join(',')}) AND readonly = 0 ORDER BY is_default DESC, id LIMIT 1`);
+    const l = ids.length && get(`SELECT * FROM task_lists WHERE id IN (${ids.join(',')}) AND readonly = 0 AND COALESCE(hidden, 0) = 0 ORDER BY is_default DESC, id LIMIT 1`);
     if (l) return l;
   }
   return get('SELECT * FROM task_lists WHERE user_id = ? AND is_default = 1 AND readonly = 0', userId)
-    || get('SELECT * FROM task_lists WHERE user_id = ? AND readonly = 0 ORDER BY id LIMIT 1', userId);
+    || get('SELECT * FROM task_lists WHERE user_id = ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', userId);
 }
 
 /** A repeat rule as stored: RRULE value without the prefix, understood by the rrule library; null for none, false if invalid. */

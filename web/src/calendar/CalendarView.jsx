@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus, Cloud, HardDrive } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus, Cloud, HardDrive, EyeOff, Settings2 } from 'lucide-react';
 import { api, onEvent, stream } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner, Markdown } from '../components/common.jsx';
@@ -130,7 +130,7 @@ export default function CalendarView() {
         <div className="sidebar-head"><button className="btn primary grow" style={{ justifyContent: 'center', height: 38 }} onClick={() => newEvent()}><Plus size={16} /> New event</button></div>
         <MiniMonth date={date} onPick={(d) => { setDate(d); if (view === 'month') setView('day'); }} weekStart={weekStart} />
         <div className="sidebar-scroll">
-          <div className="nav-section" style={{ cursor: 'default' }}><span className="grow">Calendars</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="Add calendar" onClick={() => setNewCal(true)}><Plus size={13} /></button></div>
+          <div className="nav-section" style={{ cursor: 'default' }}><span className="grow">Calendars</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="Manage calendars (show hidden ones, move, delete)" onClick={() => navigate('#/settings/calendars')}><Settings2 size={13} /></button><button className="icon-btn" style={{ width: 22, height: 22 }} title="Add calendar" onClick={() => setNewCal(true)}><Plus size={13} /></button></div>
           <LocalDefault kind="calendar" items={calendars} reload={() => { loadCals(); load(); }} />
           {calendars.map((c) => <CalendarItem key={c.id} c={c} calendars={calendars} reload={() => { loadCals(); load(); }} />)}
           {hasInfo && <label className="row small muted" style={{ padding: '6px 10px' }} title="Calendars set to “Just for information”">
@@ -174,9 +174,13 @@ function CalendarItem({ c, calendars, reload }) {
       !c.readonly && { label: 'Import .ics', icon: Upload, onClick: () => fileRef.current.click() },
       c.source !== 'local' && { label: 'Refresh', icon: RefreshCw, onClick: () => api.post(`/api/calendars/${c.id}/refresh`).then(reload) },
       c.sourceId ? { label: 'Remove this CalDAV server (all its calendars)', icon: Trash2, danger: true, onClick: () => confirm('Remove all calendars from this server from Halcyon? Nothing on that server is changed.') && api.del(`/api/calendar-sources/${c.sourceId}`).then(reload) }
-        : (!c.isDefault || calendars.some((o) => o.id !== c.id && !o.readonly)) && { label: 'Remove calendar', icon: Trash2, danger: true,
-          onClick: () => confirm(c.readonly ? `Unsubscribe from ${c.name}?` : c.source === 'local' ? `Delete ${c.name} and its events? This calendar is kept in Halcyon only, so its events are not anywhere else.` : `Remove ${c.name}?`)
+        : c.source === 'caldav' ? { label: 'Hide calendar', icon: EyeOff, hint: 'stays on the server',
+          onClick: () => api.patch(`/api/calendars/${c.id}`, { hidden: true }).then(() => { toast(`“${c.name}” hidden — show it again in Settings → Calendars & tasks`, { action: { label: 'Undo', onClick: () => api.patch(`/api/calendars/${c.id}`, { hidden: false }).then(reload) } }); reload(); }).catch(toastError) }
+        : (!c.isDefault || calendars.some((o) => o.id !== c.id && !o.readonly)) && { label: c.readonly ? 'Unsubscribe' : 'Delete calendar', icon: Trash2, danger: true,
+          onClick: () => confirm(c.readonly ? `Unsubscribe from ${c.name}?` : `Delete ${c.name} and its events? This calendar is kept in Halcyon only, so its events are not anywhere else. To keep them, move them first (Settings → Calendars & tasks).`)
             && api.del(`/api/calendars/${c.id}`).then(reload).catch(toastError) },
+      'sep',
+      { label: 'Manage all calendars…', icon: Settings2, onClick: () => navigate('#/settings/calendars') },
     ])}>
       <input type="checkbox" checked={c.enabled} style={{ accentColor: c.color }} onChange={(e) => api.patch(`/api/calendars/${c.id}`, { enabled: e.target.checked }).then(reload)} />
       <span className="truncate grow" title={`${c.name} — ${c.origin || ''}${c.lastSyncAt ? `, refreshed ${new Date(c.lastSyncAt).toLocaleString()}` : ''}`}>{c.name}</span>

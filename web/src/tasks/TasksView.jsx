@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight, Share2, Repeat, ListTodo, Star, AlertTriangle, Lock, FolderInput, Cloud } from 'lucide-react';
+import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight, Share2, Repeat, ListTodo, Star, AlertTriangle, Lock, FolderInput, Cloud, EyeOff, Settings2 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, useMenu } from '../components/common.jsx';
@@ -90,6 +90,10 @@ export default function TasksView() {
     { label: 'Rename', icon: Pencil, onClick: async () => { const n = prompt('Name', l.name); if (n?.trim()) { await api.patch(`/api/task-lists/${l.id}`, { name: n.trim() }).catch(toastError); loadLists(); load(); } } },
     !l.isDefault && !l.readonly && { label: 'Make the default list', icon: Star, onClick: async () => { await api.patch(`/api/task-lists/${l.id}`, { isDefault: true }).catch(toastError); loadLists(); } },
     { label: 'Choose its space…', icon: ListTodo, onClick: () => navigate('#/settings/spaces') },
+    l.source !== 'local' && { label: 'Hide list', icon: EyeOff, hint: 'stays on the server', onClick: async () => {
+      try { await api.patch(`/api/task-lists/${l.id}`, { hidden: true }); if (shown === l.id) setListId(null); toast(`“${l.name}” hidden — show it again in Settings → Calendars & tasks`); loadLists(); load(); } catch (err) { toastError(err); }
+    } },
+    { label: 'Manage all lists…', icon: Settings2, onClick: () => navigate('#/settings/calendars') },
     l.source === 'local' && 'sep',
     l.source === 'local' && { label: 'Delete list and its tasks', icon: Trash2, danger: true, onClick: async () => {
       if (!confirm(`Delete the list “${l.name}” and its ${l.open} open task${l.open === 1 ? '' : 's'}? It is kept in Halcyon only, so they are not anywhere else.`)) return;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { User, Sparkles, Mail, Calendar, Filter, Tag, FileText, Palette, Shield, Info, Users as UsersIcon, Bell, Layers, Activity, Share2, Plug, Archive } from 'lucide-react';
+import { User, Sparkles, Mail, Calendar, Filter, Tag, FileText, Palette, Shield, Info, Users as UsersIcon, Bell, Layers, Activity, Share2, Plug, Archive, CalendarCog } from 'lucide-react';
 import { store } from '../store.js';
 import { navigate } from '../util.js';
 import Accounts from './Accounts.jsx';
@@ -9,18 +9,19 @@ import Spaces from './Spaces.jsx';
 import Sharing from './Sharing.jsx';
 import Assistants from './Assistants.jsx';
 import Archives from './Archives.jsx';
+import CalendarsTasks from './CalendarsTasks.jsx';
 import { MailPrefs, CalendarPrefs, Appearance, Notifications, Templates, Labels, Security, AdminUsers, About, Diagnostics } from './Prefs.jsx';
 
 const SECTIONS = [
   ['accounts', User, 'Accounts'], ['spaces', Layers, 'Spaces'], ['sharing', Share2, 'Sharing'], ['ai', Sparkles, 'AI & assistant'], ['assistants', Plug, 'Assistants (MCP)'], ['mail', Mail, 'Mail'], ['archives', Archive, 'Archives'], ['notifications', Bell, 'Notifications'],
-  ['calendar', Calendar, 'Calendar'], ['rules', Filter, 'Rules'], ['labels', Tag, 'Labels'], ['templates', FileText, 'Templates'],
+  ['calendar', Calendar, 'Calendar'], ['calendars', CalendarCog, 'Calendars & tasks'], ['rules', Filter, 'Rules'], ['labels', Tag, 'Labels'], ['templates', FileText, 'Templates'],
   ['appearance', Palette, 'Appearance'], ['security', Shield, 'Security'], ['diagnostics', Activity, 'Diagnostics'], ['users', UsersIcon, 'Users', true], ['about', Info, 'About & shortcuts'],
 ];
 
 export default function SettingsView({ route }) {
   const section = route[1] || 'accounts';
   const user = store.use((s) => s.user);
-  const C = { accounts: Accounts, spaces: Spaces, sharing: Sharing, ai: AISettings, assistants: Assistants, mail: MailPrefs, archives: Archives, notifications: Notifications, calendar: CalendarPrefs, rules: Rules, labels: Labels, templates: Templates, appearance: Appearance, security: Security, diagnostics: Diagnostics, users: AdminUsers, about: About }[section] || Accounts;
+  const C = { accounts: Accounts, spaces: Spaces, sharing: Sharing, ai: AISettings, assistants: Assistants, mail: MailPrefs, archives: Archives, notifications: Notifications, calendar: CalendarPrefs, calendars: CalendarsTasks, rules: Rules, labels: Labels, templates: Templates, appearance: Appearance, security: Security, diagnostics: Diagnostics, users: AdminUsers, about: About }[section] || Accounts;
   return (
     <div className="settings">
       <nav className="settings-nav">

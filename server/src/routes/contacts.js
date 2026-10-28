@@ -7,23 +7,47 @@ import { parseVCards, toVCard } from '../contacts/vcard.js';
 import { notify } from '../util/events.js';
 import { serializeMessage } from '../mail/store.js';
 import { scope, reqSpace, spaceMap, inIds, spaceDefault } from '../spaces.js';
+import { originOf } from './spaces.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
 
+  // ?all=1: every address book of every space, hidden ones too, with its number of contacts.
   app.get('/api/address-books', async (req) => {
-    const sc = scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
-    return all(`SELECT id, name, source, account_id AS accountId, readonly, is_default AS isDefault, space AS ownSpace FROM address_books WHERE user_id = ? AND ${inIds('id', sc?.bookIds)}`, req.user.id)
-      .map((b) => ({ ...b, space: spaces.books.get(b.id) ?? '' }));
+    const every = req.query.all === '1';
+    const sc = every ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
+    return all(`SELECT b.id, b.name, b.source, b.account_id AS accountId, b.readonly, b.is_default AS isDefault, b.space AS ownSpace, COALESCE(b.hidden, 0) AS hidden, a.email,
+        (SELECT COUNT(*) FROM contacts c WHERE c.address_book_id = b.id AND c.deleted = 0) AS contacts
+      FROM address_books b LEFT JOIN accounts a ON a.id = b.account_id WHERE b.user_id = ? AND ${inIds('b.id', sc?.bookIds)} ${every ? '' : 'AND COALESCE(b.hidden, 0) = 0'} ORDER BY b.name`, req.user.id)
+      .map((b) => ({ ...b, readonly: !!b.readonly, isDefault: !!b.isDefault, hidden: !!b.hidden, origin: originOf(b), space: spaces.books.get(b.id) ?? '' }));
+  });
+
+  // A local address book is deleted with its contacts (another one takes over as the default); one from a server
+  // (CardDAV) is only hidden — it would come back with the next sync and stays on the server.
+  app.delete('/api/address-books/:id', async (req, reply) => {
+    const b = get('SELECT * FROM address_books WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!b) return httpError(reply, 404, 'Not found');
+    const next = get('SELECT id FROM address_books WHERE user_id = ? AND id != ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', req.user.id, b.id);
+    if (!next) return httpError(reply, 400, 'This is your only address book');
+    if (b.source !== 'local') run('UPDATE address_books SET hidden = 1, is_default = 0 WHERE id = ?', b.id);
+    else {
+      run('DELETE FROM contact_emails WHERE contact_id IN (SELECT id FROM contacts WHERE address_book_id = ?)', b.id);
+      run('DELETE FROM contacts WHERE address_book_id = ?', b.id);
+      run('DELETE FROM address_books WHERE id = ?', b.id);
+    }
+    if (b.is_default) run('UPDATE address_books SET is_default = 1, hidden = 0 WHERE id = ?', next.id);
+    notify(req.user.id, 'contacts:changed', {});
+    return { ok: true, hidden: b.source !== 'local' };
   });
 
   // Renamed, or made the default for new contacts.
   app.patch('/api/address-books/:id', async (req, reply) => {
     const b = get('SELECT * FROM address_books WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!b) return httpError(reply, 404, 'Not found');
-    const { name, isDefault } = req.body || {};
+    const { name, isDefault, hidden } = req.body || {};
     if (name !== undefined && String(name).trim()) run('UPDATE address_books SET name = ? WHERE id = ?', String(name).trim().slice(0, 80), b.id);
-    if (isDefault) { run('UPDATE address_books SET is_default = 0 WHERE user_id = ?', req.user.id); run('UPDATE address_books SET is_default = 1 WHERE id = ?', b.id); }
+    if (hidden !== undefined) run('UPDATE address_books SET hidden = ? WHERE id = ?', hidden ? 1 : 0, b.id);
+    if (isDefault) { run('UPDATE address_books SET is_default = 0 WHERE user_id = ?', req.user.id); run('UPDATE address_books SET is_default = 1, hidden = 0 WHERE id = ?', b.id); }
     notify(req.user.id, 'contacts:changed', {});
     return { ok: true };
   });
@@ -31,7 +55,7 @@ export default async function contactRoutes(app) {
   app.get('/api/contacts', async (req) => {
     const { q, group, filter } = req.query;
     const sc = scope(req.user.id, reqSpace(req));
-    const where = ['c.user_id = ?', 'c.deleted = 0', inIds('c.address_book_id', sc?.bookIds)], params = [req.user.id];
+    const where = ['c.user_id = ?', 'c.deleted = 0', inIds('c.address_book_id', sc?.bookIds), 'c.address_book_id NOT IN (SELECT id FROM address_books WHERE hidden = 1)'], params = [req.user.id];
     if (q) { where.push("(c.display_name LIKE ? OR c.emails_json LIKE ? OR c.org LIKE ? OR c.phones_json LIKE ?)"); params.push(...Array(4).fill(`%${q}%`)); }
     if (group) { where.push('EXISTS (SELECT 1 FROM json_each(c.groups_json) j WHERE j.value = ?)'); params.push(group); }
     if (filter === 'favorites') where.push('c.favorite = 1');
