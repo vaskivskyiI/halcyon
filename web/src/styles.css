@@ -479,3 +479,6 @@ div.provider { cursor: default; background: var(--panel-2); }
 .draft-check-line { display: flex; align-items: center; gap: 6px; margin: 6px 12px 0; }
 .quick-reply .draft-check-line { margin: 6px 0 0; }
 .composer .notice.draft-check { margin: 6px 12px 0; }
+/* The default calendar / task list is local while a synced one exists */
+.notice.local-default { display: grid; gap: 6px; margin: 6px 8px 8px; }
+.task-lists + .notice.local-default { margin: 0 0 12px; }

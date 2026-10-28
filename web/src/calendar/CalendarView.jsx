@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus, Cloud, HardDrive } from 'lucide-react';
 import { api, onEvent, stream } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner, Markdown } from '../components/common.jsx';
+import LocalDefault from '../components/LocalDefault.jsx';
 import { toast, toastError, startOfDay, addDays, startOfWeek, toLocalInput, toDateInput, fmtTime, navigate } from '../util.js';
 
 const HOUR_PX = 48;
@@ -130,6 +131,7 @@ export default function CalendarView() {
         <MiniMonth date={date} onPick={(d) => { setDate(d); if (view === 'month') setView('day'); }} weekStart={weekStart} />
         <div className="sidebar-scroll">
           <div className="nav-section" style={{ cursor: 'default' }}><span className="grow">Calendars</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="Add calendar" onClick={() => setNewCal(true)}><Plus size={13} /></button></div>
+          <LocalDefault kind="calendar" items={calendars} reload={() => { loadCals(); load(); }} />
           {calendars.map((c) => <CalendarItem key={c.id} c={c} calendars={calendars} reload={() => { loadCals(); load(); }} />)}
           {hasInfo && <label className="row small muted" style={{ padding: '6px 10px' }} title="Calendars set to “Just for information”">
             <input type="checkbox" checked={!hideInfo} onChange={toggleInfo} /> Show informational events</label>}
@@ -177,7 +179,8 @@ function CalendarItem({ c, calendars, reload }) {
             && api.del(`/api/calendars/${c.id}`).then(reload).catch(toastError) },
     ])}>
       <input type="checkbox" checked={c.enabled} style={{ accentColor: c.color }} onChange={(e) => api.patch(`/api/calendars/${c.id}`, { enabled: e.target.checked }).then(reload)} />
-      <span className="truncate grow" title={c.readonly ? `${c.name} — read-only${c.lastSyncAt ? `, refreshed ${new Date(c.lastSyncAt).toLocaleString()}` : ''}` : c.name}>{c.name}</span>
+      <span className="truncate grow" title={`${c.name} — ${c.origin || ''}${c.lastSyncAt ? `, refreshed ${new Date(c.lastSyncAt).toLocaleString()}` : ''}`}>{c.name}</span>
+      {c.source === 'caldav' ? <Cloud size={12} className="faint" title={`Synced — ${c.origin}`} /> : c.source === 'local' ? <HardDrive size={12} className="faint" title="Kept in Halcyon only — not on any server" /> : null}
       {c.syncError && <AlertTriangle size={13} color="var(--warning)" title={`Could not refresh: ${c.syncError}`} />}
       {c.showAs === 'free' && <span className="faint small" title="Events are shown but do not make you busy">free</span>}
       {c.showAs === 'info' && <Info size={12} className="faint" title="Just for information: shown faintly, never busy, no reminders" />}

@@ -60,7 +60,7 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
           continue;
         }
         const live = family.filter((e) => !e.deleted);
-        const ics = buildIcs(live.map(serializeEvent));
+        const ics = buildIcs(live.map(serializeEvent), { clientScheduling: true });
         if (master.href) {
           ok(await client.updateCalendarObject({ calendarObject: { url: master.href, data: ics, etag: master.etag } }), 'update');
           run('UPDATE events SET dirty = 0 WHERE calendar_id = ? AND uid = ?', cal.id, uid);
@@ -112,19 +112,33 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
   return { calendars: remoteCals.length, taskLists };
 }
 
-export function importIcsInto(userId, calendarId, ics) {
+const IMPORT_COLS = ['title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting'];
+
+/**
+ * Events of an ICS text into a calendar, matched by UID (and occurrence). An event that did not change keeps its row
+ * as it is — same id, no new timestamp — so links, reminders already shown and the AI index stay valid. replace: what
+ * the text no longer has is removed (a subscription refreshed).
+ */
+export function importIcsInto(userId, calendarId, ics, { replace = false } = {}) {
   const parsed = parseIcs(ics);
   let n = 0;
+  const keep = new Set();
   tx(() => {
     for (const e of parsed.events) {
-      const existing = get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND COALESCE(recurrence_id, 0) = ?', calendarId, e.uid, e.recurrenceId || 0);
-      if (existing) update('events', existing.id, { ...toRow(e), updated_at: now() }, ['title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'updated_at']);
-      else {
+      const row = toRow(e);
+      const existing = get('SELECT * FROM events WHERE calendar_id = ? AND uid = ? AND COALESCE(recurrence_id, 0) = ?', calendarId, e.uid, e.recurrenceId || 0);
+      if (existing) {
+        keep.add(existing.id);
+        const changed = IMPORT_COLS.some((k) => row[k] !== undefined && String(row[k] ?? '') !== String(existing[k] ?? ''));
+        if (changed) update('events', existing.id, { ...row, updated_at: now() }, [...IMPORT_COLS, 'updated_at']);
+      } else {
         const r = run('INSERT INTO events (calendar_id, uid, start, end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', calendarId, e.uid, e.start, e.end, now(), now());
-        update('events', r.lastInsertRowid, toRow(e), ['title', 'description', 'location', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting']);
+        update('events', r.lastInsertRowid, toRow(e), [...IMPORT_COLS.filter((k) => k !== 'start' && k !== 'end'), 'recurrence_id']);
+        keep.add(Number(r.lastInsertRowid));
       }
       n++;
     }
+    if (replace) for (const r of all('SELECT id FROM events WHERE calendar_id = ?', calendarId)) if (!keep.has(r.id)) run('DELETE FROM events WHERE id = ?', r.id);
   });
   return n;
 }

@@ -10,9 +10,11 @@ import { notify } from '../util/events.js';
 import { syncDav } from '../scheduler.js';
 import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 import { linkEvent, unlinkEvent } from '../calendar/linked.js';
+import { queueMemory } from '../ai/queue.js';
+import { originOf } from './spaces.js';
 
 const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, sourceId: c.source_id || null, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
-  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
+  space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, origin: originOf(c), synced: c.source === 'caldav', syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
 const SHOW_AS = ['busy', 'free', 'info'];
 const sourceOut = (s) => ({ id: s.id, name: s.name, url: s.url, username: s.dav_user, lastSyncAt: s.last_sync_at, error: s.error,
   calendars: get('SELECT COUNT(*) AS n FROM calendars WHERE source_id = ?', s.id).n });
@@ -22,7 +24,8 @@ export default async function calendarRoutes(app) {
 
   app.get('/api/calendars', async (req) => {
     const sc = req.query.allSpaces === '1' ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
-    return all(`SELECT * FROM calendars WHERE user_id = ? AND ${inIds('id', sc?.calendarIds)} ORDER BY is_default DESC, name`, req.user.id).map((c) => calOut(c, spaces));
+    return all(`SELECT c.*, a.email, s.name AS sourceName, s.url AS sourceUrl FROM calendars c LEFT JOIN accounts a ON a.id = c.account_id LEFT JOIN calendar_sources s ON s.id = c.source_id
+      WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} ORDER BY c.is_default DESC, c.name`, req.user.id).map((c) => calOut(c, spaces));
   });
 
   app.post('/api/calendars', async (req, reply) => {
@@ -102,6 +105,32 @@ export default async function calendarRoutes(app) {
     if (next) run('UPDATE calendars SET is_default = 1 WHERE id = ?', next.id);
     notify(req.user.id, 'calendar:changed', {});
     return { ok: true };
+  });
+
+  // Events of a calendar kept in Halcyon moved into another one (e.g. the synced calendar of an account, so they go to
+  // its server). An event the target already has (same UID — e.g. imported from that server earlier) is not copied
+  // again; it stays where it was and is counted as skipped. Nothing is deleted.
+  app.post('/api/calendars/:id/move-events', async (req, reply) => {
+    const from = repo.userCalendar(req.user.id, req.params.id), to = repo.userCalendar(req.user.id, req.body?.to);
+    if (!from || !to) return httpError(reply, 404, 'Not found');
+    if (from.source !== 'local') return httpError(reply, 400, 'Only events of a calendar kept in Halcyon can be moved');
+    if (to.readonly || to.id === from.id) return httpError(reply, 400, 'Events cannot be moved to that calendar');
+    const there = new Set(all('SELECT DISTINCT uid FROM events WHERE calendar_id = ? AND deleted = 0', to.id).map((r) => r.uid));
+    let moved = 0, skipped = 0;
+    const ids = [];
+    tx(() => {
+      for (const { uid } of all('SELECT DISTINCT uid FROM events WHERE calendar_id = ? AND deleted = 0', from.id)) {
+        if (there.has(uid)) { skipped++; continue; }
+        ids.push(...all('SELECT id FROM events WHERE calendar_id = ? AND uid = ?', from.id, uid).map((r) => r.id));
+        run('UPDATE events SET calendar_id = ?, href = NULL, etag = NULL, dirty = ?, updated_at = ? WHERE calendar_id = ? AND uid = ?', to.id, to.source === 'caldav' ? 1 : 0, now(), from.id, uid);
+        moved++;
+      }
+    });
+    for (const id of ids) queueMemory(req.user.id, 'event', id);
+    const acc = to.account_id && get('SELECT * FROM accounts WHERE id = ?', to.account_id);
+    if (acc?.caldav_url && moved) syncDav(acc).catch(() => {});
+    notify(req.user.id, 'calendar:changed', {});
+    return { moved, skipped };
   });
 
   app.post('/api/calendars/:id/refresh', async (req, reply) => {
@@ -254,7 +283,8 @@ async function refreshSubscription(userId, calId) {
   const c = get('SELECT * FROM calendars WHERE id = ?', calId);
   try {
     const ics = await fetchIcs(c.url);
-    tx(() => { run('DELETE FROM events WHERE calendar_id = ?', calId); importIcsInto(userId, calId, ics); });
+    // In place: unchanged events keep their ids (reminders, links and the AI index stay as they are).
+    importIcsInto(userId, calId, ics, { replace: true });
     run('UPDATE calendars SET last_sync_at = ?, sync_error = NULL WHERE id = ?', now(), calId);
   } catch (e) {
     run('UPDATE calendars SET sync_error = ? WHERE id = ?', String(e.message || e).slice(0, 300), calId);

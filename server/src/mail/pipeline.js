@@ -1,5 +1,5 @@
 // Hooks executed after new messages are stored: contact collection, rules, AI queueing, notifications.
-import { get, all, run, json } from '../db/index.js';
+import { get, all, run, json, now } from '../db/index.js';
 import { getSettings } from '../settings.js';
 import { applyRules } from '../rules.js';
 import { enqueue, queueMemory } from '../ai/queue.js';
@@ -110,7 +110,10 @@ export function backfillAnalysis(userId) {
 function backfillMemory(userId) {
   let model;
   try { const r = resolve(userId, 'embeddings'); model = `${r.row.type}:${r.model}`; } catch { return 0; }
-  const active = (type, ref) => `NOT EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = ? AND j.type = '${type}' AND j.ref_id = ${ref} AND j.status IN ('queued', 'running', 'waiting', 'failed'))`;
+  // Pending, failed, or done in the last 6 hours (done without anything to index — e.g. a summary of a conversation
+  // whose mail is gone — would otherwise be queued again every 15 minutes).
+  const recent = now() - 6 * 3600e3;
+  const active = (type, ref) => `NOT EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = ? AND j.type = '${type}' AND j.ref_id = ${ref} AND (j.status IN ('queued', 'running', 'waiting', 'failed') OR (j.status = 'done' AND j.updated_at > ${recent})))`;
   const fresh = (kind, ref, changed = 'NULL') => `NOT EXISTS (SELECT 1 FROM memory x WHERE x.user_id = ? AND x.kind = '${kind}' AND x.ref_id = CAST(${ref} AS TEXT) AND x.model = ? AND (${changed} IS NULL OR x.created_at >= ${changed}))`;
   const lists = [
     ['message', all(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')

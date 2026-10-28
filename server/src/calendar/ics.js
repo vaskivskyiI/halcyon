@@ -88,7 +88,10 @@ const dateOnly = (ms) => {
 };
 const fold = (line) => { const out = []; let s = line; while (s.length > 74) { out.push(s.slice(0, 74)); s = ' ' + s.slice(74); } out.push(s); return out.join('\r\n'); };
 
-export function veventLines(e, { method, attendeeOverride } = {}) {
+export function veventLines(e, { method, attendeeOverride, clientScheduling = false } = {}) {
+  // Saved on a CalDAV server: SCHEDULE-AGENT=CLIENT (RFC 6638) — Halcyon sends invitations itself, the server must not
+  // email attendees too (or at all, for events merely moved there).
+  const agent = clientScheduling ? ';SCHEDULE-AGENT=CLIENT' : '';
   const L = ['BEGIN:VEVENT', `UID:${e.uid}`, `DTSTAMP:${utc(Date.now())}`];
   if (e.allDay) { L.push(`DTSTART;VALUE=DATE:${dateOnly(e.start)}`, `DTEND;VALUE=DATE:${dateOnly(e.end)}`); }
   else { L.push(`DTSTART:${utc(e.start)}`, `DTEND:${utc(e.end)}`); }
@@ -100,10 +103,10 @@ export function veventLines(e, { method, attendeeOverride } = {}) {
   if (e.rrule && !e.recurrenceId) L.push(`RRULE:${e.rrule}`);
   for (const x of e.exdates || []) L.push(e.allDay ? `EXDATE;VALUE=DATE:${dateOnly(x)}` : `EXDATE:${utc(x)}`);
   L.push(`STATUS:${(e.status || 'confirmed').toUpperCase()}`, `TRANSP:${e.busy === false ? 'TRANSPARENT' : 'OPAQUE'}`, `SEQUENCE:${e.sequence || 0}`);
-  if (e.organizer?.email) L.push(`ORGANIZER;CN=${esc(e.organizer.name || e.organizer.email)}:mailto:${e.organizer.email}`);
+  if (e.organizer?.email) L.push(`ORGANIZER;CN=${esc(e.organizer.name || e.organizer.email)}${agent}:mailto:${e.organizer.email}`);
   const attendees = attendeeOverride || e.attendees || [];
   for (const a of attendees) {
-    L.push(`ATTENDEE;CN=${esc(a.name || a.email)};ROLE=${(a.role || 'req-participant').toUpperCase()};PARTSTAT=${(a.status || 'needs-action').toUpperCase()};RSVP=${method === 'REQUEST' ? 'TRUE' : 'FALSE'}:mailto:${a.email}`);
+    L.push(`ATTENDEE;CN=${esc(a.name || a.email)};ROLE=${(a.role || 'req-participant').toUpperCase()};PARTSTAT=${(a.status || 'needs-action').toUpperCase()};RSVP=${method === 'REQUEST' ? 'TRUE' : 'FALSE'}${agent}:mailto:${a.email}`);
   }
   if (method !== 'REPLY') {
     for (const m of e.reminders || []) L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(e.title)}`, `TRIGGER:-PT${m}M`, 'END:VALARM');
@@ -112,10 +115,10 @@ export function veventLines(e, { method, attendeeOverride } = {}) {
   return L;
 }
 
-export function buildIcs(events, { method } = {}) {
+export function buildIcs(events, { method, clientScheduling = false } = {}) {
   const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Halcyon//Halcyon Mail//EN', 'CALSCALE:GREGORIAN'];
   if (method) L.push(`METHOD:${method}`);
-  for (const e of events) L.push(...veventLines(e, { method }));
+  for (const e of events) L.push(...veventLines(e, { method, clientScheduling }));
   L.push('END:VCALENDAR');
   return L.map(fold).join('\r\n') + '\r\n';
 }

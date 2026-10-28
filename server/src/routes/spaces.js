@@ -7,7 +7,8 @@ import { notify } from '../util/events.js';
 const TABLES = { account: 'accounts', calendar: 'calendars', addressBook: 'address_books', taskList: 'task_lists' };
 
 const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
-function originOf(x) {
+/** Where a calendar / address book / task list comes from (rows joined with their account's email and source). */
+export function originOf(x) {
   if (x.email) return `${x.email} · ${x.source === 'caldav' || x.source === 'carddav' ? 'synced' : 'from this account'}`;
   if (x.sourceName || x.sourceUrl) return `${x.sourceName || host(x.sourceUrl)} · ${x.readonly ? 'read-only' : 'synced'}`;
   if (x.url) return `${host(x.url)} · ${x.readonly ? 'subscribed (read-only)' : 'synced'}`;

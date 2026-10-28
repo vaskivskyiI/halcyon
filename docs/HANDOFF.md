@@ -689,3 +689,18 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (advice only). Runs after every AI draft (quick reply, composer) and on "Check".
 - Quick reply: "Open in the full editor" button always (also empty), an optional hint for the AI (Enter drafts), the
   check result under the text.
+
+### Local default calendar / task list, subscriptions in place, no server-side invitations (no migration)
+- Found on a real install: the starter calendar (renamed) and the starter task list stayed the defaults after an
+  account's CalDAV calendar was added, so new events / tasks never reached the server. `components/LocalDefault.jsx`
+  (Calendar sidebar, Tasks page): when the default is local and a writable synced one exists — make that the default,
+  or move everything there: POST /api/calendars/:id/move-events { to } and /api/task-lists/:id/move-tasks { to } (only
+  from local ones; same UID already in the target → skipped; marked dirty and pushed). "Keep as it is" hides it per device.
+- GET /api/calendars and /api/task-lists return `origin` (spaces.js `originOf`, now exported); the sidebar shows a
+  cloud (synced) / drive (Halcyon only) icon.
+- Events pushed to CalDAV carry SCHEDULE-AGENT=CLIENT on ORGANIZER / ATTENDEE (`buildIcs(…, { clientScheduling })`):
+  Halcyon sends invitations itself; servers with scheduling (Baïkal / sabre iMIP) must not email attendees too.
+- Subscriptions refresh in place (`importIcsInto(…, { replace: true })`): unchanged events keep id and updated_at
+  (before: every 30 min all events were deleted and re-inserted → re-embedded, reminders / links reset).
+- Memory backfill skips items whose job finished in the last 6 h (items with nothing to index were re-queued every
+  15 min — ~280k memory jobs a week on a real install).

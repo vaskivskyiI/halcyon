@@ -11,6 +11,7 @@ import { localStamp } from '../ai/prompts.js';
 import { scope, reqSpace, inIds, cleanSpace, spaceMap } from '../spaces.js';
 import { ensureTaskLists, defaultTaskList, cleanRule, completeOccurrence, newTaskUid } from '../calendar/todos.js';
 import { syncDav } from '../scheduler.js';
+import { originOf } from './spaces.js';
 
 // Task changes also refresh the AI overview of the daily brief (debounced there).
 const notify = (userId, type, payload) => { notifyRaw(userId, type, payload); if (type === 'tasks:changed') scheduleBriefRefresh(userId); };
@@ -19,7 +20,7 @@ const out = (t) => ({ id: t.id, title: t.title, notes: t.notes, due: t.due, dueA
   list: t.list_name || t.list, listId: t.list_id, rrule: t.rrule || null, readonly: !!t.list_readonly, sourceMessageId: t.source_message_id, createdAt: t.created_at });
 const one = (id) => get('SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t LEFT JOIN task_lists l ON l.id = t.list_id WHERE t.id = ?', id);
 const listOut = (l, m) => ({ id: l.id, name: l.name, color: l.color, source: l.source, accountId: l.account_id, readonly: !!l.readonly, isDefault: !!l.is_default,
-  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0 });
+  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0, origin: originOf(l) });
 
 /** A change in a synced list goes to the server at once (in the background; a refusal shows in the problems panel). */
 function pushList(listId) {
@@ -40,7 +41,8 @@ export default async function taskRoutes(app) {
   app.get('/api/task-lists', async (req) => {
     ensureTaskLists(req.user.id);
     const sc = scope(req.user.id, reqSpace(req)), m = spaceMap(req.user.id);
-    return all(`SELECT l.*, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open FROM task_lists l WHERE l.user_id = ? AND ${inIds('l.id', sc?.taskListIds)}
+    return all(`SELECT l.*, a.email, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open FROM task_lists l LEFT JOIN accounts a ON a.id = l.account_id
+      WHERE l.user_id = ? AND ${inIds('l.id', sc?.taskListIds)}
       ORDER BY l.is_default DESC, l.name`, req.user.id).map((l) => listOut(l, m));
   });
   app.post('/api/task-lists', async (req, reply) => {
@@ -64,6 +66,23 @@ export default async function taskRoutes(app) {
     notify(req.user.id, 'tasks:changed', {});
     return listOut(get('SELECT * FROM task_lists WHERE id = ?', l.id), spaceMap(req.user.id));
   });
+  // Tasks of a list kept in Halcyon moved into another list (e.g. a synced one, so they go to its server). A task the
+  // target already has (same UID) is skipped; nothing is deleted.
+  app.post('/api/task-lists/:id/move-tasks', async (req, reply) => {
+    const from = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const to = writableList(req.user.id, req.body?.to);
+    if (!from || !to || to.id === from.id) return httpError(reply, 404, 'Not found');
+    if (from.source !== 'local') return httpError(reply, 400, 'Only tasks of a list kept in Halcyon can be moved');
+    ensureTaskLists(req.user.id);
+    const there = new Set(all('SELECT uid FROM tasks WHERE list_id = ?', to.id).map((r) => r.uid));
+    const rows = all('SELECT id, uid FROM tasks WHERE list_id = ?', from.id);
+    const move = rows.filter((t) => !there.has(t.uid));
+    for (const t of move) run('UPDATE tasks SET list_id = ?, list = ?, href = NULL, etag = NULL, dirty = ?, updated_at = ? WHERE id = ?', to.id, to.name, to.source === 'caldav' ? 1 : 0, now(), t.id);
+    notify(req.user.id, 'tasks:changed', {});
+    pushList(to.id);
+    return { moved: move.length, skipped: rows.length - move.length };
+  });
+
   // Only lists kept in Halcyon are deleted here (with their tasks); a synced one goes with its account's calendar service.
   app.delete('/api/task-lists/:id', async (req, reply) => {
     const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);

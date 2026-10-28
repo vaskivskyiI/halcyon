@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight, Share2, Repeat, ListTodo, Star, AlertTriangle, Lock, FolderInput } from 'lucide-react';
+import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight, Share2, Repeat, ListTodo, Star, AlertTriangle, Lock, FolderInput, Cloud } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, useMenu } from '../components/common.jsx';
 import { store } from '../store.js';
 import { jump } from '../back.js';
+import LocalDefault from '../components/LocalDefault.jsx';
 import { dueOptions, fmtDue, DueField, RepeatField, ListField, repeatLabel } from './TaskDialog.jsx';
 
 // The list shown (null = all lists of the active space), remembered on this device.
@@ -119,13 +120,14 @@ export default function TasksView() {
           <button className={`chip clickable ${!shown ? 'on' : ''}`} onClick={() => setListId(null)}>All lists</button>
           {lists.map((l) => (
             <button key={l.id} className={`chip clickable ${shown === l.id ? 'on' : ''}`} onClick={() => setListId(l.id)} onContextMenu={(e) => listMenu(e, l)}
-              title={`${l.name}${l.source === 'caldav' ? ' — synced with your calendar server' : ' — kept in Halcyon'}${l.space ? ` · space ${l.space}` : ''}${l.syncError ? `\n${l.syncError}` : ''}`}>
-              <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}
+              title={`${l.name} — ${l.origin || (l.source === 'caldav' ? 'synced' : 'kept in Halcyon only')}${l.space ? ` · space ${l.space}` : ''}${l.syncError ? `\n${l.syncError}` : ''}`}>
+              <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.source === 'caldav' && <Cloud size={11} className="faint" />}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}
               {l.open > 0 && <span className="faint"> {l.open}</span>}
             </button>))}
           {shownList && <button className="icon-btn" title="List options" onClick={(e) => listMenu(e, shownList)}><MoreHorizontal size={15} /></button>}
           <button className="btn ghost sm" onClick={newList}><Plus size={13} /> List</button>
         </div>
+        <LocalDefault kind="taskList" items={lists} reload={() => { loadLists(); load(); }} />
         <form className="card task-add" onSubmit={add}>
           <div className="row">
             <input className="input grow" placeholder="Add a task… e.g. “Send the report to Ana tomorrow at 10” or “pokliči banko v petek”" value={title} onChange={(e) => setTitle(e.target.value)} />
