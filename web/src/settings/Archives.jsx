@@ -40,35 +40,70 @@ export default function Archives() {
     }
     target.current = id; file.current.click();
   };
-  // Sent in pieces (8 MB, smaller when a proxy refuses that much at once), each retried and resumed where the server
-  // has the file up to — a proxy's upload limit and a dropped connection do not stop a large Outlook data file.
+  // Sent in pieces (8 MB, smaller when a proxy refuses that much or a piece stalls), each with a time limit, retried
+  // and resumed where the server has the file up to — a proxy's upload limit, a stalled or dropped connection do not
+  // stop a large Outlook data file. The upload is remembered for this file: choosing it again (also after closing the
+  // page) continues where it stopped (the server keeps a started upload for two days).
+  const stop = useRef(null);
   const send = async (f) => {
     const id = target.current;
-    setUpload({ name: f.name, pct: 0 });
+    const key = `halcyon.upload.${id}|${f.name}|${f.size}|${f.lastModified}`;
+    const ctl = new AbortController();
+    stop.current = ctl;
+    const t0 = Date.now();
+    let startAt = 0;
+    const show = (offset, note = '') => {
+      const secs = (Date.now() - t0) / 1000, rate = secs > 2 ? (offset - startAt) / secs : 0;
+      setUpload({ name: f.name, done: offset, total: f.size, rate, left: rate > 0 ? (f.size - offset) / rate : null, note });
+    };
+    show(0, 'Starting…');
+    const leave = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', leave);
     try {
-      const up = await api.post('/api/archives/uploads', { filename: f.name, size: f.size });
-      let offset = 0, piece = 8 << 20, fails = 0;
+      let up = null, offset = 0;
+      const saved = (() => { try { return localStorage.getItem(key); } catch { return null; } })();
+      if (saved) {
+        const s = await api.get(`/api/archives/uploads/${saved}`).catch(() => null);
+        if (s && s.total === f.size) { up = { id: saved }; offset = startAt = s.size; }
+      }
+      if (!up) {
+        up = await api.post('/api/archives/uploads', { filename: f.name, size: f.size });
+        try { localStorage.setItem(key, up.id); } catch { /* private mode */ }
+      }
+      show(offset, startAt ? `Continuing where it stopped (${fmtSize(startAt)} already there)` : '');
+      let piece = 8 << 20, fails = 0;
       while (offset < f.size) {
+        if (ctl.signal.aborted) throw Object.assign(new Error('Upload cancelled — choose the same file again to continue where it stopped'), { cancelled: true });
         let r;
+        // A piece that does not finish within 2 minutes is given up and sent again (smaller).
+        const limit = AbortSignal.any ? AbortSignal.any([ctl.signal, AbortSignal.timeout(120e3)]) : ctl.signal;
         try {
-          r = await fetch(api.url(`/api/archives/uploads/${up.id}?offset=${offset}`), { method: 'PUT', credentials: 'include', headers: { 'content-type': 'application/octet-stream' }, body: f.slice(offset, offset + piece) });
-        } catch {
-          // Connection lost: wait, ask where the server is, continue from there.
-          if (++fails > 20) throw new Error('Upload stopped — the connection keeps failing. Start it again later; it continues where it stopped.');
-          await new Promise((res) => setTimeout(res, Math.min(30e3, 1000 * fails)));
+          r = await fetch(api.url(`/api/archives/uploads/${up.id}?offset=${offset}`), { method: 'PUT', credentials: 'include', headers: { 'content-type': 'application/octet-stream' }, body: f.slice(offset, offset + piece), signal: limit });
+        } catch (e) {
+          if (ctl.signal.aborted) continue;
+          // Stalled or dropped: smaller pieces (a proxy may cut large ones off without an answer), wait, ask where the
+          // server is, continue from there.
+          if (++fails > 25) throw new Error(`Upload stopped at ${fmtSize(offset)} — the connection keeps failing. Choose the same file again later; it continues where it stopped.`);
+          piece = Math.max(1 << 20, Math.floor(piece / 2));
+          const wait = Math.min(30, fails * 2);
+          show(offset, `${e.name === 'TimeoutError' ? 'A piece did not get through in 2 minutes' : 'Connection dropped'} — trying again in ${wait} s with smaller pieces (${fmtSize(piece)}), attempt ${fails}`);
+          await new Promise((res) => setTimeout(res, wait * 1000));
           offset = (await api.get(`/api/archives/uploads/${up.id}`).catch(() => ({ size: offset }))).size;
           continue;
         }
-        if (r.status === 413 && piece > 256 << 10) { piece = Math.floor(piece / 2); continue; } // the proxy's limit is lower
+        if (r.status === 413 && piece > 256 << 10) { piece = Math.floor(piece / 2); show(offset, `The server takes at most ${fmtSize(piece * 2)} at once — sending ${fmtSize(piece)} pieces`); continue; }
         const d = await r.json().catch(() => ({}));
         if (r.status === 409) { offset = d.size; continue; }
+        if (r.status === 404) { try { localStorage.removeItem(key); } catch { /* private mode */ } }
         if (!r.ok) throw new Error(d.error || `Upload failed (${r.status})`);
         offset = d.size; fails = 0;
-        setUpload({ name: f.name, pct: Math.floor((offset / f.size) * 100) });
+        show(offset);
       }
+      show(f.size, 'Uploaded — starting the import…');
       await api.post(`/api/archives/${id}/import`, { uploadId: up.id });
+      try { localStorage.removeItem(key); } catch { /* private mode */ }
       toast('Uploaded — importing in the background…'); load();
-    } catch (e) { toastError(e); } finally { setUpload(null); }
+    } catch (e) { if (e.cancelled) toast(e.message); else toastError(e); } finally { window.removeEventListener('beforeunload', leave); stop.current = null; setUpload(null); }
   };
   const rename = async (a) => { const n = prompt('Name', a.name); if (n && n !== a.name) { try { await api.patch(`/api/accounts/${a.id}`, { name: n }); refresh(); } catch (e) { toastError(e); } } };
   const remove = async (a) => {
@@ -85,7 +120,15 @@ export default function Archives() {
       <h2>Archives</h2>
       <div className="muted">Mail kept here by Halcyon, on no mail server — like Outlook's archive (.pst) files. Import Outlook data files (.pst, .ost) and other mail files (.mbox, .eml, a .zip of .eml files), or move mail out of your mailbox to free space there (right-click a message or a folder → archive). Archived mail is searchable and shown with your folders; the AI does not analyse it again (moved mail keeps its analysis).</div>
       <input type="file" ref={file} accept={ACCEPT} hidden onChange={(e) => { const f = e.target.files[0]; e.target.value = ''; if (f) send(f); }} />
-      {upload && <div className="notice"><Upload size={15} /><span className="grow">Uploading {upload.name}… {upload.pct}%</span></div>}
+      {upload && <div className="notice upload-progress">
+        <div className="row" style={{ gap: 8 }}><Upload size={15} /><span className="grow truncate">Uploading {upload.name}</span>
+          <button className="btn sm ghost" onClick={() => stop.current?.abort()}>Cancel</button></div>
+        <div className="bar"><span style={{ width: `${(upload.done / upload.total) * 100}%` }} /></div>
+        <div className="small muted">{fmtSize(upload.done)} of {fmtSize(upload.total)} · {((upload.done / upload.total) * 100).toFixed(1)}%
+          {upload.rate > 0 && ` · ${fmtSize(upload.rate)}/s`}{upload.left != null && upload.left > 1 && ` · about ${upload.left > 5400 ? `${Math.round(upload.left / 3600)} h` : upload.left > 90 ? `${Math.round(upload.left / 60)} min` : `${Math.round(upload.left)} s`} left`}
+          {' '}· keep this page open (closing it pauses; choose the file again to continue)</div>
+        {upload.note && <div className="small">{upload.note}</div>}
+      </div>}
 
       {data.archives.map((a) => (
         <div key={a.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -129,7 +129,11 @@ async function pstToRaw(msg, depth = 0) {
 
 async function pstImport(file, { add, setTotal }) {
   const { PSTFile } = require('pst-extractor');
-  const pst = new PSTFile(file);
+  let pst;
+  try { pst = new PSTFile(file); } catch (e) {
+    // The library quotes the file's first bytes; what matters is that it is not a readable Outlook data file.
+    throw new Error(/header|magic/i.test(e.message) ? 'This is not an Outlook data file (.pst / .ost), or it is damaged or incomplete' : e.message);
+  }
   try {
     let total = 0;
     const count = (f) => { total += f.contentCount || 0; if (f.hasSubfolders) f.getSubFolders().forEach(count); };

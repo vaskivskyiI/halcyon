@@ -192,7 +192,8 @@ async function runJob(j) {
     }
   } catch (e) {
     log.warn(`job ${j.id}: ${e.message}`);
-    set({ status: 'failed', error: e.message, finished_at: now() });
+    // Readable and short (some libraries quote binary data in their errors).
+    set({ status: 'failed', error: String(e.message || e).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\ufffd]+/g, '').slice(0, 300), finished_at: now() });
   } finally {
     if (j.file_path && !j.keep_file && j.file_path.startsWith(importDir())) fs.rm(j.file_path, { force: true }, () => {});
     notify(j.user_id, 'folders:changed', {});

@@ -722,3 +722,12 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   from mail (auto_collected, not favourite) move along with dirty = 0, i.e. they stay Halcyon-only suggestions and are
   never uploaded. Settings → Calendars & tasks offers "Move all to…" for local books; the Contacts page has the
   LocalDefault notice (kind "addressBook") and a link to the management page.
+
+### Large archive uploads (no migration)
+- Client (settings/Archives.jsx `send`): each piece has a 2-minute limit (AbortSignal.timeout); a stalled or dropped
+  piece is retried after a back-off with half the size (≥ 1 MB), 413 halves too; up to 25 failures in a row. Progress
+  shows bytes, percent with a decimal, speed and time left, and what is happening (retry, smaller pieces); Cancel.
+  The upload id is kept in localStorage per archive + file (name, size, lastModified): choosing the same file again
+  continues at the server's size (GET /api/archives/uploads/:id → { size, total }); a page close is warned about.
+- Checked on a real install: 8 MB pieces pass its proxy; pst-extractor reads by file descriptor (fine for 4 GB+).
+- A file that is not a PST/OST fails with a readable reason; job errors are stripped of control characters.

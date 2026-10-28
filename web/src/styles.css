@@ -485,3 +485,7 @@ div.provider { cursor: default; background: var(--panel-2); }
 /* Settings → Calendars & tasks: hidden ones faded */
 .item-card.faded { opacity: .6; }
 .icon-btn.danger:hover { color: var(--danger); }
+/* Archive upload progress */
+.upload-progress { display: grid; gap: 6px; }
+.upload-progress .bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.upload-progress .bar span { display: block; height: 100%; background: var(--accent); transition: width .3s; }

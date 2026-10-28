@@ -169,3 +169,16 @@ test('a large file is uploaded in pieces (whatever the proxy limit) and resumes 
   // Someone else's upload is not reachable.
   await assert.rejects(api('GET', '/api/archives/uploads/000000000000000000000000'), /not found/i);
 });
+
+test('a file that is not an Outlook data file fails with a readable reason (no binary in the message)', async () => {
+  const { id } = await api('POST', '/api/archives', { name: 'Broken' });
+  const junk = Buffer.alloc(4096);
+  const up = await api('POST', '/api/archives/uploads', { filename: 'broken.pst', size: junk.length });
+  await fetch(`${base}/api/archives/uploads/${up.id}?offset=0`, { method: 'PUT', headers: { cookie, 'content-type': 'application/octet-stream' }, body: junk });
+  assert.deepEqual(await api('GET', `/api/archives/uploads/${up.id}`), { id: up.id, size: 4096, total: 4096 }, 'where an upload stands (to continue it later)');
+  await api('POST', `/api/archives/${id}/import`, { uploadId: up.id });
+  const job = (await waitJobs()).find((j) => j.archiveId === id);
+  assert.equal(job.status, 'failed');
+  assert.match(job.error, /not an Outlook data file/);
+  assert.doesNotMatch(job.error, /[\u0000-\u0008]/);
+});
