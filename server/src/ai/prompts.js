@@ -109,25 +109,27 @@ Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions ma
   };
 }
 
-export function draftReplyPrompt({ ctx, style, learned, examples, thread, intent, language, signatureName, people = '' }) {
+export function draftReplyPrompt({ ctx, style, learned, examples, thread, intent, language, signatureName, people = '', background = '' }) {
   return {
     system: `You write email replies on behalf of the user. ${ctx}
 ${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${people ? `About the recipient (what the user's mail shows; follow "how the user writes to them" for greeting, form of address, formality, language and sign-off):\n${people}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Each message in the conversation is labelled with who wrote it to whom; "THE USER" is the person you write for — reply to the last message not written by them, and do not answer questions the user asked others as if they were asked of the user.
 Write only the reply body (no subject line, no quoted text, no placeholders like [Name] unless information is truly unknown).
+Use the BACKGROUND (the user's history with these people) to get it right: do not ask for what they already sent or answered, keep to what the user promised, agreed or said before (dates, numbers, decisions) or say clearly what changed, refer to earlier agreements when it helps, and do not repeat something the user already did. Never invent facts, dates, numbers or commitments that are not in the conversation, the background or the user's instruction — where something needed is unknown, leave a short [placeholder]. The user's instruction, when given, decides what the reply says.
 Reply in ${language}. Keep it natural, concise and appropriate in tone. Sign off as ${signatureName || 'the user'}.`,
-    messages: [{ role: 'user', content: `Conversation (most recent last):\n\n${thread}\n\n${intent ? `The reply should: ${intent}` : 'Write the most appropriate reply.'}` }],
+    messages: [{ role: 'user', content: `${background ? `BACKGROUND:\n${background}\n\n` : ''}Conversation (most recent last):\n\n${thread}\n\n${intent ? `The user's instruction for the reply: ${intent}` : 'Write the most appropriate reply.'}` }],
   };
 }
 
-export function composePrompt({ ctx, style, learned, examples, instruction, recipients, language, signatureName, people = '' }) {
+export function composePrompt({ ctx, style, learned, examples, instruction, recipients, language, signatureName, people = '', background = '' }) {
   return {
     system: `You draft new emails on behalf of the user. ${ctx}
 ${style ? `User's writing style (their own description — follow it): ${style}\n` : ''}${learned ? `How the user usually writes (learned from their sent mail): ${learned}\n` : ''}${people ? `About the recipients (what the user's mail shows; follow "how the user writes to them"):\n${people}\n` : ''}${examples ? `Emails the user wrote earlier to this recipient — match greeting, tone, formality, length, language and sign-off:\n${examples}\n` : ''}Output format exactly:
 Subject: <subject line>
 
 <email body>
+Use the BACKGROUND (the user's history with these people) to get it right: do not ask for what they already sent or answered, keep to what the user promised, agreed or said before (dates, numbers, decisions) or say clearly what changed, refer to earlier agreements when it helps, and do not repeat something the user already did. Never invent facts, dates, numbers or commitments that are not in the conversation, the background or the user's instruction — where something needed is unknown, leave a short [placeholder].
 Write in ${language}. Sign off as ${signatureName || 'the user'}.`,
-    messages: [{ role: 'user', content: `${recipients ? `Recipients: ${recipients}\n` : ''}Write an email that: ${instruction}` }],
+    messages: [{ role: 'user', content: `${background ? `BACKGROUND:\n${background}\n\n` : ''}${recipients ? `Recipients: ${recipients}\n` : ''}Write an email that: ${instruction}` }],
   };
 }
 

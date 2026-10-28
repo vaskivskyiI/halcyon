@@ -102,11 +102,16 @@ export function profileText(userId, email, { writing = false } = {}) {
 
 /** Profiles of the people a question mentions (by name or address), for the assistant. */
 export function profilesMentioned(userId, text, limit = 3) {
+  return peopleMentioned(userId, text, limit).map((email) => profileText(userId, email, { writing: true })).filter(Boolean);
+}
+
+/** Addresses of the known people a text mentions (by address or by a name), most written-with first. */
+export function peopleMentioned(userId, text, limit = 3) {
   const q = String(text || '').toLowerCase();
   if (q.length < 3) return [];
   const rows = all("SELECT email, name FROM contact_profiles WHERE user_id = ? AND (profile_json IS NOT NULL OR user_notes IS NOT NULL) ORDER BY msg_count DESC LIMIT 500", userId);
   const hit = rows.filter((r) => q.includes(r.email) || (r.name && r.name.split(/\s+/).filter((w) => w.length >= 3).some((w) => new RegExp(`(^|[^\\p{L}])${w.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u').test(q))));
-  return hit.slice(0, limit).map((r) => profileText(userId, r.email, { writing: true })).filter(Boolean);
+  return hit.slice(0, limit).map((r) => r.email);
 }
 
 export function setProfileNotes(userId, email, notes) {

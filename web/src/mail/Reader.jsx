@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -866,6 +866,9 @@ function QuickReply({ latest, onSent, hasDraft }) {
   const [busy, setBusy] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
   const [draftId, setDraftId] = useState(null);
+  // What the AI should write (optional), and what the check of the reply found.
+  const [hint, setHint] = useState('');
+  const [check, setCheck] = useState(null);
   const accounts = store.use((s) => s.accounts);
   const settings = store.use((s) => s.settings);
   const typed = useRef(false);
@@ -877,7 +880,7 @@ function QuickReply({ latest, onSent, hasDraft }) {
 
   // Restore an unfinished quick reply (saved as a draft) for this message.
   useEffect(() => {
-    setText(''); setDraftId(null); setMode('reply'); typed.current = false;
+    setText(''); setDraftId(null); setMode('reply'); setHint(''); setCheck(null); typed.current = false;
     api.get(`/api/drafts?inReplyTo=${latest.id}`).then((l) => {
       const d = l.find((x) => x.quick);
       if (d) { setDraftId(d.id); setText(d.text || ''); setMode(d.mode || 'reply'); }
@@ -917,13 +920,22 @@ function QuickReply({ latest, onSent, hasDraft }) {
       onSent?.();
     } catch (e) { toastError(e); } finally { setBusy(false); sending.current = false; }
   };
-  const draft = async () => {
-    setGenBusy(true); setText(''); typed.current = true;
-    try {
-      if (hasDraft) { const r = await api.post('/api/ai/draft-reply', { messageId: latest.id }); setText(r.text); }
-      else { let t = ''; await stream('/api/ai/draft-reply', { messageId: latest.id, stream: true }, { onToken: (x) => { t += x; setText(t); } }); }
-    } catch (e) { toastError(e); } finally { setGenBusy(false); }
+  // The reply checked against the conversation and the history with the recipients (advice only).
+  const runCheck = async (body) => {
+    setCheck({ busy: true, issues: [] });
+    try { const r = await api.post('/api/ai/check-draft', { messageId: latest.id, text: body }); setCheck({ issues: r.issues || [], done: true }); } catch { setCheck(null); }
   };
+  const draft = async () => {
+    const intent = hint.trim();
+    setGenBusy(true); setText(''); setCheck(null); typed.current = true;
+    let out = '';
+    try {
+      if (hasDraft && !intent) { const r = await api.post('/api/ai/draft-reply', { messageId: latest.id }); out = r.text; setText(out); }
+      else await stream('/api/ai/draft-reply', { messageId: latest.id, intent: intent || null, stream: true }, { onToken: (x) => { out += x; setText(out); } });
+    } catch (e) { toastError(e); } finally { setGenBusy(false); }
+    if (out.trim()) runCheck(out);
+  };
+  const openFull = () => { openComposer({ ...payloadFor(mode), ...(text ? { prefixHtml: textToHtml(text) } : {}), draftId: draftId || undefined }); setText(''); setDraftId(null); setCheck(null); typed.current = false; };
   const p = payloadFor(mode);
   const recipients = [...p.to, ...p.cc].map((a) => a.name || a.address);
   return (
@@ -934,17 +946,26 @@ function QuickReply({ latest, onSent, hasDraft }) {
           <button className={mode === 'replyAll' ? 'on' : ''} disabled={!canReplyAll} title={canReplyAll ? '' : 'There are no other recipients'} onClick={() => { setMode('replyAll'); typed.current = true; }}><ReplyAll size={13} /> Reply all</button>
         </div>
         <span className="faint truncate" title={recipients.join(', ')}>to {recipients.slice(0, 4).join(', ')}{recipients.length > 4 ? ` +${recipients.length - 4}` : ''}</span>
-        {draftId && <span className="faint" style={{ marginLeft: 'auto' }}>Draft saved</span>}
+        <span className="grow" />
+        {draftId && <span className="faint">Draft saved</span>}
+        <button className="icon-btn" title="Open in the full editor (formatting, attachments, more recipients)" aria-label="Open in the full editor" onClick={openFull}><Maximize2 size={14} /></button>
       </div>
       <textarea className="input" rows={text ? 6 : 2} placeholder={`Quick ${mode === 'replyAll' ? 'reply to all' : 'reply'} to ${latest.from.name || latest.from.address}…`} value={text}
-        onChange={(e) => { typed.current = true; setText(e.target.value); }}
+        onChange={(e) => { typed.current = true; setText(e.target.value); if (check?.done) setCheck(null); }}
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && text.trim()) send(); }} />
-      <div className="row" style={{ marginTop: 8 }}>
+      {check && (check.busy ? <div className="small faint row" style={{ gap: 6, marginTop: 6 }}><Spinner size={12} /> Checking the reply against your history with them…</div>
+        : check.issues.length > 0 ? <div className="notice draft-check">
+          <div className="row" style={{ gap: 6 }}><AlertTriangle size={14} /><b className="grow small">Worth a look before sending</b><button className="icon-btn" aria-label="Dismiss" onClick={() => setCheck(null)}><XIcon size={13} /></button></div>
+          {check.issues.map((i, n) => <div key={n} className="small"><b>{i.problem}</b>{i.suggestion && <span className="muted"> — {i.suggestion}</span>}</div>)}
+        </div> : <div className="small faint" style={{ marginTop: 6 }}><Check size={12} /> Checked against your history with them — nothing found.</div>)}
+      <div className="row" style={{ marginTop: 8, gap: 6, flexWrap: 'wrap' }}>
         <button className="btn primary" disabled={!text.trim() || busy} onClick={send}>{busy ? <Spinner size={14} /> : <Reply size={15} />} Send</button>
-        <button className="btn ai" disabled={genBusy} onClick={draft}>{genBusy ? <Spinner size={14} /> : <Sparkles size={15} />} {hasDraft ? 'Insert AI draft' : 'Draft with AI'}</button>
-        {text && <button className="btn ghost" onClick={() => { openComposer({ ...payloadFor(mode), prefixHtml: textToHtml(text), draftId: draftId || undefined }); setText(''); setDraftId(null); typed.current = false; }}>Open in editor</button>}
-        <span className="grow" /><span className="small faint">Ctrl+Enter to send</span>
+        <input className="input grow ai-hint" style={{ minWidth: 160 }} value={hint} onChange={(e) => setHint(e.target.value)} placeholder="Tell the AI what to reply (optional), e.g. “accept, but propose Thursday”"
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (!genBusy) draft(); } }} />
+        <button className="btn ai" disabled={genBusy} onClick={draft} title="Written with your whole history with them in mind">{genBusy ? <Spinner size={14} /> : <Sparkles size={15} />} {text && !hint.trim() ? 'Redo with AI' : hasDraft && !hint.trim() ? 'Insert AI draft' : 'Draft with AI'}</button>
+        {text.trim().length > 20 && !genBusy && !check?.busy && <button className="btn ghost" title="Check your reply against the conversation and your history with them" onClick={() => runCheck(text)}><ShieldCheck size={15} /> Check</button>}
       </div>
+      <div className="small faint" style={{ marginTop: 4, textAlign: 'right' }}>Ctrl+Enter to send</div>
     </div>
   );
 }

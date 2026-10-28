@@ -474,3 +474,8 @@ div.provider { cursor: default; background: var(--panel-2); }
 .task-lists { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0 12px; }
 .task-lists .chip { display: inline-flex; align-items: center; gap: 5px; }
 .task-lists .dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }
+/* AI check of a reply / email before sending */
+.notice.draft-check { margin: 6px 0 0; display: grid; gap: 4px; }
+.draft-check-line { display: flex; align-items: center; gap: 6px; margin: 6px 12px 0; }
+.quick-reply .draft-check-line { margin: 6px 0 0; }
+.composer .notice.draft-check { margin: 6px 12px 0; }

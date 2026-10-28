@@ -24,6 +24,7 @@ import { logger } from '../util/log.js';
 import { describedFor, promptBlock, applyAiTags } from './custom.js';
 import { keywords } from '../util/text.js';
 import { notifyUser } from '../notifications.js';
+import { writingContext, replyPeople } from './context.js';
 
 const log = logger('ai');
 
@@ -518,8 +519,11 @@ export async function draftReply(userId, messageId, intent, onToken, task = 'com
   const { ctx, settings, user, accounts } = ctxFor(userId, m.account_id);
   const acc = accounts.find((a) => a.id === m.account_id);
   const to = m.reply_to_json && json(m.reply_to_json, [])[0]?.address || m.from_addr;
+  // The whole relationship with the people of the conversation (ai/context.js), found by what this email is about.
+  const background = await writingContext(userId, { people: replyPeople(m), threadId: m.thread_id, accountId: m.account_id,
+    query: [m.subject, P.stripQuoted(m.body_text).slice(0, 1500), intent].filter(Boolean).join('\n'), budget: task === 'background' ? 4500 : 7000, interactive: task !== 'background' }).catch(() => '');
   const prompt = P.draftReplyPrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, [to]),
-    people: profileText(userId, to, { writing: true }), thread: threadText(userId, m), intent, language: replyLanguage(settings), signatureName: acc?.display_name || user.name });
+    people: profileText(userId, to, { writing: true }), thread: threadText(userId, m), intent, language: replyLanguage(settings), signatureName: acc?.display_name || user.name, background });
   const res = await chat(userId, task, { ...prompt, temperature: 0.5, maxTokens: 900, onToken });
   return res.text.trim();
 }
@@ -587,10 +591,37 @@ export async function composeNew(userId, { instruction, to, accountId = null }, 
   const { ctx, settings, user, uiLanguage } = ctxFor(userId, accountId);
   const lang = settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : `${uiLanguage} (unless the instruction implies another language)`;
   const addrs = String(to || '').match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || [];
+  const background = addrs.length ? await writingContext(userId, { people: addrs, query: instruction, accountId }).catch(() => '') : '';
   const res = await chat(userId, 'compose', { ...P.composePrompt({ ctx, style: settings.ai.writingStyle, learned: settings.ai.learnedStyle, examples: styleExamples(userId, addrs),
-    instruction, recipients: to, language: lang, signatureName: user.name, people: addrs.slice(0, 3).map((a) => profileText(userId, a, { writing: true })).filter(Boolean).join('\n') }), temperature: 0.6, maxTokens: 1200, onToken });
+    instruction, recipients: to, language: lang, signatureName: user.name, background }), temperature: 0.6, maxTokens: 1200, onToken });
   const m = res.text.match(/^\s*Subject:\s*(.+)\n+([\s\S]*)$/i);
   return m ? { subject: m[1].trim(), body: m[2].trim() } : { subject: '', body: res.text.trim() };
+}
+
+/**
+ * An email about to be sent, checked against its conversation and the user's history with the recipients: what is
+ * wrong or risky — it contradicts what was said or agreed, asks for what they already sent, leaves a question of
+ * theirs unanswered, uses a wrong name, language or form of address, or promises something new. Nothing when it is
+ * fine. Advice only: the user decides; nothing is changed or sent.
+ */
+export async function reviewDraft(userId, { text, subject = '', messageId = null, to = [], accountId = null }) {
+  const body = String(text || '').trim().slice(0, 6000);
+  if (body.length < 10) return { issues: [] };
+  const m = messageId ? get('SELECT * FROM messages WHERE id = ? AND user_id = ?', Number(messageId), userId) : null;
+  const people = [...(Array.isArray(to) ? to : String(to || '').match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || []), ...(m ? replyPeople(m) : [])];
+  const { ctx, uiLanguage } = ctxFor(userId, accountId || m?.account_id);
+  const background = await writingContext(userId, { people, threadId: m?.thread_id, accountId: accountId || m?.account_id, query: `${subject}\n${body}`, budget: 6000 }).catch(() => '');
+  const thread = m ? threadText(userId, m, 4) : '';
+  if (!background && !thread) return { issues: [] };
+  const { data } = await chatJSON(userId, 'compose', {
+    system: `${ctx}
+You check an email THE USER is about to send, against the conversation it answers and the user's history with the recipients (BACKGROUND). Report only real problems you can point to in that material: it contradicts what the user or they said or agreed earlier (dates, numbers, decisions), asks for something they already sent or answered, ignores a question they asked, gets a name, the language or the form of address wrong compared with how the user writes to them, or commits the user to something new that may not be intended. No remarks on style or wording otherwise; no praise.
+Return JSON {"issues": [{"problem": "<short, concrete, in ${uiLanguage}>", "suggestion": "<what to change, in ${uiLanguage}>"}]} — at most 4, most important first; {"issues": []} when it is fine.`,
+    messages: [{ role: 'user', content: `${background ? `BACKGROUND:\n${background}\n\n` : ''}${thread ? `CONVERSATION (most recent last):\n${thread}\n\n` : ''}EMAIL TO CHECK${subject ? ` (subject: ${subject})` : ''}:\n${body}` }],
+    temperature: 0.1, maxTokens: 600, interactive: true,
+  });
+  const issues = (Array.isArray(data?.issues) ? data.issues : []).map((i) => ({ problem: String(i?.problem || '').trim().slice(0, 300), suggestion: String(i?.suggestion || '').trim().slice(0, 300) })).filter((i) => i.problem).slice(0, 4);
+  return { issues };
 }
 
 /** Task title and due date from free text, by the AI (used when the rules in util/dates.js found no date). */

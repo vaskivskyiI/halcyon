@@ -672,3 +672,20 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   Changes in a synced list trigger syncDav for its account at once. RRULE + DUE written with DTSTART = DUE.
 - UI: list chips on the Tasks page (filter, per-device), list menu (rename, default, delete local), list + repeat in
   the add form and editor, "Move to list"; Settings → Spaces: task lists and "New tasks in" per space.
+
+### Writing with the whole relationship in mind; draft check (no migration)
+- `ai/context.js` `writingContext(userId, { people, query, threadId, accountId, budget, interactive })`: prompt text
+  with WHO THEY ARE (profiles), HISTORY WITH THEM (all conversations with each person, newest first, a
+  thread_summaries line or the newest message's analysis; totals since the first email), STILL OPEN (their open
+  requests, the user's mail waiting for them, open tasks from their mail, recent / upcoming meetings), RELEVANT
+  PASSAGES (memory index hits by meaning, restricted to mail with these people, outside the current conversation),
+  FACTS (user facts + nearest learned ones) and, when the text talks about time, busy times + free slots. Everything is
+  limited to the space of the account (inIds on account ids, memory owners); budgeted in characters.
+- Used by draftReply (also the background prepared draft, non-interactive embedding), composeNew, reviewDraft; the
+  assistant adds `historyWith()` for people a question names (`peopleMentioned` in profiles.js), scoped to the chat's space.
+- Prompts: "BACKGROUND" block plus rules — do not ask for what was already sent/answered, keep to earlier promises and
+  agreements, never invent facts/dates/numbers (use [placeholder]); the user's instruction decides what the reply says.
+- POST /api/ai/check-draft { text, subject?, messageId? | to[], accountId? } → { issues: [{ problem, suggestion }] }
+  (advice only). Runs after every AI draft (quick reply, composer) and on "Check".
+- Quick reply: "Open in the full editor" button always (also empty), an optional hint for the AI (Enter drafts), the
+  check result under the text.

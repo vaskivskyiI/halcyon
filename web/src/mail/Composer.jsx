@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   X, Minus, Maximize2, Minimize2, Send, Paperclip, Bold, Italic, Underline, Strikethrough, List, ListOrdered, Link2, Quote, RemoveFormatting,
-  Sparkles, ChevronDown, Clock, FileText, Trash2, Wand2, Undo2, Languages, Image as ImageIcon, PenLine,
+  Sparkles, ChevronDown, Clock, FileText, Trash2, Wand2, Undo2, Languages, Image as ImageIcon, PenLine, ShieldCheck, AlertTriangle, Check,
 } from 'lucide-react';
 import { api, stream } from '../api.js';
 import { store } from '../store.js';
@@ -166,6 +166,8 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   const [attachments, setAttachments] = useState(init.attachments || []);
   const [max, setMax] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  // The email checked against its conversation and the history with the recipients (advice only).
+  const [check, setCheck] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   // AI changes can be undone step by step (body and subject as they were before each change).
   const aiHist = useRef([]);
@@ -177,7 +179,16 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     if (!last || !editor.current) return;
     editor.current.innerHTML = last.html; setSubject(last.subject); setDirty(true);
   };
-  const doneAi = (what) => toast(what, { duration: 8000, action: { label: 'Undo', onClick: undoAi } });
+  const doneAi = (what) => { toast(what, { duration: 8000, action: { label: 'Undo', onClick: undoAi } }); setTimeout(() => runCheck(), 0); };
+  const runCheck = async () => {
+    const text = userText();
+    if (text.length < 20) return;
+    setCheck({ busy: true, issues: [] });
+    try {
+      const r = await api.post('/api/ai/check-draft', { text, subject, messageId: init.inReplyToId || undefined, to: [...to, ...cc].map((a) => a.address), accountId: account?.id });
+      setCheck({ issues: r.issues || [], done: true });
+    } catch { setCheck(null); }
+  };
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [draftId, setDraftId] = useState(init.draftId || null);
   const [dirty, setDirty] = useState(false);
@@ -473,8 +484,14 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
             : <button className="btn sm ai" onClick={runAiCompose} disabled={!aiPrompt.trim() && !isReply}>{isReply && !aiPrompt.trim() ? 'Draft reply' : 'Write'}</button>}
           {isReply && !aiPrompt && !aiBusy && <button className="btn sm ghost" onClick={() => runAiReply('')}>Auto-draft</button>}
           {aiSteps > 0 && !aiBusy && <button className="btn sm" title="Undo the last AI change (step by step)" onClick={undoAi}><Undo2 size={13} /> Undo AI{aiSteps > 1 ? ` (${aiSteps})` : ''}</button>}
+          {!aiBusy && !check?.busy && <button className="btn sm ghost" title="Check the email against the conversation and your history with the recipients" onClick={runCheck}><ShieldCheck size={13} /> Check</button>}
         </div>
       )}
+      {check && (check.busy ? <div className="small faint row draft-check-line"><Spinner size={12} /> Checking against your history with them…</div>
+        : check.issues.length > 0 ? <div className="notice draft-check">
+          <div className="row" style={{ gap: 6 }}><AlertTriangle size={14} /><b className="grow small">Worth a look before sending</b><button className="icon-btn" aria-label="Dismiss" onClick={() => setCheck(null)}><X size={13} /></button></div>
+          {check.issues.map((i, n) => <div key={n} className="small"><b>{i.problem}</b>{i.suggestion && <span className="muted"> — {i.suggestion}</span>}</div>)}
+        </div> : <div className="small faint draft-check-line"><Check size={12} /> Checked against your history with them — nothing found. <button className="link-btn small" onClick={() => setCheck(null)}>Hide</button></div>)}
       <div className="composer-foot">
         <div className="row" style={{ gap: 0 }}>
           <button className="btn primary" style={{ borderRadius: '8px 0 0 8px' }} disabled={busySend} onClick={() => send()}>{busySend ? <Spinner size={14} /> : <Send size={15} />} Send</button>

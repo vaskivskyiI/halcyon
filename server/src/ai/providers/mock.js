@@ -43,6 +43,12 @@ export function mock() {
         const verdict = (system.match(/marked the email below as ([^.]+)\./) || [])[1] || '';
         return { text: `"Emails like this (${verdict}): ${/List-Unsubscribe/.test(last) ? 'bulk mail, ' : ''}${(last.match(/Subject: (.*)/) || [])[1] || ''}"`, usage: { input: 1, output: 1 } };
       }
+      // Check of a draft (ai/tasks.js reviewDraft): names the first earlier conversation it was given, so tests can see
+      // that the history with the recipients reaches the prompt.
+      if (json && /You check an email THE USER is about to send/.test(system)) {
+        const subj = (last.match(/^- [^·\n]+· (.+?) \(\d+ email/m) || [])[1];
+        return { text: JSON.stringify({ issues: subj ? [{ problem: `Already discussed in "${subj}"`, suggestion: 'Refer to it' }] : [] }), usage: { input: 1, output: 1 } };
+      }
       if (!json && /describe who they are professionally/.test(system)) return { text: '- Works on the projects named in the sent mail\n- Writes in English', usage: { input: 1, output: 1 } };
       // The email itself (after the earlier conversation and the "Sender…/Recipients…" notes), so these are not
       // mistaken for content.

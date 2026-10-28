@@ -187,6 +187,13 @@ export default async function aiRoutes(app) {
 
   app.post('/api/ai/compose', async (req, reply) => streamNdjson(req, reply, (onToken) => T.composeNew(req.user.id, req.body || {}, onToken)));
 
+  // A draft checked against the conversation and the history with the recipients (advice only; nothing is changed).
+  app.post('/api/ai/check-draft', async (req, reply) => {
+    const b = req.body || {};
+    if (b.messageId && !get('SELECT 1 AS x FROM messages WHERE id = ? AND user_id = ?', Number(b.messageId), req.user.id)) return httpError(reply, 404, 'Not found');
+    try { return await T.reviewDraft(req.user.id, { text: b.text, subject: b.subject, messageId: b.messageId, to: b.to, accountId: b.accountId }); } catch (e) { return httpError(reply, 400, e.message); }
+  });
+
   app.post('/api/ai/rewrite', async (req, reply) => streamNdjson(req, reply, (onToken) => T.rewrite(req.user.id, req.body || {}, onToken)));
 
   app.post('/api/ai/translate', async (req, reply) => {
