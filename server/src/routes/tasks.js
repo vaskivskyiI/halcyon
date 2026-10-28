@@ -8,18 +8,84 @@ import { aiParseTask } from '../ai/tasks.js';
 import { scheduleBriefRefresh } from '../ai/tasks.js';
 import { localToEpoch } from '../util/time.js';
 import { localStamp } from '../ai/prompts.js';
+import { scope, reqSpace, inIds, cleanSpace, spaceMap } from '../spaces.js';
+import { ensureTaskLists, defaultTaskList, cleanRule, completeOccurrence, newTaskUid } from '../calendar/todos.js';
+import { syncDav } from '../scheduler.js';
 
 // Task changes also refresh the AI overview of the daily brief (debounced there).
 const notify = (userId, type, payload) => { notifyRaw(userId, type, payload); if (type === 'tasks:changed') scheduleBriefRefresh(userId); };
 
-const out = (t) => ({ id: t.id, title: t.title, notes: t.notes, due: t.due, priority: t.priority, done: !!t.done, completedAt: t.completed_at, list: t.list, sourceMessageId: t.source_message_id, createdAt: t.created_at });
+const out = (t) => ({ id: t.id, title: t.title, notes: t.notes, due: t.due, dueAllDay: !!t.due_all_day, priority: t.priority, done: !!t.done, completedAt: t.completed_at,
+  list: t.list_name || t.list, listId: t.list_id, rrule: t.rrule || null, readonly: !!t.list_readonly, sourceMessageId: t.source_message_id, createdAt: t.created_at });
+const one = (id) => get('SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t LEFT JOIN task_lists l ON l.id = t.list_id WHERE t.id = ?', id);
+const listOut = (l, m) => ({ id: l.id, name: l.name, color: l.color, source: l.source, accountId: l.account_id, readonly: !!l.readonly, isDefault: !!l.is_default,
+  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0 });
+
+/** A change in a synced list goes to the server at once (in the background; a refusal shows in the problems panel). */
+function pushList(listId) {
+  const l = get('SELECT account_id, source FROM task_lists WHERE id = ?', listId);
+  const a = l?.source === 'caldav' && l.account_id && get('SELECT * FROM accounts WHERE id = ?', l.account_id);
+  if (!a?.caldav_url) return;
+  // A sync already running may have started before this change: then once more after it.
+  syncDav(a).then(() => { if (get('SELECT 1 FROM tasks WHERE list_id = ? AND dirty = 1 UNION ALL SELECT 1 FROM task_deletions WHERE list_id = ?', listId, listId)) syncDav(a); }).catch(() => {});
+}
+const isDav = (listId) => !!get("SELECT 1 FROM task_lists WHERE id = ? AND source = 'caldav'", listId);
+/** A list of the user that tasks can be written to, or null. */
+const writableList = (userId, id) => (id ? get('SELECT * FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0', Number(id), userId) : null);
 
 export default async function taskRoutes(app) {
   app.addHook('preHandler', requireUser);
 
+  // ---- lists (each in a space, like calendars; synced ones come from an account's CalDAV server)
+  app.get('/api/task-lists', async (req) => {
+    ensureTaskLists(req.user.id);
+    const sc = scope(req.user.id, reqSpace(req)), m = spaceMap(req.user.id);
+    return all(`SELECT l.*, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open FROM task_lists l WHERE l.user_id = ? AND ${inIds('l.id', sc?.taskListIds)}
+      ORDER BY l.is_default DESC, l.name`, req.user.id).map((l) => listOut(l, m));
+  });
+  app.post('/api/task-lists', async (req, reply) => {
+    const name = String(req.body?.name || '').trim().slice(0, 80);
+    if (!name) return httpError(reply, 400, 'Name required');
+    const space = req.body?.space !== undefined ? cleanSpace(req.body.space) : reqSpace(req);
+    const r = run("INSERT INTO task_lists (user_id, name, color, source, space, created_at) VALUES (?, ?, ?, 'local', ?, ?)", req.user.id, name, req.body?.color || '#10b981', space, now());
+    notify(req.user.id, 'tasks:changed', {});
+    return listOut(get('SELECT * FROM task_lists WHERE id = ?', r.lastInsertRowid), spaceMap(req.user.id));
+  });
+  app.patch('/api/task-lists/:id', async (req, reply) => {
+    const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!l) return httpError(reply, 404, 'Not found');
+    const b = req.body || {};
+    if (b.isDefault) {
+      if (l.readonly) return httpError(reply, 400, 'A read-only list cannot be the default');
+      run('UPDATE task_lists SET is_default = 0 WHERE user_id = ?', req.user.id);
+      run('UPDATE task_lists SET is_default = 1 WHERE id = ?', l.id);
+    }
+    run('UPDATE task_lists SET name = COALESCE(?, name), color = COALESCE(?, color) WHERE id = ?', b.name ? String(b.name).trim().slice(0, 80) : null, b.color || null, l.id);
+    notify(req.user.id, 'tasks:changed', {});
+    return listOut(get('SELECT * FROM task_lists WHERE id = ?', l.id), spaceMap(req.user.id));
+  });
+  // Only lists kept in Halcyon are deleted here (with their tasks); a synced one goes with its account's calendar service.
+  app.delete('/api/task-lists/:id', async (req, reply) => {
+    const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!l) return httpError(reply, 404, 'Not found');
+    if (l.source !== 'local') return httpError(reply, 400, 'This list is on your calendar server — remove the calendar service of its account to remove it here');
+    if (!get('SELECT 1 FROM task_lists WHERE user_id = ? AND id != ? AND readonly = 0', req.user.id, l.id)) return httpError(reply, 400, 'This is your only task list');
+    run('DELETE FROM tasks WHERE list_id = ?', l.id);
+    run('DELETE FROM task_lists WHERE id = ?', l.id);
+    ensureTaskLists(req.user.id);
+    notify(req.user.id, 'tasks:changed', {});
+    return { ok: true };
+  });
+
+  // ---- tasks: those of the active space (all spaces when none is chosen), optionally of one list
   app.get('/api/tasks', async (req) => {
+    ensureTaskLists(req.user.id);
+    const sc = scope(req.user.id, reqSpace(req));
     const showDone = req.query.done === '1';
-    return all(`SELECT * FROM tasks WHERE user_id = ? ${showDone ? '' : 'AND (done = 0 OR completed_at > ?)'} ORDER BY done, due IS NULL, due, priority DESC, id DESC`, req.user.id, ...(showDone ? [] : [now() - 864e5])).map(out);
+    const listId = Number(req.query.listId) || null;
+    return all(`SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t JOIN task_lists l ON l.id = t.list_id
+      WHERE t.user_id = ? AND ${inIds('t.list_id', sc?.taskListIds)} ${listId ? 'AND t.list_id = ?' : ''} ${showDone ? '' : 'AND (t.done = 0 OR t.completed_at > ?)'}
+      ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, t.id DESC`, req.user.id, ...(listId ? [listId] : []), ...(showDone ? [] : [now() - 864e5])).map(out);
   });
 
   // Preview while typing: what the rules understand ("tomorrow at 10", "v petek") — instant, no AI.
@@ -29,7 +95,8 @@ export default async function taskRoutes(app) {
   });
 
   // b.text: plain-language task ("send the report to Ana on Tuesday"): title and due date are extracted by rules,
-  // with the AI as fallback when the text seems to mention a time the rules did not understand.
+  // with the AI as fallback when the text seems to mention a time the rules did not understand. b.listId: the list
+  // (else the default of the active space); b.rrule: repeat rule.
   app.post('/api/tasks', async (req, reply) => {
     const b = req.body || {};
     let dueTz = null;
@@ -41,27 +108,57 @@ export default async function taskRoutes(app) {
       if (b.due == null && parsed.due) { b.due = parsed.due; dueTz = tz; }
     }
     if (!b.title?.trim()) return httpError(reply, 400, 'Title required');
-    const r = run('INSERT INTO tasks (user_id, title, notes, due, due_tz, priority, list, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      req.user.id, b.title.trim(), b.notes || '', b.due || null, dueTz, b.priority || 0, b.list || 'Tasks', b.sourceMessageId || null, now(), now());
+    const rrule = cleanRule(b.rrule);
+    if (rrule === false) return httpError(reply, 400, 'Repeat rule not understood');
+    ensureTaskLists(req.user.id);
+    const list = b.listId ? writableList(req.user.id, b.listId) : defaultTaskList(req.user.id, reqSpace(req));
+    if (!list) return httpError(reply, 400, 'Tasks cannot be added to that list');
+    const r = run(`INSERT INTO tasks (user_id, list_id, title, notes, due, due_tz, due_all_day, priority, list, rrule, uid, dirty, source_message_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.user.id, list.id, b.title.trim(), b.notes || '', b.due || null, dueTz, b.dueAllDay ? 1 : 0, b.priority || 0, list.name,
+    rrule, newTaskUid(), list.source === 'caldav' ? 1 : 0, b.sourceMessageId || null, now(), now());
     notify(req.user.id, 'tasks:changed', {});
-    return out(get('SELECT * FROM tasks WHERE id = ?', r.lastInsertRowid));
+    pushList(list.id);
+    return out(one(r.lastInsertRowid));
   });
 
   app.patch('/api/tasks/:id', async (req, reply) => {
-    const t = get('SELECT * FROM tasks WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
-    if (!t) return httpError(reply, 404, 'Not found');
+    const t = one(req.params.id);
+    if (!t || t.user_id !== req.user.id) return httpError(reply, 404, 'Not found');
+    if (t.list_readonly) return httpError(reply, 403, 'This task list is read-only');
     const b = req.body || {};
+    const rrule = b.rrule !== undefined ? cleanRule(b.rrule) : t.rrule;
+    if (rrule === false) return httpError(reply, 400, 'Repeat rule not understood');
+    // Moved to another list: it leaves the old one (also on its server) and is saved new in the other.
+    let listId = t.list_id;
+    if (b.listId && Number(b.listId) !== t.list_id) {
+      const to = writableList(req.user.id, b.listId);
+      if (!to) return httpError(reply, 400, 'Tasks cannot be moved to that list');
+      if (t.href) run('INSERT INTO task_deletions (list_id, href, etag) VALUES (?, ?, ?)', t.list_id, t.href, t.etag);
+      run('UPDATE tasks SET list_id = ?, list = ?, href = NULL, etag = NULL WHERE id = ?', to.id, to.name, t.id);
+      pushList(t.list_id);
+      listId = to.id;
+    }
     // A due time set here was picked by the user (absolute): no longer tied to the zone the server read it in.
-    run(`UPDATE tasks SET title = ?, notes = ?, due = ?, due_tz = ?, priority = ?, list = ?, done = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
-      b.title ?? t.title, b.notes ?? t.notes, b.due !== undefined ? b.due : t.due, b.due !== undefined ? null : t.due_tz, b.priority ?? t.priority, b.list ?? t.list,
-      b.done !== undefined ? (b.done ? 1 : 0) : t.done, b.done ? (t.completed_at || now()) : (b.done === false ? null : t.completed_at), now(), t.id);
+    run(`UPDATE tasks SET title = ?, notes = ?, due = ?, due_tz = ?, due_all_day = ?, priority = ?, rrule = ?, done = ?, completed_at = ?, dirty = ?, updated_at = ? WHERE id = ?`,
+      b.title ?? t.title, b.notes ?? t.notes, b.due !== undefined ? b.due : t.due, b.due !== undefined ? null : t.due_tz,
+      b.dueAllDay !== undefined ? (b.dueAllDay ? 1 : 0) : b.due !== undefined ? 0 : t.due_all_day, b.priority ?? t.priority, rrule,
+      b.done !== undefined ? (b.done ? 1 : 0) : t.done, b.done ? (t.completed_at || now()) : (b.done === false ? null : t.completed_at), isDav(listId) ? 1 : 0, now(), t.id);
+    // A repeating task done: this occurrence is kept as completed and the task moves on to its next date.
+    let completed = null;
+    if (b.done && !t.done && rrule) completed = completeOccurrence(one(t.id), getSettings(req.user.id).calendar.timezone);
     notify(req.user.id, 'tasks:changed', {});
-    return out(get('SELECT * FROM tasks WHERE id = ?', t.id));
+    pushList(listId);
+    return { ...out(one(t.id)), ...(completed ? { completedCopy: out(one(completed)) } : {}) };
   });
 
-  app.delete('/api/tasks/:id', async (req) => {
-    run('DELETE FROM tasks WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+  app.delete('/api/tasks/:id', async (req, reply) => {
+    const t = one(req.params.id);
+    if (!t || t.user_id !== req.user.id) return { ok: true };
+    if (t.list_readonly) return httpError(reply, 403, 'This task list is read-only');
+    if (t.href) run('INSERT INTO task_deletions (list_id, href, etag) VALUES (?, ?, ?)', t.list_id, t.href, t.etag);
+    run('DELETE FROM tasks WHERE id = ? AND user_id = ?', t.id, req.user.id);
     notify(req.user.id, 'tasks:changed', {});
+    pushList(t.list_id);
     return { ok: true };
   });
 
@@ -77,6 +174,10 @@ export default async function taskRoutes(app) {
     const p = proposeTasks(req.user.id, req.params.id);
     if (!p) return httpError(reply, 404, 'Not found');
     const items = Array.isArray(req.body?.items) && req.body.items.length ? req.body.items : p.items;
+    // Into the list chosen, else the default list of the space the email's account is in.
+    ensureTaskLists(req.user.id);
+    const acc = get('SELECT account_id FROM messages WHERE id = ?', p.messageId)?.account_id;
+    const list = writableList(req.user.id, req.body?.listId) || defaultTaskList(req.user.id, spaceMap(req.user.id).accounts.get(acc) || reqSpace(req));
     const created = [];
     for (const it of items) {
       // Older clients send the raw AI items ({ text, due: 'YYYY-MM-DD' }).
@@ -85,11 +186,13 @@ export default async function taskRoutes(app) {
       // Due as read from the email (unchanged in the dialog) is tied to the zone it was read in.
       const due = Number(t.due) || null;
       const read = due && p.items.some((x) => x.due === due) ? p.tz : null;
-      const r = run('INSERT INTO tasks (user_id, title, notes, due, due_tz, priority, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        req.user.id, String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), due, read, t.priority ? 1 : 0, p.messageId, now(), now());
-      created.push(out(get('SELECT * FROM tasks WHERE id = ?', r.lastInsertRowid)));
+      const r = run(`INSERT INTO tasks (user_id, list_id, list, uid, dirty, title, notes, due, due_tz, priority, source_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.user.id, list.id, list.name, newTaskUid(), list.source === 'caldav' ? 1 : 0,
+      String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), due, read, t.priority ? 1 : 0, p.messageId, now(), now());
+      created.push(out(one(r.lastInsertRowid)));
     }
     notify(req.user.id, 'tasks:changed', {});
+    pushList(list.id);
     return created;
   });
 }

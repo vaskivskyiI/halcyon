@@ -4,7 +4,7 @@ import { httpError } from './util.js';
 import { listSpaces, spaceMap, cleanSpace, renameSpace } from '../spaces.js';
 import { notify } from '../util/events.js';
 
-const TABLES = { account: 'accounts', calendar: 'calendars', addressBook: 'address_books' };
+const TABLES = { account: 'accounts', calendar: 'calendars', addressBook: 'address_books', taskList: 'task_lists' };
 
 const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
 function originOf(x) {
@@ -31,8 +31,12 @@ export default async function spaceRoutes(app) {
       addressBooks: all(`SELECT b.id, b.name, b.account_id AS accountId, b.space AS ownSpace, b.source, b.url, b.readonly, b.is_default AS isDefault, a.email
         FROM address_books b LEFT JOIN accounts a ON a.id = b.account_id WHERE b.user_id = ? ORDER BY b.name`, u)
         .map((b) => ({ ...b, origin: originOf(b), space: m.books.get(b.id) ?? '' })),
+      taskLists: all(`SELECT l.id, l.name, l.color, l.account_id AS accountId, l.space AS ownSpace, l.source, l.url, l.readonly, l.is_default AS isDefault, a.email
+        FROM task_lists l LEFT JOIN accounts a ON a.id = l.account_id WHERE l.user_id = ? ORDER BY l.name`, u)
+        .map((l) => ({ ...l, origin: originOf(l), space: m.taskLists.get(l.id) ?? '' })),
       counts: Object.fromEntries(listSpaces(u).map((s) => [s, {
         accounts: [...m.accounts.values()].filter((x) => x === s).length, calendars: [...m.calendars.values()].filter((x) => x === s).length, books: [...m.books.values()].filter((x) => x === s).length,
+        taskLists: [...m.taskLists.values()].filter((x) => x === s).length,
       }])),
     };
   });

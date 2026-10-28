@@ -139,6 +139,9 @@ export default async function accountRoutes(app) {
       out.push({ key: `cal:${c.id}`, level: c.source === 'caldav' ? 'error' : 'warn', calendarId: c.id,
         title: c.source === 'caldav' ? `Calendar “${c.name}”: changes not saved on the server` : `Calendar “${c.name}” could not be refreshed`, text: c.sync_error, actions: ['refresh-calendar'] });
     }
+    for (const l of all('SELECT id, name, account_id, sync_error FROM task_lists WHERE user_id = ? AND sync_error IS NOT NULL', userId)) {
+      out.push({ key: `tasks:${l.id}`, level: 'error', accountId: l.account_id, title: `Task list “${l.name}”: changes not saved on the server`, text: l.sync_error, actions: l.account_id ? ['retry-dav'] : [] });
+    }
     for (const s of all('SELECT id, name, error FROM calendar_sources WHERE user_id = ? AND error IS NOT NULL', userId)) {
       out.push({ key: `calsrc:${s.id}`, level: 'warn', sourceId: s.id, title: `Calendars from “${s.name}” could not be refreshed`, text: s.error, actions: ['refresh-source'] });
     }
@@ -225,6 +228,7 @@ export default async function accountRoutes(app) {
     const { service } = req.params;
     if (service === 'calendar') {
       run("DELETE FROM calendars WHERE account_id = ? AND source = 'caldav'", a.id);
+      run("DELETE FROM task_lists WHERE account_id = ? AND source = 'caldav'", a.id);
       run('UPDATE accounts SET caldav_url = NULL WHERE id = ?', a.id);
       notify(req.user.id, 'calendar:changed', {});
     } else if (service === 'contacts') {

@@ -1,5 +1,5 @@
 // Spaces separate parts of a user's life (e.g. "Work" and "Private"). Accounts, calendars and address books carry a
-// space label; '' means shared (visible in every space). Calendars/address books without their own label inherit the
+// space label; '' means shared (visible in every space). Calendars/address books/task lists without their own label inherit the
 // space of the account they sync from. A request picks its space with the x-halcyon-space header ('' = everything).
 import { all, get, run, now, json } from './db/index.js';
 import { getSettings } from './settings.js';
@@ -15,12 +15,13 @@ export function spaceMap(userId) {
   const inherit = (r) => (r.space != null ? r.space : (accounts.get(r.account_id) ?? ''));
   const calendars = new Map(all('SELECT id, account_id, space FROM calendars WHERE user_id = ?', userId).map((c) => [c.id, inherit(c)]));
   const books = new Map(all('SELECT id, account_id, space FROM address_books WHERE user_id = ?', userId).map((b) => [b.id, inherit(b)]));
-  return { accounts, calendars, books };
+  const taskLists = new Map(all('SELECT id, account_id, space FROM task_lists WHERE user_id = ?', userId).map((l) => [l.id, inherit(l)]));
+  return { accounts, calendars, books, taskLists };
 }
 
 export function listSpaces(userId) {
   const m = spaceMap(userId);
-  return [...new Set([...m.accounts.values(), ...m.calendars.values(), ...m.books.values()].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return [...new Set([...m.accounts.values(), ...m.calendars.values(), ...m.books.values(), ...m.taskLists.values()].filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -32,9 +33,9 @@ export function scope(userId, space) {
   if (!space) return null;
   const m = spaceMap(userId);
   const pick = (map) => [...map].filter(([, s]) => s === space || s === '').map(([id]) => id);
-  const accountIds = pick(m.accounts), calendarIds = pick(m.calendars), bookIds = pick(m.books);
+  const accountIds = pick(m.accounts), calendarIds = pick(m.calendars), bookIds = pick(m.books), taskListIds = pick(m.taskLists);
   const owners = new Set([...accountIds.map((id) => `a:${id}`), ...calendarIds.map((id) => `c:${id}`), ...bookIds.map((id) => `b:${id}`), `s:${space}`, 's:']);
-  return { space, accountIds, calendarIds, bookIds, owners };
+  return { space, accountIds, calendarIds, bookIds, taskListIds, owners };
 }
 
 /** SQL fragment restricting a column to ids in the scope ('1' when unscoped, '0' when the scope has none). */
@@ -47,8 +48,9 @@ const DEFAULT_SQL = {
   accountId: "SELECT id FROM accounts WHERE id = ? AND user_id = ? AND mail != 0 AND COALESCE(kind, 'mail') != 'archive'",
   calendarId: 'SELECT id FROM calendars WHERE id = ? AND user_id = ? AND readonly = 0',
   bookId: 'SELECT id FROM address_books WHERE id = ? AND user_id = ? AND readonly = 0',
+  taskListId: 'SELECT id FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0',
 };
-/** The default chosen for a space (Settings → Spaces): kind 'accountId' | 'calendarId' | 'bookId'; null if none (or gone). */
+/** The default chosen for a space (Settings → Spaces): kind 'accountId' | 'calendarId' | 'bookId' | 'taskListId'; null if none (or gone). */
 export function spaceDefault(userId, space, kind) {
   const id = Number(getSettings(userId).defaults?.[cleanSpace(space)]?.[kind]);
   return id && get(DEFAULT_SQL[kind], id, userId) ? id : null;
@@ -63,7 +65,7 @@ export function renameSpace(userId, from, to) {
   from = cleanSpace(from); to = cleanSpace(to);
   if (!from || from === to) return;
   run('UPDATE accounts SET space = ? WHERE user_id = ? AND space = ?', to, userId, from);
-  for (const t of ['calendars', 'address_books']) {
+  for (const t of ['calendars', 'address_books', 'task_lists']) {
     // Removed: one that syncs from an account follows the account again; others become shared.
     run(`UPDATE ${t} SET space = ${to ? '?' : "CASE WHEN account_id IS NULL THEN '' ELSE NULL END"} WHERE user_id = ? AND space = ?`, ...(to ? [to] : []), userId, from);
   }

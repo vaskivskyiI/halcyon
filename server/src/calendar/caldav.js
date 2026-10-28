@@ -5,6 +5,7 @@ import { parseIcs, buildIcs } from './ics.js';
 import { serializeEvent, toRow } from './repo.js';
 import { update } from '../db/index.js';
 import { logger } from '../util/log.js';
+import { syncTodoCollection } from './todos.js';
 
 const log = logger('caldav');
 const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
@@ -29,7 +30,8 @@ function upsertFromIcs(calId, href, etag, ics) {
 export async function syncCalDav(account, { sourceId = null, readonly = false } = {}) {
   if (!account.caldav_url) return;
   const client = await davClient(account, account.caldav_url, 'caldav');
-  const remoteCals = (await client.fetchCalendars()).filter((c) => !c.components || c.components.includes('VEVENT'));
+  const collections = await client.fetchCalendars();
+  const remoteCals = collections.filter((c) => !c.components || c.components.includes('VEVENT'));
   for (const [i, remote] of remoteCals.entries()) {
     let cal = get('SELECT * FROM calendars WHERE user_id = ? AND url = ?', account.user_id, remote.url);
     if (!cal) {
@@ -100,7 +102,14 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
       run('UPDATE calendars SET ctag = ? WHERE id = ?', remote.ctag || null, cal.id);
     });
   }
-  return { calendars: remoteCals.length };
+  // Task lists: the collections that hold tasks (often the same ones as the calendars). Not for read-only sources.
+  let taskLists = 0;
+  if (!readonly) {
+    for (const [i, remote] of collections.filter((c) => c.components?.includes('VTODO')).entries()) {
+      try { await syncTodoCollection(client, account, remote, i); taskLists++; } catch (e) { log.warn(`tasks ${remote.url}: ${e.message}`); }
+    }
+  }
+  return { calendars: remoteCals.length, taskLists };
 }
 
 export function importIcsInto(userId, calendarId, ics) {

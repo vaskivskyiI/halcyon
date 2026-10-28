@@ -48,10 +48,10 @@ export default function Spaces() {
   const rename = async (kind, item) => {
     const n = prompt('Name', item.name);
     if (!n?.trim() || n.trim() === item.name) return;
-    try { await api.patch(kind === 'calendar' ? `/api/calendars/${item.id}` : `/api/address-books/${item.id}`, { name: n.trim() }); await load(); } catch (e) { toastError(e); }
+    try { await api.patch(kind === 'calendar' ? `/api/calendars/${item.id}` : kind === 'taskList' ? `/api/task-lists/${item.id}` : `/api/address-books/${item.id}`, { name: n.trim() }); await load(); } catch (e) { toastError(e); }
   };
   const makeDefault = async (kind, item) => {
-    try { await api.patch(kind === 'calendar' ? `/api/calendars/${item.id}` : `/api/address-books/${item.id}`, { isDefault: true }); await load(); } catch (e) { toastError(e); }
+    try { await api.patch(kind === 'calendar' ? `/api/calendars/${item.id}` : kind === 'taskList' ? `/api/task-lists/${item.id}` : `/api/address-books/${item.id}`, { isDefault: true }); await load(); } catch (e) { toastError(e); }
   };
   const setDefault = (space, key, value) => saveSettings({ defaults: { [space]: { [key]: value ? Number(value) : null } } });
 
@@ -59,7 +59,7 @@ export default function Spaces() {
   const spaces = [...new Set(['Work', 'Private', ...data.spaces])];
   const acct = (id) => data.accounts.find((a) => a.id === id);
   const mailAccounts = data.accounts.filter((a) => a.mail && a.kind !== 'archive');
-  const cals = data.calendars.filter((c) => !c.readonly), books = data.addressBooks.filter((b) => !b.readonly);
+  const cals = data.calendars.filter((c) => !c.readonly), books = data.addressBooks.filter((b) => !b.readonly), taskLists = (data.taskLists || []).filter((l) => !l.readonly);
   const inSpace = (s, list) => (s ? list.filter((x) => x.space === s || x.space === '') : list);
   const defaults = settings.defaults || {};
 
@@ -76,15 +76,16 @@ export default function Spaces() {
         {pick('accountId', mailAccounts, 'New mail from', (a) => a.email)}
         {pick('calendarId', cals, 'New events in', (c) => `${c.name} — ${c.origin}`)}
         {pick('bookId', books, 'New contacts in', (b) => `${b.name} — ${b.origin}`)}
+        {pick('taskListId', taskLists, 'New tasks in', (l) => `${l.name} — ${l.origin}`)}
       </div>);
   };
 
   return (
     <div className="settings-section">
       <div><h2>Spaces</h2>
-        <div className="muted">Keep parts of your life apart — for example a <b>Work</b> and a <b>Private</b> space. Each account, calendar and address book
-          belongs to one space or is shared. Pick the space with the <Layers size={13} style={{ verticalAlign: -2 }} /> button in the left bar: mail, search, calendar,
-          contacts, the daily brief and the AI assistant then only use that space's data. “All spaces” shows everything.</div></div>
+        <div className="muted">Keep parts of your life apart — for example a <b>Work</b> and a <b>Private</b> space. Each account, calendar, address book and
+          task list belongs to one space or is shared. Pick the space with the <Layers size={13} style={{ verticalAlign: -2 }} /> button in the left bar: mail, search, calendar,
+          contacts, tasks, the daily brief and the AI assistant then only use that space's data. “All spaces” shows everything.</div></div>
 
       <h3>Your spaces</h3>
       {data.spaces.map((s) => {
@@ -93,7 +94,7 @@ export default function Spaces() {
           <div key={s} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div className="row" style={{ gap: 8 }}>
               <Layers size={15} /><b className="grow">{s}</b>
-              <span className="small faint">{c.accounts || 0} account{c.accounts === 1 ? '' : 's'} · {c.calendars || 0} calendar{c.calendars === 1 ? '' : 's'} · {c.books || 0} address book{c.books === 1 ? '' : 's'}</span>
+              <span className="small faint">{c.accounts || 0} account{c.accounts === 1 ? '' : 's'} · {c.calendars || 0} calendar{c.calendars === 1 ? '' : 's'} · {c.books || 0} address book{c.books === 1 ? '' : 's'} · {c.taskLists || 0} task list{c.taskLists === 1 ? '' : 's'}</span>
               <button className="icon-btn" title="Rename (or merge into another space)" onClick={() => renameSpace(s)}><Pencil size={15} /></button>
               <button className="icon-btn" title="Remove the space — what is in it becomes shared" onClick={() => removeSpace(s)}><Trash2 size={15} /></button>
             </div>
@@ -141,7 +142,19 @@ export default function Spaces() {
           <SpacePicker value={b.ownSpace} spaces={spaces} inheritLabel={b.accountId ? `Same as account (${acct(b.accountId)?.space || 'shared'})` : null} onChange={(s) => assign('addressBook', b.id, s)} />
         </div>
       ))}
-      <div className="small faint">People you write to from an account in a space are collected into an address book of that space. Tasks are not split by space; tasks created from an email follow that email's space in the assistant and brief.</div>
+      <h3>Task lists</h3>
+      {(data.taskLists || []).map((l) => (
+        <div key={l.id} className="card item-card">
+          <span style={{ width: 10, height: 10, borderRadius: 5, background: l.color || 'var(--accent)', flex: 'none' }} />
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="truncate">{l.name}{!!l.isDefault && <span className="chip" style={{ marginLeft: 6 }}>default</span>}</div>
+            <div className="small faint truncate">{l.origin}</div></div>
+          <button className="icon-btn" title="Rename" onClick={() => rename('taskList', l)}><Pencil size={14} /></button>
+          {!l.readonly && !l.isDefault && <button className="icon-btn" title="Make the default task list" onClick={() => makeDefault('taskList', l)}><Star size={14} /></button>}
+          <SpacePicker value={l.ownSpace} spaces={spaces} inheritLabel={l.accountId ? `Same as account (${acct(l.accountId)?.space || 'shared'})` : null} onChange={(s) => assign('taskList', l.id, s)} />
+        </div>
+      ))}
+      <div className="small faint">People you write to from an account in a space are collected into an address book of that space. Tasks made from an email go to the task list of that email's space.</div>
     </div>
   );
 }

@@ -35,7 +35,7 @@ export function syncDav(account) {
     const out = { at: Date.now(), calendars: null, books: null, error: null };
     try {
       if (account.caldav_url) {
-        try { out.calendars = (await syncCalDav(account))?.calendars ?? 0; } catch (e) { out.error = `Calendars (CalDAV): ${davReason(e)}`; }
+        try { const r = await syncCalDav(account); out.calendars = r?.calendars ?? 0; out.taskLists = r?.taskLists ?? 0; } catch (e) { out.error = `Calendars (CalDAV): ${davReason(e)}`; }
       }
       if (account.carddav_url) {
         try { out.books = (await syncCardDav(account))?.books ?? 0; } catch (e) { out.error = [out.error, `Contacts (CardDAV): ${davReason(e)}`].filter(Boolean).join(' · '); }
@@ -49,6 +49,7 @@ export function syncDav(account) {
       if (out.calendars || out.books) dropStarters(account.user_id);
       notify(account.user_id, 'calendar:changed', {});
       notify(account.user_id, 'contacts:changed', {});
+      if (out.taskLists) notify(account.user_id, 'tasks:changed', {});
     } finally {
       davStatus.set(account.id, out);
       davBusy.delete(account.id);

@@ -470,3 +470,7 @@ div.provider { cursor: default; background: var(--panel-2); }
 .search-help { width: 100%; margin: 4px 0 0; line-height: 1.6; }
 .search-help summary { cursor: pointer; }
 .search-help code { font-size: 11px; padding: 0 3px; border-radius: 4px; background: var(--panel-2); }
+/* Task lists above the tasks */
+.task-lists { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0 12px; }
+.task-lists .chip { display: inline-flex; align-items: center; gap: 5px; }
+.task-lists .dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }

@@ -652,3 +652,23 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   a synced CalDAV / CardDAV one exists (after each DAV sync); its origin reads "Kept in Halcyon only". The default
   calendar can be removed when another writable one takes over. Diagnostics page crash (api.js read its numeric
   `folders` as a list) fixed.
+
+### Tasks: lists in spaces, repeating tasks, CalDAV (VTODO) sync (migration 36)
+- `task_lists` (local or `caldav` with account_id + url, readonly, is_default, space like calendars; spaceMap().taskLists,
+  scope().taskListIds, space default `taskListId`). `tasks.list_id` (old `list` text kept as a label), `rrule`,
+  `due_all_day`, and for sync `uid`, `href`, `etag`, `dirty`, `ics` (the server's VTODO, so other apps' properties are
+  kept). Deleted synced tasks wait in `task_deletions`. `ensureTaskLists()` (calendar/todos.js) gives every user a
+  default list and puts tasks made elsewhere (follow-ups, MCP, moved in from another user) into it — call it before
+  reading tasks.
+- API: GET/POST/PATCH/DELETE /api/task-lists (only local lists can be deleted); GET /api/tasks honours the active space
+  (no space = all) and `listId`; POST/PATCH take listId, rrule, dueAllDay. Moving a task between lists deletes it from
+  the old server collection. New tasks: chosen list → space default → a writable list of the space → default list;
+  tasks from an email go to the list of the email account's space.
+- Repeating: done on a task with rrule keeps a completed copy and moves the task to the next date (wall clock kept
+  over DST, COUNT counts down, last one simply completes) — `completeOccurrence()`; PATCH returns `completedCopy`.
+- Sync: syncCalDav also syncs every collection whose components include VTODO (`syncTodoCollection`, not for read-only
+  calendar sources): deletions and dirty tasks pushed first (refusals → `task_lists.sync_error` → problems panel), then
+  objects fetched with a VTODO comp-filter (tsdav defaults to VEVENT) when the ctag changed or a push is unconfirmed.
+  Changes in a synced list trigger syncDav for its account at once. RRULE + DUE written with DTSTART = DUE.
+- UI: list chips on the Tasks page (filter, per-device), list menu (rename, default, delete local), list + repeat in
+  the add form and editor, "Move to list"; Settings → Spaces: task lists and "New tasks in" per space.

@@ -421,4 +421,28 @@ export const migrations = [
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, key TEXT NOT NULL, sig TEXT, at INTEGER, PRIMARY KEY (user_id, key)
   );
   `,
+  // 36: task lists — kept in Halcyon or synced with a CalDAV collection (VTODO); each in a space like calendars, one
+  // the default. Tasks: their list, recurrence (RRULE), date-only due, and what CalDAV sync needs (uid, href, etag,
+  // dirty, the server's VTODO as it was so other clients' properties survive). Deletions wait in task_deletions
+  // until the server has them. Existing tasks move into a list per former list name.
+  `
+  CREATE TABLE task_lists (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT, color TEXT, source TEXT DEFAULT 'local', url TEXT, ctag TEXT, readonly INTEGER DEFAULT 0, is_default INTEGER DEFAULT 0,
+    space TEXT, sync_error TEXT, created_at INTEGER
+  );
+  ALTER TABLE tasks ADD COLUMN list_id INTEGER REFERENCES task_lists(id) ON DELETE CASCADE;
+  ALTER TABLE tasks ADD COLUMN rrule TEXT;
+  ALTER TABLE tasks ADD COLUMN due_all_day INTEGER DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN uid TEXT;
+  ALTER TABLE tasks ADD COLUMN href TEXT;
+  ALTER TABLE tasks ADD COLUMN etag TEXT;
+  ALTER TABLE tasks ADD COLUMN dirty INTEGER DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN ics TEXT;
+  CREATE INDEX idx_tasks_list ON tasks(list_id);
+  CREATE TABLE task_deletions (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES task_lists(id) ON DELETE CASCADE, href TEXT NOT NULL, etag TEXT);
+  INSERT INTO task_lists (user_id, name, source, created_at) SELECT DISTINCT user_id, COALESCE(NULLIF(list, ''), 'Tasks'), 'local', CAST(strftime('%s', 'now') AS INTEGER) * 1000 FROM tasks;
+  UPDATE tasks SET list_id = (SELECT l.id FROM task_lists l WHERE l.user_id = tasks.user_id AND l.name = COALESCE(NULLIF(tasks.list, ''), 'Tasks'));
+  UPDATE task_lists SET is_default = 1 WHERE id IN (SELECT MIN(id) FROM task_lists GROUP BY user_id);
+  `,
 ];

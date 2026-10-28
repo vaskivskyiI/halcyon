@@ -19,7 +19,33 @@ export function dueOptions() {
   ];
 }
 
-export const fmtDue = (t) => new Date(t).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+export const fmtDue = (t, allDay = false) => new Date(t).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', ...(allDay ? {} : { hour: '2-digit', minute: '2-digit' }) });
+
+/** Repeat choices for a task ([label, RRULE]); the rule repeats from the due date. */
+export const REPEATS = [['Does not repeat', ''], ['Every day', 'FREQ=DAILY'], ['Every weekday', 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR'], ['Every week', 'FREQ=WEEKLY'],
+  ['Every 2 weeks', 'FREQ=WEEKLY;INTERVAL=2'], ['Every month', 'FREQ=MONTHLY'], ['Every 3 months', 'FREQ=MONTHLY;INTERVAL=3'], ['Every year', 'FREQ=YEARLY']];
+export const repeatLabel = (r) => (r ? (REPEATS.find(([, v]) => v === r)?.[0] || 'Repeats') : '');
+
+/** Repeat picker; a rule made elsewhere (another app) is shown as it is and kept unless changed. */
+export function RepeatField({ value, onChange, disabled }) {
+  const known = REPEATS.some(([, v]) => v === (value || ''));
+  return (
+    <select className="input" style={{ width: 210 }} value={value || ''} disabled={disabled} title={disabled ? 'Set a due date first' : 'Repeats from the due date; when done, it moves to the next date'} onChange={(e) => onChange(e.target.value || null)}>
+      {REPEATS.map(([l, v]) => <option key={v} value={v}>{l}</option>)}
+      {!known && <option value={value}>Custom: {value}</option>}
+    </select>);
+}
+
+/** Task list picker (lists of the active space; "" = the space's default). */
+export function ListField({ lists, value, onChange, auto = true }) {
+  const writable = lists.filter((l) => !l.readonly);
+  if (writable.length < 2 && !(value && !writable.some((l) => l.id === value))) return null;
+  return (
+    <select className="input" style={{ width: 210 }} value={value || ''} onChange={(e) => onChange(Number(e.target.value) || null)} title="Task list">
+      {auto && <option value="">{`Default list (${writable.find((l) => l.isDefault)?.name || writable[0]?.name || 'Tasks'})`}</option>}
+      {writable.map((l) => <option key={l.id} value={l.id}>{l.name}{l.source === 'caldav' ? ' (synced)' : ''}</option>)}
+    </select>);
+}
 
 /** Date-time field with quick choices underneath. */
 export function DueField({ value, onChange }) {
