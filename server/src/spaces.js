@@ -1,7 +1,8 @@
 // Spaces separate parts of a user's life (e.g. "Work" and "Private"). Accounts, calendars and address books carry a
 // space label; '' means shared (visible in every space). Calendars/address books without their own label inherit the
 // space of the account they sync from. A request picks its space with the x-halcyon-space header ('' = everything).
-import { all, get, run, now } from './db/index.js';
+import { all, get, run, now, json } from './db/index.js';
+import { getSettings } from './settings.js';
 
 export const reqSpace = (req) => {
   try { return decodeURIComponent(String(req.headers['x-halcyon-space'] || '')).trim().slice(0, 40); } catch { return ''; }
@@ -40,6 +41,41 @@ export function scope(userId, space) {
 export function inIds(column, ids) {
   if (!ids) return '1';
   return ids.length ? `${column} IN (${ids.map(Number).join(',')})` : '0';
+}
+
+const DEFAULT_SQL = {
+  accountId: "SELECT id FROM accounts WHERE id = ? AND user_id = ? AND mail != 0 AND COALESCE(kind, 'mail') != 'archive'",
+  calendarId: 'SELECT id FROM calendars WHERE id = ? AND user_id = ? AND readonly = 0',
+  bookId: 'SELECT id FROM address_books WHERE id = ? AND user_id = ? AND readonly = 0',
+};
+/** The default chosen for a space (Settings → Spaces): kind 'accountId' | 'calendarId' | 'bookId'; null if none (or gone). */
+export function spaceDefault(userId, space, kind) {
+  const id = Number(getSettings(userId).defaults?.[cleanSpace(space)]?.[kind]);
+  return id && get(DEFAULT_SQL[kind], id, userId) ? id : null;
+}
+
+/**
+ * A space renamed (merged into another, when that name exists) or removed (to = ''): what was in it — accounts,
+ * calendars, address books, calendar sources, what the assistant knows for it, its defaults — moves along / becomes
+ * shared. Nothing is deleted.
+ */
+export function renameSpace(userId, from, to) {
+  from = cleanSpace(from); to = cleanSpace(to);
+  if (!from || from === to) return;
+  run('UPDATE accounts SET space = ? WHERE user_id = ? AND space = ?', to, userId, from);
+  for (const t of ['calendars', 'address_books']) {
+    // Removed: one that syncs from an account follows the account again; others become shared.
+    run(`UPDATE ${t} SET space = ${to ? '?' : "CASE WHEN account_id IS NULL THEN '' ELSE NULL END"} WHERE user_id = ? AND space = ?`, ...(to ? [to] : []), userId, from);
+  }
+  run('UPDATE calendar_sources SET space = ? WHERE user_id = ? AND space = ?', to, userId, from);
+  run('UPDATE facts SET owner = ? WHERE user_id = ? AND owner = ?', `s:${to}`, userId, `s:${from}`);
+  run('UPDATE memory SET owner = ? WHERE user_id = ? AND owner = ?', `s:${to}`, userId, `s:${from}`);
+  const s = json(get('SELECT settings_json FROM users WHERE id = ?', userId)?.settings_json, {});
+  if (s.defaults?.[from]) {
+    if (to && !s.defaults[to]) s.defaults[to] = s.defaults[from];
+    delete s.defaults[from];
+    run('UPDATE users SET settings_json = ? WHERE id = ?', JSON.stringify(s), userId);
+  }
 }
 
 /** Space of a memory/fact owner key, for display. */

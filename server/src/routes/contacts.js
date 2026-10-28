@@ -6,15 +6,26 @@ import { createContact, updateContact, deleteContact, importContacts } from '../
 import { parseVCards, toVCard } from '../contacts/vcard.js';
 import { notify } from '../util/events.js';
 import { serializeMessage } from '../mail/store.js';
-import { scope, reqSpace, spaceMap, inIds } from '../spaces.js';
+import { scope, reqSpace, spaceMap, inIds, spaceDefault } from '../spaces.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
 
   app.get('/api/address-books', async (req) => {
     const sc = scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
-    return all(`SELECT id, name, source, account_id AS accountId, readonly, space AS ownSpace FROM address_books WHERE user_id = ? AND ${inIds('id', sc?.bookIds)}`, req.user.id)
+    return all(`SELECT id, name, source, account_id AS accountId, readonly, is_default AS isDefault, space AS ownSpace FROM address_books WHERE user_id = ? AND ${inIds('id', sc?.bookIds)}`, req.user.id)
       .map((b) => ({ ...b, space: spaces.books.get(b.id) ?? '' }));
+  });
+
+  // Renamed, or made the default for new contacts.
+  app.patch('/api/address-books/:id', async (req, reply) => {
+    const b = get('SELECT * FROM address_books WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!b) return httpError(reply, 404, 'Not found');
+    const { name, isDefault } = req.body || {};
+    if (name !== undefined && String(name).trim()) run('UPDATE address_books SET name = ? WHERE id = ?', String(name).trim().slice(0, 80), b.id);
+    if (isDefault) { run('UPDATE address_books SET is_default = 0 WHERE user_id = ?', req.user.id); run('UPDATE address_books SET is_default = 1 WHERE id = ?', b.id); }
+    notify(req.user.id, 'contacts:changed', {});
+    return { ok: true };
   });
 
   app.get('/api/contacts', async (req) => {
@@ -63,13 +74,16 @@ export default async function contactRoutes(app) {
   app.post('/api/contacts', async (req, reply) => {
     const b = req.body || {};
     if (!b.displayName && !b.firstName && !b.lastName && !b.emails?.length) return httpError(reply, 400, 'Name or email required');
-    // Without an explicit address book, a contact created while a space is active goes into that space.
+    // Without an explicit address book: the default chosen for the space (Settings → Spaces); else, while a space is
+    // active, a book of that space; else the default address book.
+    if (!b.addressBookId) b.addressBookId = spaceDefault(req.user.id, reqSpace(req), 'bookId') || undefined;
     const sc = !b.addressBookId && scope(req.user.id, reqSpace(req));
     if (sc) {
       const spaces = spaceMap(req.user.id);
       const own = sc.bookIds.filter((id) => spaces.books.get(id) === sc.space);
       b.addressBookId = get(`SELECT id FROM address_books WHERE ${inIds('id', own.length ? own : sc.bookIds)} AND readonly = 0 ORDER BY source = 'local' DESC, id LIMIT 1`)?.id;
     }
+    if (!b.addressBookId) b.addressBookId = get('SELECT id FROM address_books WHERE user_id = ? AND is_default = 1 AND readonly = 0', req.user.id)?.id;
     const c = createContact(req.user.id, b);
     notify(req.user.id, 'contacts:changed', {});
     return serializeContact(c);

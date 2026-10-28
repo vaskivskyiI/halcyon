@@ -9,6 +9,8 @@ export const userAccount = (userId, id) => get('SELECT * FROM accounts WHERE id 
 export function serializeAccount(a) {
   return {
     id: a.id, kind: a.kind || 'mail', name: a.name, email: a.email, displayName: a.display_name, color: a.color,
+    // What this account is used for: mail, calendar (CalDAV), contacts (CardDAV) — each added and removed on its own.
+    services: { mail: a.mail !== 0, calendar: !!a.caldav_url, contacts: !!a.carddav_url },
     imap: { host: a.imap_host, port: a.imap_port, secure: !!a.imap_secure, user: a.imap_user },
     smtp: { host: a.smtp_host, port: a.smtp_port, secure: !!a.smtp_secure, user: a.smtp_user },
     authType: a.auth_type, signatureHtml: a.signature_html, syncEnabled: !!a.sync_enabled, syncState: a.sync_state,
@@ -44,7 +46,7 @@ export function accountFields(b) {
 }
 
 export const ACCOUNT_COLS = ['name', 'email', 'display_name', 'color', 'imap_host', 'imap_port', 'imap_secure', 'imap_user', 'imap_pass_enc', 'smtp_host', 'smtp_port',
-  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space', 'sync_history', 'invite_calendar_id', 'about_me', 'context_mode'];
+  'smtp_secure', 'smtp_user', 'smtp_pass_enc', 'signature_html', 'sync_enabled', 'caldav_url', 'carddav_url', 'dav_user', 'dav_pass_enc', 'aliases_json', 'sort_order', 'auth_type', 'oauth_enc', 'space', 'sync_history', 'invite_calendar_id', 'about_me', 'context_mode', 'mail'];
 
 export function createAccount(userId, b, extra = {}) {
   const n = all('SELECT id FROM accounts WHERE user_id = ?', userId).length;

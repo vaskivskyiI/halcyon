@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, RefreshCw, Trash2, Pencil, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Plus, RefreshCw, Trash2, Pencil, CheckCircle2, XCircle, AlertTriangle, Mail, Calendar as CalendarIcon, Users, X as XIcon } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
 import { loadAccounts, loadFolders } from '../data.js';
@@ -7,10 +7,40 @@ import { Modal, Spinner, Switch } from '../components/common.jsx';
 import { davFound } from '../components/Problems.jsx';
 import { toast, toastError, fmtListDate } from '../util.js';
 
+/**
+ * Signing in with Google / Microsoft in a pop-up: services = what to add (mail, calendar, contacts); accountId = add
+ * them to that account. The window reports back over a BroadcastChannel (its link to this window is cut by Google's
+ * pages), with postMessage and a storage event as fallbacks.
+ */
+export function oauthSignIn(provider, { services, accountId } = {}, onOk) {
+  const q = new URLSearchParams({ ...(accountId ? { accountId } : {}), ...(services?.length ? { services: services.join(',') } : {}) });
+  window.open(api.url(`/api/oauth/${provider}/start${q.toString() ? `?${q}` : ''}`), 'oauth', 'width=520,height=680');
+  let finished = false;
+  const bc = 'BroadcastChannel' in window ? new BroadcastChannel('halcyon-oauth') : null;
+  const finish = (m) => {
+    if (finished || m?.type !== 'halcyon-oauth') return;
+    finished = true;
+    bc?.close(); window.removeEventListener('message', onMsg); window.removeEventListener('storage', onStorage);
+    loadAccounts(); loadFolders();
+    if (m.ok) onOk?.();
+  };
+  const onMsg = (e) => { if (e.origin === location.origin) finish(e.data); };
+  const onStorage = (e) => { if (e.key === 'halcyon-oauth' && e.newValue) { try { finish(JSON.parse(e.newValue)); } catch { /* ignore */ } } };
+  if (bc) bc.onmessage = (e) => finish(e.data);
+  window.addEventListener('message', onMsg);
+  window.addEventListener('storage', onStorage);
+}
+
+const SERVICES = [['mail', Mail, 'Mail', 'IMAP / SMTP'], ['calendar', CalendarIcon, 'Calendar', 'CalDAV'], ['contacts', Users, 'Contacts', 'CardDAV']];
+const daveResult = (r) => { if (r?.dav?.error) toastError(new Error(r.dav.error)); else if (r?.dav?.pending) toast('Still syncing in the background…'); else if (r?.dav) toast(davFound(r.dav)); };
+
 export default function Accounts() {
   const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive'); // archives: Settings → Archives
   const user = store.use((s) => s.user);
+  const oauth = store.use((s) => s.oauth);
   const [editing, setEditing] = useState(null);
+  const [choose, setChoose] = useState(false);
+  const [dav, setDav] = useState(null); // { service, account? } — a calendar / contacts service to add or edit
   const [oauthSetup, setOauthSetup] = useState(null);
   const [status, setStatus] = useState({});
   const [tests, setTests] = useState({});
@@ -20,15 +50,35 @@ export default function Accounts() {
     setTests((t) => ({ ...t, [a.id]: { busy: true } }));
     try { const r = await api.post(`/api/accounts/${a.id}/test`); setTests((t) => ({ ...t, [a.id]: r })); loadStatus(); } catch (e) { setTests((t) => ({ ...t, [a.id]: { error: e.message } })); }
   };
+  // A service added to an account: Google signs in again for it (keeping what was granted); others ask for the address.
+  const addService = (a, service) => {
+    if (a.authType === 'oauth-google') return oauthSignIn('google', { services: [service], accountId: a.id }, () => toast(`${SERVICES.find(([k]) => k === service)[2]} added`));
+    if (service === 'mail') return setEditing({ addMailTo: a });
+    setDav({ service, account: a });
+  };
+  const removeService = async (a, service) => {
+    const what = { mail: `the mail of ${a.email}`, calendar: `the calendars of ${a.email}`, contacts: `the address books of ${a.email}` }[service];
+    const only = Object.entries(a.services || {}).filter(([, on]) => on).length === 1;
+    if (!confirm(`Remove ${what} from Halcyon?\n\nWhat Halcyon keeps of it is removed here${service === 'mail' ? ' (downloaded mail, its AI analysis)' : ''}; nothing is deleted on the server — you can add it again later.${only ? '\n\nIt is the last thing this account is used for, so the account is removed too.' : ''}`)) return;
+    try { await api.del(`/api/accounts/${a.id}/services/${service}`); toast('Removed'); loadAccounts(); loadFolders(); } catch (e) { toastError(e); }
+  };
   return (
     <div className="settings-section">
-      <div className="row"><div className="grow"><h2>Email accounts</h2><div className="muted">Connect any IMAP/SMTP mailbox — Gmail, Microsoft 365, iCloud, Fastmail, your company server, …</div></div>
-        <button className="btn primary" onClick={() => setEditing({})}><Plus size={15} /> Add account</button></div>
+      <div className="row"><div className="grow"><h2>Accounts</h2><div className="muted">Mail (IMAP/SMTP — Gmail, Microsoft 365, iCloud, Fastmail, your company server, …), calendars (CalDAV) and contacts (CardDAV) are added separately — from the same provider or from different ones — and each can be put in a space (Settings → Spaces).</div></div>
+        <button className="btn primary" onClick={() => setChoose(true)}><Plus size={15} /> Add account</button></div>
       {accounts.map((a) => (
         <div key={a.id} className="card item-card">
           <span className="status-dot" style={{ background: a.syncState === 'error' ? 'var(--danger)' : a.syncState === 'idle' ? 'var(--success)' : 'var(--warning)' }} />
           <div className="grow" style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>{a.displayName ? `${a.displayName} · ` : ''}{a.email}</div>
+            <div className="service-row">
+              {SERVICES.map(([k, Icon, label, proto]) => a.services?.[k]
+                ? <span key={k} className="chip service on" title={k === 'mail' ? `${a.imap.host}` : k === 'calendar' ? a.caldavUrl : a.carddavUrl}><Icon size={12} /> {label}
+                  {k !== 'mail' && a.authType !== 'oauth-google' && <button className="icon-btn" style={{ width: 18, height: 18 }} title={`Change the ${proto} address / login`} onClick={() => setDav({ service: k, account: a })}><Pencil size={11} /></button>}
+                  <button className="icon-btn" style={{ width: 18, height: 18 }} title={`Remove ${label.toLowerCase()} from this account`} onClick={() => removeService(a, k)}><XIcon size={11} /></button></span>
+                : <button key={k} className="chip service add" title={`Add ${label.toLowerCase()} (${proto}) to this account`} onClick={() => addService(a, k)}><Plus size={11} /> {label}</button>)}
+            </div>
+            {a.services?.mail !== false && <>
             <div className="small muted truncate">{a.imap.host} · {a.authType.startsWith('oauth') ? 'OAuth' : 'password'} · {a.syncState}{a.lastSyncAt ? ` · last sync ${fmtListDate(a.lastSyncAt)}` : ''}</div>
             {a.syncError && <div className="small error-text"><AlertTriangle size={12} /> {a.syncError}</div>}
             <AccountStatus st={status[a.id]} test={tests[a.id]} account={a} reload={loadStatus} />
@@ -40,17 +90,19 @@ export default function Accounts() {
               }}>
                 <option value="90">the last 90 days</option><option value="365">the last year</option><option value="all">all time</option>
               </select></label>
-            {(a.caldavUrl || a.carddavUrl) && <div className="small faint">{a.caldavUrl && 'CalDAV'}{a.caldavUrl && a.carddavUrl && ' + '}{a.carddavUrl && 'CardDAV'} sync enabled</div>}
+            </>}
           </div>
-          <button className="btn sm" title="Log in to the IMAP and SMTP servers with the stored settings (nothing is changed or sent)" onClick={() => test(a)} disabled={tests[a.id]?.busy}>{tests[a.id]?.busy ? <Spinner size={13} /> : <CheckCircle2 size={13} />} Test connection</button>
+          {a.services?.mail !== false && <button className="btn sm" title="Log in to the IMAP and SMTP servers with the stored settings (nothing is changed or sent)" onClick={() => test(a)} disabled={tests[a.id]?.busy}>{tests[a.id]?.busy ? <Spinner size={13} /> : <CheckCircle2 size={13} />} Test connection</button>}
           <button className="icon-btn" title="Reconnect and sync now" onClick={() => api.post(`/api/accounts/${a.id}/sync`).then(() => { toast('Reconnecting and syncing…'); setTimeout(loadStatus, 2000); })}><RefreshCw size={16} /></button>
-          <button className="icon-btn" title="Edit" onClick={() => setEditing(a)}><Pencil size={16} /></button>
-          <button className="icon-btn" title="Remove" onClick={async () => { if (confirm(`Remove ${a.email} from Halcyon? Mail stays on the server.`)) { await api.del(`/api/accounts/${a.id}`); loadAccounts(); loadFolders(); } }}><Trash2 size={16} /></button>
+          {a.services?.mail !== false && <button className="icon-btn" title="Edit" onClick={() => setEditing(a)}><Pencil size={16} /></button>}
+          <button className="icon-btn" title="Remove the account (mail, calendars and contacts stay on the server)" onClick={async () => { if (confirm(`Remove ${a.email} from Halcyon? Its mail, calendars and contacts stay on the server.`)) { await api.del(`/api/accounts/${a.id}`); loadAccounts(); loadFolders(); } }}><Trash2 size={16} /></button>
         </div>
       ))}
-      {!accounts.length && <div className="card empty">No accounts yet. Add your first mailbox to get started.</div>}
+      {!accounts.length && <div className="card empty">No accounts yet. Add your first mailbox, calendar or address book to get started.</div>}
       {user?.isAdmin && <OAuthStatus onSetup={setOauthSetup} />}
-      {editing && <AccountEditor account={editing.id ? editing : null} onClose={() => setEditing(null)} onSetupOAuth={(p) => { setEditing(null); setOauthSetup(p); }} />}
+      {choose && <AddChooser oauth={oauth} onClose={() => setChoose(false)} onPick={(k) => { setChoose(false); if (k === 'mail') setEditing({}); else if (k === 'google') setEditing({ google: true }); else setDav({ service: k }); }} />}
+      {dav && <DavService {...dav} onClose={() => setDav(null)} onDone={(r) => { daveResult(r); setDav(null); loadAccounts(); }} />}
+      {editing && <AccountEditor account={editing.id ? editing : null} startGoogle={!!editing.google} addMailTo={editing.addMailTo || null} onClose={() => setEditing(null)} onSetupOAuth={(p) => { setEditing(null); setOauthSetup(p); }} />}
       {oauthSetup && <OAuthSetup provider={oauthSetup} onClose={() => setOauthSetup(null)} />}
     </div>
   );
@@ -93,15 +145,60 @@ function AccountStatus({ st, test, account, reload }) {
   );
 }
 
-function AccountEditor({ account, onClose, onSetupOAuth }) {
+/** What to add: mail, a calendar, an address book, or (Google) any of them. */
+function AddChooser({ oauth, onPick, onClose }) {
+  return (
+    <Modal title="Add an account" onClose={onClose}>
+      <div className="provider-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <button className="provider" onClick={() => onPick('mail')}><b><Mail size={14} /> Mail</b><span>any IMAP/SMTP mailbox, Microsoft 365, Gmail with an app password</span></button>
+        <button className="provider" onClick={() => onPick('google')}><b>Google</b><span>choose mail, calendar and/or contacts{oauth?.google ? '' : ' (mail only until sign-in with Google is set up)'}</span></button>
+        <button className="provider" onClick={() => onPick('calendar')}><b><CalendarIcon size={14} /> Calendar</b><span>CalDAV — Nextcloud, iCloud, Fastmail, Radicale, your company server, …</span></button>
+        <button className="provider" onClick={() => onPick('contacts')}><b><Users size={14} /> Contacts</b><span>CardDAV — Nextcloud, iCloud, Fastmail, Radicale, …</span></button>
+      </div>
+      <div className="small faint">Each can be added to an account later too, or removed (Settings → Accounts), and put in a space.</div>
+    </Modal>
+  );
+}
+
+/** A calendar (CalDAV) or contacts (CardDAV) service: a new account, or added to / changed on an existing one. */
+function DavService({ service, account, onClose, onDone }) {
+  const cal = service === 'calendar';
+  const [f, setF] = useState({ url: (cal ? account?.caldavUrl : account?.carddavUrl) || '', davUser: account?.davUser || '', davPassword: '', name: '' });
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = account
+        ? await api.post(`/api/accounts/${account.id}/services/${service}`, { url: f.url.trim(), davUser: f.davUser.trim() || undefined, davPassword: f.davPassword || undefined })
+        : await api.post('/api/accounts', { services: [service], [cal ? 'caldavUrl' : 'carddavUrl']: f.url.trim(), davUser: f.davUser.trim(), davPassword: f.davPassword, name: f.name.trim() || undefined, email: f.name.trim() || undefined });
+      if (r?.dav?.error) { toastError(new Error(r.dav.error)); setBusy(false); if (!account) onDone(null); return; }
+      onDone(r);
+    } catch (e) { toastError(e); setBusy(false); }
+  };
+  return (
+    <Modal title={`${account ? (account.services?.[service] ? 'Change' : 'Add') : 'Add'} ${cal ? 'calendars (CalDAV)' : 'contacts (CardDAV)'}${account ? ` — ${account.email}` : ''}`} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !/^https?:\/\//.test(f.url.trim()) || (!account && !f.davUser.trim())} onClick={save}>{busy && <Spinner size={14} />} {account ? 'Save' : 'Add'}</button></>}>
+      <div className="form-grid">
+        <label className="field full">{cal ? 'CalDAV' : 'CardDAV'} address<input className="input" autoFocus placeholder="https://cloud.example.com/remote.php/dav" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
+        <label className="field">Username{account && <span className="faint"> (empty: {account.davUser || account.email})</span>}<input className="input" value={f.davUser} onChange={(e) => setF({ ...f, davUser: e.target.value })} autoComplete="username" /></label>
+        <label className="field">Password{account && <span className="faint"> (empty: keep)</span>}<input className="input" type="password" value={f.davPassword} onChange={(e) => setF({ ...f, davPassword: e.target.value })} autoComplete="new-password" /></label>
+        {!account && <label className="field full">Name <span className="faint">— optional, e.g. “Family calendar” (default: the username)</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>}
+      </div>
+      <div className="small faint">Nextcloud: https://your-cloud/remote.php/dav · iCloud: https://caldav.icloud.com (contacts: https://contacts.icloud.com) with an app-specific password · Fastmail: https://caldav.fastmail.com (contacts: https://carddav.fastmail.com). Halcyon looks for the calendars / address books there and says what it found.</div>
+    </Modal>
+  );
+}
+
+function AccountEditor({ account, startGoogle = false, addMailTo = null, onClose, onSetupOAuth }) {
   const oauth = store.use((s) => s.oauth);
-  const [step, setStep] = useState(account ? 'details' : 'email');
+  const [step, setStep] = useState(account ? 'details' : startGoogle ? 'google' : 'email');
+  const [gServices, setGServices] = useState({ mail: true, calendar: true, contacts: true });
   const [f, setF] = useState(() => account ? {
     email: account.email, displayName: account.displayName || '', name: account.name || '', signatureHtml: account.signatureHtml || '',
     imap: { ...account.imap, password: '' }, smtp: { ...account.smtp, password: '' }, caldavUrl: account.caldavUrl || '', carddavUrl: account.carddavUrl || '',
     davUser: account.davUser || '', davPassword: '', syncEnabled: account.syncEnabled, aliases: account.aliases || [], inviteCalendarId: account.inviteCalendarId || null,
     aboutMe: account.aboutMe || '', contextMode: account.contextMode || '',
-  } : { email: '', displayName: '', password: '', imap: { host: '', port: 993, secure: true, user: '' }, smtp: { host: '', port: 465, secure: true, user: '' }, caldavUrl: '', carddavUrl: '', signatureHtml: '' });
+  } : { email: addMailTo?.email || '', displayName: '', password: '', imap: { host: '', port: 993, secure: true, user: '' }, smtp: { host: '', port: 465, secure: true, user: '' }, signatureHtml: '' });
   const [disc, setDisc] = useState(null);
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState(null);
@@ -115,7 +212,7 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
       const d = await api.get(`/api/accounts/discover?email=${encodeURIComponent(f.email)}`);
       setDisc(d);
       if (d.oauth === 'google') { setStep('google'); return; }
-      setF((x) => ({ ...x, imap: { ...d.imap, user: f.email }, smtp: { ...d.smtp, user: f.email }, caldavUrl: d.caldav || '', carddavUrl: d.carddav || '' }));
+      setF((x) => ({ ...x, imap: { ...d.imap, user: f.email }, smtp: { ...d.smtp, user: f.email } }));
       setStep('password');
     } catch (e) { toastError(e); } finally { setBusy(false); }
   };
@@ -156,7 +253,14 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
     }
     setBusy(true);
     try {
-      const r = account ? await api.patch(`/api/accounts/${account.id}`, body()) : await api.post('/api/accounts', body());
+      // Mail added to a calendar / contacts account: the same account gets it.
+      if (addMailTo) {
+        await api.post(`/api/accounts/${addMailTo.id}/services/mail`, body());
+        toast('Mail added — syncing your mail…');
+        await loadAccounts(); loadFolders(); onClose();
+        return;
+      }
+      const r = account ? await api.patch(`/api/accounts/${account.id}`, body()) : await api.post('/api/accounts', { ...body(), services: ['mail'] });
       // Calendars / contacts: what the first sync found, or why it found nothing.
       if (r?.dav?.error) toastError(new Error(r.dav.error));
       else if (r?.dav?.pending) toast('Account updated — calendars and contacts are still being synced');
@@ -165,24 +269,11 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
     } catch (e) { toastError(e); } finally { setBusy(false); }
   };
 
+  // Google: only the services ticked are asked for (and added); Microsoft: mail.
   const startOAuth = (provider) => {
-    window.open(api.url(`/api/oauth/${provider}/start${account ? `?accountId=${account.id}` : ''}`), 'oauth', 'width=520,height=680');
-    // The sign-in window reports back over a BroadcastChannel (its link to this window is cut by Google's pages),
-    // with postMessage and a storage event as fallbacks.
-    let finished = false;
-    const bc = 'BroadcastChannel' in window ? new BroadcastChannel('halcyon-oauth') : null;
-    const finish = (m) => {
-      if (finished || m?.type !== 'halcyon-oauth') return;
-      finished = true;
-      bc?.close(); window.removeEventListener('message', onMsg); window.removeEventListener('storage', onStorage);
-      loadAccounts(); loadFolders();
-      if (m.ok) { toast('Account connected — syncing your mail…'); onClose(); }
-    };
-    const onMsg = (e) => { if (e.origin === location.origin) finish(e.data); };
-    const onStorage = (e) => { if (e.key === 'halcyon-oauth' && e.newValue) { try { finish(JSON.parse(e.newValue)); } catch { /* ignore */ } } };
-    if (bc) bc.onmessage = (e) => finish(e.data);
-    window.addEventListener('message', onMsg);
-    window.addEventListener('storage', onStorage);
+    const services = provider === 'google' ? Object.entries(gServices).filter(([, on]) => on).map(([k]) => k) : ['mail'];
+    if (!services.length) return toast('Choose what to add');
+    oauthSignIn(provider, { services, accountId: account?.id || addMailTo?.id }, () => { toast(services.includes('mail') ? 'Account connected — syncing your mail…' : 'Account connected'); onClose(); });
   };
 
 
@@ -213,8 +304,11 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
       </>}
       {step === 'google' && <>
         <div className="card google-step">
-          <h3 style={{ margin: '0 0 4px' }}>Sign in with Google <span className="faint small">— recommended: mail, calendar and contacts</span></h3>
-          {oauth.google ? <button className="btn primary" onClick={() => startOAuth('google')}>Sign in with Google</button>
+          <h3 style={{ margin: '0 0 4px' }}>Sign in with Google <span className="faint small">— recommended</span></h3>
+          {oauth.google && <div className="row" style={{ gap: 14, margin: '4px 0 8px', flexWrap: 'wrap' }}>
+            {SERVICES.map(([k, Icon, label]) => <label key={k} className="row small" style={{ gap: 6 }}><input type="checkbox" checked={gServices[k]} onChange={(e) => setGServices({ ...gServices, [k]: e.target.checked })} /><Icon size={13} /> {label}</label>)}
+          </div>}
+          {oauth.google ? <button className="btn primary" disabled={!Object.values(gServices).some(Boolean)} onClick={() => startOAuth('google')}>Sign in with Google</button>
             : <div className="small muted">Not set up on this server yet: it needs a (free) Google OAuth client, registered once.{' '}
               {store.get().user?.isAdmin ? <button className="link-btn" onClick={() => onSetupOAuth?.('google')}>Set it up now (about 5 minutes)</button> : 'Ask your administrator to set it up in Settings → Accounts.'}</div>}
         </div>
@@ -258,13 +352,6 @@ function AccountEditor({ account, onClose, onSetupOAuth }) {
           </div>
         ))}
         <TestResult />
-        <h3 style={{ margin: '6px 0' }}>Calendar & contacts sync (optional)</h3>
-        <div className="form-grid">
-          <label className="field full">CalDAV URL<input className="input" placeholder="https://cloud.example.com/remote.php/dav" value={f.caldavUrl} onChange={(e) => set('caldavUrl', e.target.value)} /></label>
-          <label className="field full">CardDAV URL<input className="input" placeholder="https://cloud.example.com/remote.php/dav" value={f.carddavUrl} onChange={(e) => set('carddavUrl', e.target.value)} /></label>
-          <label className="field">DAV username (default: email)<input className="input" value={f.davUser} onChange={(e) => set('davUser', e.target.value)} /></label>
-          <label className="field">DAV password (default: mail password)<input className="input" type="password" value={f.davPassword || ''} onChange={(e) => set('davPassword', e.target.value)} /></label>
-        </div>
         {account && <>
           <h3 style={{ margin: '6px 0' }}>Signature</h3>
           <div className="input editor" contentEditable suppressContentEditableWarning style={{ minHeight: 90, height: 'auto' }} dangerouslySetInnerHTML={{ __html: f.signatureHtml }} onBlur={(e) => set('signatureHtml', e.currentTarget.innerHTML)} />

@@ -65,9 +65,9 @@ export default function CalendarView() {
     : view === 'day' ? date.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
       : `${from.toLocaleDateString([], { day: 'numeric', month: 'short' })} – ${addDays(to, -1).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}`;
 
-  const newEvent = (start, allDay = false) => {
+  const newEvent = (start, allDay = false, end = null) => {
     const s = start || (() => { const d = new Date(); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0); return d.getTime(); })();
-    setEditing({ start: s, end: allDay ? s + 864e5 : s + (settings.calendar.defaultDurationMin || 30) * 60e3, allDay, reminders: [settings.calendar.defaultReminderMin ?? 15] });
+    setEditing({ start: s, end: end || (allDay ? s + 864e5 : s + (settings.calendar.defaultDurationMin || 30) * 60e3), allDay, reminders: [settings.calendar.defaultReminderMin ?? 15] });
   };
 
   // Time blocked in another space has no details here; everything else opens.
@@ -323,6 +323,7 @@ function layoutDay(evs) {
 function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu }) {
   const scroller = useRef();
   const [drag, setDrag] = useState(null);
+  const [pick, setPick] = useState(null); // a time range being selected with the mouse
   const [now, setNow] = useState(Date.now());
   const today = startOfDay(new Date()).getTime();
   const [ws] = (settings.calendar.workStart || '08:00').split(':').map(Number);
@@ -356,6 +357,25 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
     window.addEventListener('mousemove', onMoveMouse); window.addEventListener('mouseup', onUp);
   };
 
+  // Press on an empty slot and drag down (or up): the selected time (15-minute steps) opens as a new event on release.
+  const startPick = (e, dayStart) => {
+    if (e.button !== 0 || innerWidth < 860) return;
+    e.preventDefault();
+    const col = e.currentTarget.getBoundingClientRect();
+    const at = (y) => dayStart + Math.max(0, Math.min(96, Math.floor((y - col.top) / (HOUR_PX / 4)))) * 15 * 60e3;
+    const a = at(e.clientY);
+    setPick({ day: dayStart, a, b: a });
+    const onMoveMouse = (m) => setPick((p) => p && { ...p, b: at(m.clientY) });
+    const onUp = (m) => {
+      window.removeEventListener('mousemove', onMoveMouse); window.removeEventListener('mouseup', onUp);
+      const b = at(m.clientY);
+      setPick(null);
+      // A plain click selects nothing (double-click still makes a default-length event there).
+      if (b !== a) onNew(Math.min(a, b), false, Math.max(a, b) + 15 * 60e3);
+    };
+    window.addEventListener('mousemove', onMoveMouse); window.addEventListener('mouseup', onUp);
+  };
+
   return (
     <div className="week">
       <div className="week-head" style={{ gridTemplateColumns: cols }}>
@@ -378,7 +398,9 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
             const s = d.getTime(), e = s + 864e5;
             const dayEvs = timed.map((x) => (drag?.id === x.instanceId ? { ...x, ...drag } : x)).filter((x) => x.start < e && x.end > s);
             return (
-              <div key={i} className="day-col">
+              <div key={i} className="day-col" onMouseDown={(m) => m.target.classList.contains('slot') && startPick(m, s)}>
+                {pick?.day === s && <div className="pick" style={{ top: ((Math.min(pick.a, pick.b) - s) / 3600e3) * HOUR_PX, height: ((Math.abs(pick.b - pick.a) + 15 * 60e3) / 3600e3) * HOUR_PX }}>
+                  {fmtTime(Math.min(pick.a, pick.b))}–{fmtTime(Math.max(pick.a, pick.b) + 15 * 60e3)}</div>}
                 {[...Array(48)].map((_, k) => <div key={k} className={`slot ${k / 2 < ws || k / 2 >= we || [0, 6].includes(d.getDay()) ? 'off' : ''}`} onDoubleClick={() => onNew(s + k * 30 * 60e3)} onClick={(ev) => ev.detail === 1 && innerWidth < 860 && onNew(s + k * 30 * 60e3)} />)}
                 {layoutDay(dayEvs).map(({ ev, col, cols: n }) => {
                   const top = ((Math.max(ev.start, s) - s) / 3600e3) * HOUR_PX;
@@ -453,7 +475,10 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   const set = (k, v) => setEv((e) => ({ ...e, [k]: v }));
   const space = store.get().space;
   // New events in a space go to a writable calendar of that space before falling back to the shared default.
-  const cal = calendars.find((c) => c.id === ev.calendarId) || (space && calendars.find((c) => c.space === space && !c.readonly && c.enabled)) || calendars.find((c) => c.isDefault) || calendars[0];
+  // The default chosen for the space (Settings → Spaces), else one of the space, else the default calendar.
+  const spaceDef = store.get().settings?.defaults?.[space || '']?.calendarId;
+  const cal = calendars.find((c) => c.id === ev.calendarId) || calendars.find((c) => c.id === spaceDef && !c.readonly)
+    || (space && calendars.find((c) => c.space === space && !c.readonly && c.enabled)) || calendars.find((c) => c.isDefault) || calendars[0];
   const readonly = cal?.readonly;
   // Events of read-only, "for information" or shared calendars can be added to one's own calendar (a linked copy).
   const canLink = isExisting && !initial.linkedFrom && (readonly || initial.showAs === 'info' || cal?.showAs === 'info' || !!store.get().acting);

@@ -6,7 +6,8 @@ import { discover } from '../mail/autoconfig.js';
 import { testAccount } from '../mail/connection.js';
 import { syncManager } from '../mail/sync.js';
 import { encrypt, randomToken } from '../util/crypto.js';
-import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient } from '../mail/oauth.js';
+import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient, providerServices } from '../mail/oauth.js';
+import { notify } from '../util/events.js';
 import { syncDav, davStatus } from '../scheduler.js';
 import { getSettings } from '../settings.js';
 import { sharedOf } from '../shared.js';
@@ -148,14 +149,85 @@ export default async function accountRoutes(app) {
     return { ...r, at: Date.now() };
   });
 
+  // services: what the account is for — ['mail'] (default; IMAP/SMTP), ['calendar'] (CalDAV), ['contacts'] (CardDAV),
+  // or several. A calendar / contacts account is waited for once, so the user sees what was found or why not.
   app.post('/api/accounts', { preHandler: requireUser }, async (req, reply) => {
     const b = req.body || {};
-    if (!b.email || !b.imap?.host || !b.smtp?.host) return httpError(reply, 400, 'Email, IMAP and SMTP settings are required');
-    if (all('SELECT id FROM accounts WHERE user_id = ? AND lower(email) = lower(?)', req.user.id, b.email).length) return httpError(reply, 400, 'This account already exists');
-    const a = createAccount(req.user.id, b);
-    syncManager.start(a.id);
-    if (a.caldav_url || a.carddav_url) syncDav(a);
-    return serializeAccount(a);
+    const services = Array.isArray(b.services) && b.services.length ? b.services : ['mail', ...(b.caldavUrl ? ['calendar'] : []), ...(b.carddavUrl ? ['contacts'] : [])];
+    const mail = services.includes('mail');
+    if (mail && (!b.email || !b.imap?.host || !b.smtp?.host)) return httpError(reply, 400, 'Email, IMAP and SMTP settings are required');
+    if (services.includes('calendar') && !b.caldavUrl) return httpError(reply, 400, 'Enter the CalDAV address');
+    if (services.includes('contacts') && !b.carddavUrl) return httpError(reply, 400, 'Enter the CardDAV address');
+    if (!mail && !services.includes('calendar') && !services.includes('contacts')) return httpError(reply, 400, 'Choose what to add');
+    // A calendar / contacts account is named by its login (or server) when it has no email address.
+    const email = String(b.email || b.davUser || (() => { try { return new URL(b.caldavUrl || b.carddavUrl).host; } catch { return 'Calendar'; } })()).trim();
+    if (mail && all('SELECT id FROM accounts WHERE user_id = ? AND lower(email) = lower(?) AND mail != 0', req.user.id, email).length) return httpError(reply, 400, 'This account already exists');
+    const a = createAccount(req.user.id, {
+      ...b, email, caldavUrl: services.includes('calendar') ? b.caldavUrl : undefined, carddavUrl: services.includes('contacts') ? b.carddavUrl : undefined,
+    }, mail ? {} : { mail: 0, sync_enabled: 0 });
+    if (mail) syncManager.start(a.id);
+    let dav = null;
+    if (a.caldav_url || a.carddav_url) dav = mail ? (syncDav(a), null) : await Promise.race([syncDav(a), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+    return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };
+  });
+
+  // One service added to an account later: calendar / contacts ({ url, davUser?, davPassword? } — for a Google
+  // account signed in with OAuth the address is Google's), or mail ({ imap, smtp } with passwords).
+  app.post('/api/accounts/:id/services/:service', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    if (!a || a.kind === 'archive') return httpError(reply, 404, 'Not found');
+    const b = req.body || {};
+    const google = a.auth_type === 'oauth-google';
+    const { service } = req.params;
+    if (service === 'calendar' || service === 'contacts') {
+      const url = String(b.url || (google ? PROVIDERS.google[service === 'calendar' ? 'caldav' : 'carddav'] : '')).trim();
+      if (!/^https?:\/\//.test(url)) return httpError(reply, 400, `Enter the ${service === 'calendar' ? 'CalDAV' : 'CardDAV'} address`);
+      update('accounts', a.id, accountFields({ [service === 'calendar' ? 'caldavUrl' : 'carddavUrl']: url, davUser: b.davUser, davPassword: b.davPassword }), ACCOUNT_COLS);
+      const fresh = userAccount(req.user.id, a.id);
+      const dav = await Promise.race([syncDav(fresh), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+      return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };
+    }
+    if (service === 'mail') {
+      if (!google && (!b.imap?.host || !b.smtp?.host)) return httpError(reply, 400, 'IMAP and SMTP settings are required');
+      update('accounts', a.id, { ...accountFields(google ? { imap: { ...PROVIDERS.google.imap, user: a.email }, smtp: { ...PROVIDERS.google.smtp, user: a.email } } : b), mail: 1, sync_enabled: 1 }, [...ACCOUNT_COLS, 'mail']);
+      await syncManager.restart(a.id);
+      notify(req.user.id, 'folders:changed', {});
+      return serializeAccount(userAccount(req.user.id, a.id));
+    }
+    return httpError(reply, 400, 'Unknown service');
+  });
+
+  // One service removed: what Halcyon keeps of it is deleted here — never anything on the server (the calendars,
+  // contacts and mail stay there and can be added again). An account with nothing left is removed.
+  app.delete('/api/accounts/:id/services/:service', { preHandler: requireUser }, async (req, reply) => {
+    const a = userAccount(req.user.id, req.params.id);
+    if (!a || a.kind === 'archive') return httpError(reply, 404, 'Not found');
+    const { service } = req.params;
+    if (service === 'calendar') {
+      run("DELETE FROM calendars WHERE account_id = ? AND source = 'caldav'", a.id);
+      run('UPDATE accounts SET caldav_url = NULL WHERE id = ?', a.id);
+      notify(req.user.id, 'calendar:changed', {});
+    } else if (service === 'contacts') {
+      run("DELETE FROM address_books WHERE account_id = ? AND source = 'carddav'", a.id);
+      run('UPDATE accounts SET carddav_url = NULL WHERE id = ?', a.id);
+      notify(req.user.id, 'contacts:changed', {});
+    } else if (service === 'mail') {
+      await syncManager.stop(a.id);
+      run('DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE account_id = ?)', a.id);
+      run('DELETE FROM folders WHERE account_id = ?', a.id);
+      run('DELETE FROM pending_ops WHERE account_id = ?', a.id);
+      run("DELETE FROM memory WHERE user_id = ? AND owner = ? AND kind = 'message'", req.user.id, `a:${a.id}`);
+      run('UPDATE accounts SET mail = 0, sync_enabled = 0 WHERE id = ?', a.id);
+      notify(req.user.id, 'folders:changed', {});
+    } else return httpError(reply, 400, 'Unknown service');
+    davStatus.delete(a.id);
+    const left = userAccount(req.user.id, a.id);
+    if (left.mail === 0 && !left.caldav_url && !left.carddav_url) {
+      run('DELETE FROM accounts WHERE id = ?', a.id);
+      invalidate(req.user.id);
+      return { removed: true };
+    }
+    return serializeAccount(left);
   });
 
   app.patch('/api/accounts/:id', { preHandler: requireUser }, async (req, reply) => {
@@ -226,8 +298,10 @@ export default async function accountRoutes(app) {
     const provider = req.params.provider;
     if (!PROVIDERS[provider] || !oauthAvailable()[provider]) return httpError(reply, 400, `${provider} OAuth is not configured on this server`);
     const state = randomToken(16);
-    pendingOAuth.set(state, { userId: req.user.id, provider, accountId: req.query.accountId ? Number(req.query.accountId) : null, t: Date.now() });
-    return reply.redirect(authorizeUrl(provider, state, redirectUri(req)));
+    // ?services=mail,calendar,contacts — what to add (an existing account keeps what it has).
+    const services = providerServices(provider, String(req.query.services || '').split(',').filter(Boolean));
+    pendingOAuth.set(state, { userId: req.user.id, provider, accountId: req.query.accountId ? Number(req.query.accountId) : null, services, t: Date.now() });
+    return reply.redirect(authorizeUrl(provider, state, redirectUri(req), services));
   });
 
   app.get('/api/oauth/callback', async (req, reply) => {
@@ -250,19 +324,26 @@ setTimeout(() => { window.close(); setTimeout(() => { document.getElementById('c
     try {
       const { email, name, tokens } = await exchangeCode(p.provider, code, redirectUri(req));
       const prov = PROVIDERS[p.provider];
+      const want = new Set(p.services || providerServices(p.provider));
       const fields = { auth_type: `oauth-${p.provider}`, oauth_enc: encrypt(JSON.stringify(tokens)) };
-      let account = p.accountId ? userAccount(p.userId, p.accountId) : get('SELECT * FROM accounts WHERE user_id = ? AND lower(email) = lower(?)', p.userId, email);
+      let account = p.accountId ? userAccount(p.userId, p.accountId) : get("SELECT * FROM accounts WHERE user_id = ? AND lower(email) = lower(?) AND COALESCE(kind, 'mail') != 'archive'", p.userId, email);
+      // Only the services chosen are added; an existing account keeps the ones it has.
+      const add = {
+        ...(want.has('mail') ? { mail: 1, sync_enabled: 1 } : {}),
+        ...(want.has('calendar') && prov.caldav ? { caldav_url: prov.caldav } : {}),
+        ...(want.has('contacts') && prov.carddav ? { carddav_url: prov.carddav } : {}),
+      };
       if (account) {
-        update('accounts', account.id, fields, ACCOUNT_COLS);
-        await syncManager.restart(account.id);
+        update('accounts', account.id, { ...fields, ...add }, [...ACCOUNT_COLS, 'mail']);
+        if (userAccount(p.userId, account.id).mail !== 0) await syncManager.restart(account.id);
       } else {
         account = createAccount(p.userId, {
           email, name: email, displayName: name || '', imap: { ...prov.imap, user: email }, smtp: { ...prov.smtp, user: email },
-          caldavUrl: prov.caldav || undefined, carddavUrl: prov.carddav || undefined,
-        }, fields);
-        syncManager.start(account.id);
-        if (prov.caldav || prov.carddav) syncDav(userAccount(p.userId, account.id));
+        }, { ...fields, ...add, ...(want.has('mail') ? {} : { mail: 0, sync_enabled: 0 }) });
+        if (want.has('mail')) syncManager.start(account.id);
       }
+      const fresh = userAccount(p.userId, account.id);
+      if ((want.has('calendar') || want.has('contacts')) && (fresh.caldav_url || fresh.carddav_url)) syncDav(fresh);
       return done(`Connected ${String(email).replace(/[<>]/g, '')}.`, true);
     } catch (e) {
       return done(`Sign-in failed: ${String(e.message).replace(/[<>]/g, '')}`);

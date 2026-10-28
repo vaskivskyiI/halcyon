@@ -142,13 +142,17 @@ const LANGS = ['English', 'Slovenian', 'German', 'French', 'Spanish', 'Italian',
 
 /** A compose window in the dock, or (inline) a draft shown as an editor inside its conversation; onDone after it is sent or deleted. */
 export function Composer({ id, init, minimized, inline = false, onDone }) {
-  const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive'); // archives cannot send
+  // Archives and calendar / contacts-only accounts cannot send.
+  const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive' && a.services?.mail !== false);
   const settings = store.use((s) => s.settings);
   const space = store.get().space;
   const inSpace = accounts.filter((a) => !space || !a.space || a.space === space);
   // New mail goes out from the account of the message or folder in focus (store.focusAccountId), else the default.
   const focus = store.get().focusAccountId;
+  // The default chosen for the space (Settings → Spaces), else the general default, else the first of the space.
+  const spaceDef = settings.defaults?.[space || '']?.accountId;
   const [accountId, setAccountId] = useState(init.accountId || (accounts.some((a) => a.id === focus) ? focus : null)
+    || (accounts.some((a) => a.id === spaceDef) ? spaceDef : null)
     || (inSpace.some((a) => a.id === settings.mail.defaultAccountId) ? settings.mail.defaultAccountId : inSpace[0]?.id) || accounts[0]?.id);
   const account = accounts.find((a) => a.id === Number(accountId)) || accounts[0];
   const [fromAddress, setFromAddress] = useState(init.from?.address || '');

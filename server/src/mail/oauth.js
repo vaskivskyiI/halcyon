@@ -22,8 +22,10 @@ export const PROVIDERS = {
   google: {
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
-    scope: 'https://mail.google.com/ https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/carddav openid email profile',
-    extra: { access_type: 'offline', prompt: 'consent' },
+    // Only what the user chose to add is asked for; earlier grants are kept (include_granted_scopes).
+    scopes: { mail: 'https://mail.google.com/', calendar: 'https://www.googleapis.com/auth/calendar', contacts: 'https://www.googleapis.com/auth/carddav' },
+    scope: 'openid email profile',
+    extra: { access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true' },
     imap: { host: 'imap.gmail.com', port: 993, secure: true },
     smtp: { host: 'smtp.gmail.com', port: 465, secure: true },
     caldav: 'https://apidata.googleusercontent.com/caldav/v2/',
@@ -32,7 +34,8 @@ export const PROVIDERS = {
   microsoft: {
     get authUrl() { return `https://login.microsoftonline.com/${oauthClient('microsoft').tenant}/oauth2/v2.0/authorize`; },
     get tokenUrl() { return `https://login.microsoftonline.com/${oauthClient('microsoft').tenant}/oauth2/v2.0/token`; },
-    scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email profile',
+    scopes: { mail: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send' },
+    scope: 'offline_access openid email profile',
     extra: { prompt: 'select_account' },
     imap: { host: 'outlook.office365.com', port: 993, secure: true },
     smtp: { host: 'smtp.office365.com', port: 587, secure: false },
@@ -52,9 +55,17 @@ export function redirectUri(req) {
   return `${base}/api/oauth/callback`;
 }
 
-export function authorizeUrl(provider, state, redirect) {
+/** services: which of mail / calendar / contacts the sign-in is for (those the provider offers). */
+export const providerServices = (provider, services) => {
+  const offered = Object.keys(PROVIDERS[provider].scopes);
+  const want = (services?.length ? services : offered).filter((s) => offered.includes(s));
+  return want.length ? want : offered;
+};
+
+export function authorizeUrl(provider, state, redirect, services) {
   const p = PROVIDERS[provider];
-  const q = new URLSearchParams({ client_id: oauthClient(provider).clientId, redirect_uri: redirect, response_type: 'code', scope: p.scope, state, ...p.extra });
+  const scope = [...providerServices(provider, services).map((s) => p.scopes[s]), p.scope].join(' ');
+  const q = new URLSearchParams({ client_id: oauthClient(provider).clientId, redirect_uri: redirect, response_type: 'code', scope, state, ...p.extra });
   return `${p.authUrl}?${q}`;
 }
 

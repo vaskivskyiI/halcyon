@@ -100,7 +100,7 @@ export default async function mailRoutes(app) {
   bus.on('user-event', dropViews);
   app.addHook('onClose', async () => bus.off('user-event', dropViews));
   function folderList(uid, sc) {
-    const accounts = userAccounts(uid).filter((a) => !sc || sc.accountIds.includes(a.id));
+    const accounts = userAccounts(uid).filter((a) => a.mail !== 0 && (!sc || sc.accountIds.includes(a.id)));
     const acc = inIds('m.account_id', sc?.accountIds);
     const out = accounts.map((a) => ({
       accountId: a.id, kind: a.kind || 'mail', email: a.email, name: a.name || a.email, color: a.color, syncState: a.sync_state, syncError: a.sync_error,

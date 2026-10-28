@@ -596,3 +596,22 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   address with an empty list); saving an account waits for it (≤30 s) and says the result; failures stay in the
   problems panel (`dav:<accountId>`, "Try again" = `POST /api/accounts/:id/sync?dav=1`). Before, every DAV failure
   was only logged.
+
+### Separate services per account, spaces managed, calendar selection (migration 33)
+- `accounts.mail` (1/0): mail is one service of an account, next to calendar (`caldav_url`) and contacts
+  (`carddav_url`). mail = 0: never synced (`noMail` in sync.js: no worker, ops dropped), not in /api/folders, not a
+  sender (send.js, composer). `serializeAccount().services = { mail, calendar, contacts }`.
+- `POST /api/accounts { services: ['mail'|'calendar'|'contacts'…] }` (a calendar / contacts account is named by its
+  login and waited for once); `POST /api/accounts/:id/services/:service` adds one (Google: its own addresses);
+  `DELETE …/services/:service` removes what Halcyon keeps of it (calendars / books / downloaded mail + memory), never
+  anything on the server; the last one removed removes the account.
+- OAuth: `?services=` on /api/oauth/:provider/start → scopes only for those (Google `include_granted_scopes`, so adding
+  one later keeps the others); the callback adds just those services (existing account: merged).
+- Settings → Accounts: service chips (add / change / remove), "Add account" chooser (Mail, Google with checkboxes,
+  Calendar, Contacts); the mail editor no longer has DAV fields.
+- Spaces: `POST /api/spaces/rename { from, to }` (to '' = remove → shared; to an existing name = merge; facts, memory,
+  calendar sources and defaults follow). `settings.defaults[space]` = { accountId, calendarId, bookId } used by the
+  composer, the event editor and POST /api/contacts (`spaceDefault`). /api/spaces gives each calendar / book an
+  `origin` ("x@y · synced", "host · read-only", "Kept in Halcyon"); address books renamed / default
+  (`PATCH /api/address-books/:id`, `address_books.is_default`).
+- Calendar: press and drag over empty slots (15-minute steps) → new event for that range (desktop widths).

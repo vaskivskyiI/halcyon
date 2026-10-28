@@ -492,7 +492,7 @@ class SyncManager {
 
   start(accountId) {
     if (this.workers.has(accountId)) return this.workers.get(accountId);
-    if (isArchive(accountId)) return null; // an archive is on no mail server
+    if (noMail(accountId)) return null; // an archive, or an account used for calendar / contacts only
     const w = new AccountSync(accountId);
     this.workers.set(accountId, w);
     w.start().finally(() => { if (this.workers.get(accountId) === w) this.workers.delete(accountId); });
@@ -533,10 +533,11 @@ export const syncManager = new SyncManager();
 export const runningOps = new Set();
 
 // Archives are on no mail server: what is done to them is done locally only (and is already done when this is called).
-const isArchive = (accountId) => get('SELECT kind FROM accounts WHERE id = ?', accountId)?.kind === 'archive';
+// Accounts without the mail service have no mailbox to sync either.
+const noMail = (accountId) => { const a = get('SELECT kind, mail FROM accounts WHERE id = ?', accountId); return a?.kind === 'archive' || a?.mail === 0; };
 
 export function queueOp(accountId, op, payload) {
-  if (isArchive(accountId)) return;
+  if (noMail(accountId)) return;
   run('INSERT INTO pending_ops (account_id, op, payload_json, created_at) VALUES (?, ?, ?, ?)', accountId, op, JSON.stringify(payload), now());
   syncManager.trigger(accountId);
 }

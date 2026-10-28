@@ -403,4 +403,10 @@ export const migrations = [
     created_at INTEGER, finished_at INTEGER
   );
   `,
+  // 33: an account's services are separate — mail (IMAP/SMTP) is one of them (a calendar-only or contacts-only
+  // account has mail = 0); a default address book.
+  `
+  ALTER TABLE accounts ADD COLUMN mail INTEGER DEFAULT 1;
+  ALTER TABLE address_books ADD COLUMN is_default INTEGER DEFAULT 0;
+  `,
 ];
