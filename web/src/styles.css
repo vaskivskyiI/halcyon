@@ -489,3 +489,10 @@ div.provider { cursor: default; background: var(--panel-2); }
 .upload-progress { display: grid; gap: 6px; }
 .upload-progress .bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
 .upload-progress .bar span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+/* Suggested events in the AI card: never wider than the card (phones) — the title is shortened, the time stays */
+.btn.suggest-event { max-width: 100%; min-width: 0; }
+.btn.suggest-event .truncate { min-width: 0; }
+.btn.suggest-event .when { flex: none; }
+/* Nothing in the AI card is wider than the card: long suggested replies wrap onto two lines */
+.ai-card .btn { max-width: 100%; }
+.ai-card .replies .btn { white-space: normal; text-align: left; height: auto; min-height: 28px; padding-top: 4px; padding-bottom: 4px; line-height: 1.3; }

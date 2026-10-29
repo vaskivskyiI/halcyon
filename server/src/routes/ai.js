@@ -121,21 +121,36 @@ export default async function aiRoutes(app) {
   // Analyse older mail (builds summaries, facts and topics for the AI memory) or re-analyse it.
   // days: number or 'all'; mode: 'missing' (only mail without analysis) | 'all' (re-analyse everything in the range).
   // Older mail gets lower priority than new mail, which keeps being analysed first.
-  app.post('/api/ai/reprocess', async (req) => {
-    // quiet: old mail was most likely handled — analyse it for memory/search without creating "needs reply" etc.
-    const { what = 'analyze', days = 14, mode = 'all', quiet = false } = req.body || {};
+  // folderId / accountId: only that folder / mailbox or archive (any folder but Trash and Junk, whatever the analysed
+  // folders setting) — started by hand from a folder's or an archive's menu. count: only say how many would be queued.
+  // Mail older than the open-items window is analysed quietly (summaries, facts, search — no "needs reply" for mail
+  // that was handled long ago), unless quiet is given explicitly.
+  app.post('/api/ai/reprocess', async (req, reply) => {
+    const { what = 'analyze', days = 14, mode = 'all', quiet, folderId, accountId, count = false } = req.body || {};
     const since = days === 'all' ? 0 : now() - Number(days) * 864e5;
     const sc = scope(req.user.id, reqSpace(req));
-    const folders = what === 'analyze'
-      ? (getSettings(req.user.id).ai.analyzeFolders === 'all' ? "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')" : "f.special_use IN ('\\Inbox', '\\Sent')")
-      : "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')";
-    const missing = what === 'analyze' && mode === 'missing' ? 'AND NOT EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id)' : '';
-    const rows = all(`SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id
-      WHERE m.user_id = ? AND m.date >= ? AND ${inIds('m.account_id', sc?.accountIds)} AND ${folders} ${missing} ORDER BY m.date DESC`, req.user.id, since);
-    if (what === 'embed') { run('DELETE FROM memory WHERE user_id = ? AND kind = ?', req.user.id, 'message'); invalidate(req.user.id); }
+    const where = ['m.user_id = ?', 'm.date >= ?'], params = [req.user.id, since];
+    if (folderId || accountId) {
+      const own = folderId
+        ? get('SELECT f.id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.user_id = ?', Number(folderId), req.user.id)
+        : get('SELECT id FROM accounts WHERE id = ? AND user_id = ?', Number(accountId), req.user.id);
+      if (!own) return httpError(reply, 404, 'Not found');
+      where.push(folderId ? 'm.folder_id = ?' : 'm.account_id = ?', "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')");
+      params.push(Number(folderId || accountId));
+    } else {
+      where.push(inIds('m.account_id', sc?.accountIds), what === 'analyze'
+        ? (getSettings(req.user.id).ai.analyzeFolders === 'all' ? "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')" : "f.special_use IN ('\\Inbox', '\\Sent')")
+        : "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')");
+    }
+    if (what === 'analyze' && mode === 'missing') where.push('NOT EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id)');
+    const rows = all(`SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id WHERE ${where.join(' AND ')} ORDER BY m.date DESC`, ...params);
+    if (count) return { count: rows.length };
+    if (what === 'embed' && !folderId && !accountId) { run('DELETE FROM memory WHERE user_id = ? AND kind = ?', req.user.id, 'message'); invalidate(req.user.id); }
+    const window = Math.max(1, Number(getSettings(req.user.id).ai.openItemsDays) || 14);
     for (const m of rows) {
       const ageDays = (now() - m.date) / 864e5;
-      enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : ageDays > 30 ? 3 : Math.max(10, 80 - Math.round(ageDays)), { force: true, options: quiet ? { quiet: true } : null });
+      const hush = quiet ?? ageDays > window;
+      enqueue(req.user.id, what === 'embed' ? 'embed' : 'analyze', m.id, what === 'embed' ? 5 : ageDays > 30 ? 3 : Math.max(10, 80 - Math.round(ageDays)), { force: true, options: hush ? { quiet: true } : null });
     }
     return { queued: rows.length };
   });

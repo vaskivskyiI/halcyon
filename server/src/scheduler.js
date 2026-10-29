@@ -19,6 +19,7 @@ import { markRepliedHistory } from './ai/open-items.js';
 import { syncLinked } from './calendar/linked.js';
 import { cleanUploads } from './mail/uploads.js';
 import { notifyUser } from './notifications.js';
+import { autoRetry } from './mail/retry.js';
 
 const log = logger('scheduler');
 const davBusy = new Map();
@@ -156,6 +157,8 @@ export function startScheduler() {
   setTimeout(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 60e3).unref();
   setInterval(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
+  // Failed server changes, unreachable sends, unsaved sent copies, SMTP warnings: tried again by themselves (mail/retry.js).
+  setInterval(() => autoRetry().catch((e) => log.error(e)), 5 * 60e3).unref();
   // Clean up old reminder markers.
   setInterval(() => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000), 3600e3).unref();
 }

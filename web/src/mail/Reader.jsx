@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -220,14 +220,26 @@ export default function Reader({ id, view }) {
     } catch (e) { toastError(e); }
   };
 
+  // An event made from an email goes to the calendar of the email's space (its account's), not the general default.
+  const calendarFor = () => api.get(`/api/messages/${latest.id}/targets`).then((t) => t.calendarId).catch(() => null);
   const addEvent = async (ev) => {
     if (ev) {
       const start = Date.parse(ev.start);
-      setEventDraft({ title: ev.title, start, end: Date.parse(ev.end) || start + 3600e3, allDay: !!ev.all_day, location: ev.location || '', description: `From email: ${target.subject}`, sourceMessageId: latest.id });
+      const calendarId = await calendarFor();
+      setEventDraft({ title: ev.title, start, end: Date.parse(ev.end) || start + 3600e3, allDay: !!ev.all_day, location: ev.location || '', description: `From email: ${target.subject}`, sourceMessageId: latest.id, ...(calendarId ? { calendarId } : {}) });
       return;
     }
     setAiWorking(true);
-    try { setEventDraft(await api.post('/api/ai/extract-event', { messageId: latest.id })); } catch (e) { toastError(e); } finally { setAiWorking(false); }
+    try {
+      const [draft, calendarId] = await Promise.all([api.post('/api/ai/extract-event', { messageId: latest.id }), calendarFor()]);
+      setEventDraft({ ...draft, ...(calendarId && !draft.calendarId ? { calendarId } : {}) });
+    } catch (e) { toastError(e); } finally { setAiWorking(false); }
+  };
+  const saveSender = async () => {
+    try {
+      const r = await api.post(`/api/messages/${latest.id}/save-sender`, {});
+      toast(r.existed ? `${r.contact.displayName} is already in your contacts` : `${r.contact.displayName} saved to “${r.book}”`, { action: { label: 'Open', onClick: () => navigate(`#/contacts/${r.contact.id}`) } });
+    } catch (e) { toastError(e); }
   };
 
   const createTasks = async (items) => {
@@ -254,6 +266,7 @@ export default function Reader({ id, view }) {
   const moreMenu = (e) => openMenu(e, [
     { label: 'Create event with AI', icon: CalendarPlus, onClick: () => addEvent() },
     { label: 'Create task', icon: CheckSquare, onClick: () => createTasks() },
+    { label: 'Save sender to contacts', icon: UserPlus, onClick: saveSender },
     { label: 'Translate', icon: Languages, onClick: () => translate(latest) },
     target.listUnsubscribe && { label: 'Unsubscribe', icon: BellOff, onClick: unsubscribe },
     'sep',
@@ -531,7 +544,7 @@ function FollowUp({ ins, related, onTask, onTasks, onEvent }) {
       )}
       {suggested.length > 0 && (
         <div className="row" style={{ marginTop: 6, flexWrap: 'wrap' }}>
-          {suggested.map((e, i) => <button key={i} className="btn sm" onClick={() => onEvent(e)} title={e.read ? `Read from the email as ${e.read.date}${e.read.time ? ` ${e.read.time}` : ''} (${e.read.tz})` : undefined}><CalendarPlus size={13} /> {e.title} · {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</button>)}
+          {suggested.map((e, i) => <button key={i} className="btn sm suggest-event" onClick={() => onEvent(e)} title={`${e.title}${e.read ? ` — read from the email as ${e.read.date}${e.read.time ? ` ${e.read.time}` : ''} (${e.read.tz})` : ''}`}><CalendarPlus size={13} /><span className="truncate">{e.title}</span><span className="when">· {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></button>)}
         </div>
       )}
     </div>

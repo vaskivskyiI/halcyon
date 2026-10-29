@@ -94,12 +94,14 @@ export function addressBookForAccount(userId, accountId) {
   if (space) {
     const m = spaceMap(userId);
     const ids = [...m.books].filter(([, s]) => s === space).map(([id]) => id);
-    const book = ids.length && get(`SELECT * FROM address_books WHERE id IN (${ids.join(',')}) AND readonly = 0 ORDER BY account_id = ? DESC, source = 'local' DESC, id LIMIT 1`, acc.id);
+    // The account's own book, else the default, else a synced one (the server has it) — never a hidden one.
+    const book = ids.length && get(`SELECT * FROM address_books WHERE id IN (${ids.join(',')}) AND readonly = 0 AND COALESCE(hidden, 0) = 0
+      ORDER BY account_id = ? DESC, is_default DESC, source = 'carddav' DESC, id LIMIT 1`, acc.id);
     if (book) return book;
     const r = run("INSERT INTO address_books (user_id, name, source, space, created_at) VALUES (?, ?, 'local', ?, ?)", userId, `Contacts (${space})`, space, now());
     return get('SELECT * FROM address_books WHERE id = ?', r.lastInsertRowid);
   }
-  return get("SELECT * FROM address_books WHERE user_id = ? AND readonly = 0 ORDER BY source = 'local' DESC, id LIMIT 1", userId);
+  return get("SELECT * FROM address_books WHERE user_id = ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), is_default DESC, source = 'carddav' DESC, id LIMIT 1", userId);
 }
 
 /** Calendar for events coming from an account (e.g. accepted invitations): same account, else same space, else default. */

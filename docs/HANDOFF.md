@@ -736,3 +736,19 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   in the main thread a 4 GB file blocked the whole server for minutes (open + folder count); measured on the 14 MB
   sample: worst main-thread stall 2.4 s before, 1 ms now. round38's PST test (TEST_PST) asserts the server stays
   responsive.
+
+### Analysis by hand, space targets, automatic retries (migration 38)
+- POST /api/ai/reprocess takes `folderId` / `accountId` (one folder, mailbox or archive — any folder but Trash/Junk,
+  whatever ai.analyzeFolders says) and `count: true` (dry run). Mail older than ai.openItemsDays is queued with
+  { quiet: true } unless `quiet` is given. UI: folder menu "Analyse older mail with AI…" and the archive card
+  (`components/AnalyzeOld.jsx`).
+- `targets.js` `targetsForMessage()` → { space, calendarId, taskListId, bookId } of the email's account's space
+  (space defaults first). GET /api/messages/:id/targets (events from an email open in that calendar);
+  POST /api/messages/:id/save-sender (saves the sender into that book; a collected address becomes a saved contact,
+  no duplicate). `addressBookForAccount` now prefers the account's book, the default, then synced books; never hidden.
+- `mail/retry.js` `autoRetry()` (scheduler, every 5 min): failed pending_ops (attempts ≥ 5) get one more try after
+  15 min, 30 min, 1 h … 24 h (8 times; pending_ops.auto_retries / next_retry_at); outbox rows that failed before
+  reaching the server (UNREACHED errors) are queued again up to 6 times (other failures may have been delivered and
+  stay manual); unsaved sent copies are queued again; an SMTP "sending failed" warning is re-checked every 10 min and
+  cleared when the server answers. The problems panel shows these as warnings with the next try until they succeed.
+- AI card on phones: suggested-event and reply buttons never wider than the card (title shortened / replies wrap).

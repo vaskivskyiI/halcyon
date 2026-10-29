@@ -452,4 +452,11 @@ export const migrations = [
   ALTER TABLE task_lists ADD COLUMN hidden INTEGER DEFAULT 0;
   ALTER TABLE address_books ADD COLUMN hidden INTEGER DEFAULT 0;
   `,
+  // 38: failed server changes and sends that could not reach the server are tried again automatically, with growing
+  // pauses (scheduler.js autoRetry): how often already, and when next.
+  `
+  ALTER TABLE pending_ops ADD COLUMN auto_retries INTEGER DEFAULT 0;
+  ALTER TABLE pending_ops ADD COLUMN next_retry_at INTEGER;
+  ALTER TABLE outbox ADD COLUMN auto_retries INTEGER DEFAULT 0;
+  `,
 ];

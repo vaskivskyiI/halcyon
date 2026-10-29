@@ -10,6 +10,7 @@ import { scope, reqSpace, spaceMap, inIds, spaceDefault } from '../spaces.js';
 import { originOf } from './spaces.js';
 import { queueMemory } from '../ai/queue.js';
 import { syncDav } from '../scheduler.js';
+import { targetsForMessage } from '../targets.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
@@ -80,6 +81,35 @@ export default async function contactRoutes(app) {
     if (isDefault) { run('UPDATE address_books SET is_default = 0 WHERE user_id = ?', req.user.id); run('UPDATE address_books SET is_default = 1, hidden = 0 WHERE id = ?', b.id); }
     notify(req.user.id, 'contacts:changed', {});
     return { ok: true };
+  });
+
+  // Where an event, task or contact made from this email goes: the calendar, task list and address book of its space.
+  app.get('/api/messages/:id/targets', async (req, reply) => targetsForMessage(req.user.id, req.params.id) || httpError(reply, 404, 'Not found'));
+
+  // The sender of an email saved as a contact, in the address book of the email's space. Someone already known only as
+  // a collected address becomes a saved contact (moved there, uploaded when that book is synced) — no duplicate.
+  app.post('/api/messages/:id/save-sender', async (req, reply) => {
+    const m = get('SELECT from_name, from_addr FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const t = m && targetsForMessage(req.user.id, req.params.id);
+    if (!m || !t?.bookId) return httpError(reply, 404, 'Not found');
+    const email = String(m.from_addr || '').toLowerCase();
+    const known = get('SELECT c.* FROM contact_emails e JOIN contacts c ON c.id = e.contact_id WHERE e.user_id = ? AND e.email = ? AND c.deleted = 0 ORDER BY c.auto_collected, c.id LIMIT 1', req.user.id, email);
+    if (known && !known.auto_collected) return { contact: serializeContact(known), existed: true };
+    const book = get('SELECT * FROM address_books WHERE id = ?', t.bookId);
+    let c;
+    if (known) {
+      run('UPDATE contacts SET auto_collected = 0, address_book_id = ?, display_name = COALESCE(NULLIF(?, \'\'), display_name), href = NULL, etag = NULL, dirty = ?, updated_at = ? WHERE id = ?',
+        book.id, m.from_name || '', book.source === 'carddav' ? 1 : 0, now(), known.id);
+      c = get('SELECT * FROM contacts WHERE id = ?', known.id);
+    } else {
+      const name = m.from_name || email.split('@')[0];
+      const [first, ...rest] = name.split(' ');
+      c = createContact(req.user.id, { displayName: name, firstName: first, lastName: rest.join(' '), emails: [{ type: 'work', value: email }], addressBookId: book.id });
+    }
+    const acc = book.account_id && get('SELECT * FROM accounts WHERE id = ?', book.account_id);
+    if (acc?.carddav_url) syncDav(acc).catch(() => {});
+    notify(req.user.id, 'contacts:changed', {});
+    return { contact: serializeContact(c), book: book.name };
   });
 
   app.get('/api/contacts', async (req) => {

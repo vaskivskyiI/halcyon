@@ -13,6 +13,7 @@ import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
 import Reader from './Reader.jsx';
+import AnalyzeOld from '../components/AnalyzeOld.jsx';
 import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 
 const SMART = [
@@ -100,8 +101,10 @@ function FolderNav({ view, open, onNavigate }) {
     onDragLeave: () => setDropTarget(null), onDrop: (e) => onDrop(e, folderId),
   });
 
+  const [analyze, setAnalyze] = useState(null);
   const folderMenu = (e, acc, f) => openMenu(e, [
     { label: 'Mark all as read', icon: MailOpen, onClick: () => api.post(`/api/folders/${f.id}/read-all`).then(loadFolders) },
+    store.get().settings?.ai?.enabled && { label: 'Analyse older mail with AI…', icon: Sparkles, onClick: () => setAnalyze({ folderId: f.id, name: f.name }) },
     { label: 'Export as .mbox (backup)', icon: Archive, onClick: () => window.open(api.url(`/api/folders/${f.id}/export.mbox`)) },
     { label: 'Export as .eml files (ZIP)', icon: Archive, hint: 'for Outlook & co.', onClick: () => window.open(api.url(`/api/archives/export?folderId=${f.id}`)) },
     acc.kind !== 'archive' && { label: 'Move older mail to an archive…', icon: Archive, onClick: () => archiveOlder(acc, f) },
@@ -114,6 +117,7 @@ function FolderNav({ view, open, onNavigate }) {
 
   return (
     <aside className={`sidebar ${open ? 'open' : ''}`}>
+      {analyze && <AnalyzeOld {...analyze} onClose={() => setAnalyze(null)} />}
       <div className="sidebar-head">
         <button className="btn primary grow" style={{ justifyContent: 'center', height: 38 }} onClick={() => openComposer({})}><PenSquare size={16} /> New message</button>
       </div>
