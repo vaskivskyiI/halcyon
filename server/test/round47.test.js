@@ -1,42 +1,14 @@
-// The native Android app's notifications: FCM device tokens per user, and FCM HTTP v1 data messages sent wherever Web
-// Push goes — against a local stand-in for Google's token and FCM endpoints.
+// Older mail analysed by hand (one folder or archive; old mail quietly); things made from an email go to the
+// calendar / list / address book of its space; failed changes and unreachable sends are tried again by themselves.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import http from 'node:http';
-import crypto from 'node:crypto';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'halcyon-r47-test-'));
 process.env.HALCYON_DATA_DIR = dataDir;
 process.env.HALCYON_LOG_LEVEL = 'error';
-
-const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-const got = { tokens: 0, sends: [] };
-let answer = () => [200, { name: 'projects/demo/messages/1' }];
-const mock = http.createServer((req, res) => {
-  let body = '';
-  req.on('data', (c) => { body += c; });
-  req.on('end', () => {
-    const reply = (code, d) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(d)); };
-    if (req.url === '/token') {
-      const jwt = new URLSearchParams(body).get('assertion').split('.');
-      const ok = crypto.verify('RSA-SHA256', Buffer.from(`${jwt[0]}.${jwt[1]}`), publicKey, Buffer.from(jwt[2], 'base64url'));
-      const claims = JSON.parse(Buffer.from(jwt[1], 'base64url'));
-      if (!ok || claims.iss !== 'push@demo.iam.gserviceaccount.com' || !/firebase\.messaging/.test(claims.scope)) return reply(400, { error: 'invalid_grant' });
-      got.tokens++;
-      return reply(200, { access_token: 'at-1', expires_in: 3600 });
-    }
-    if (req.url === '/v1/projects/demo/messages:send') {
-      if (req.headers.authorization !== 'Bearer at-1') return reply(401, { error: { status: 'UNAUTHENTICATED' } });
-      const m = JSON.parse(body).message;
-      got.sends.push(m);
-      return reply(...answer(m));
-    }
-    reply(404, {});
-  });
-});
 
 let app, base, cookie = '', db, uid;
 async function api(method, url, body) {
@@ -47,17 +19,16 @@ async function api(method, url, body) {
   if (!r.ok) throw new Error(`${method} ${url} → ${r.status} ${JSON.stringify(data)}`);
   return data;
 }
-const waitFor = async (fn) => { for (let i = 0; i < 100 && !fn(); i++) await new Promise((r) => setTimeout(r, 20)); assert.ok(fn()); };
-const TOKEN = 'dGVzdC10b2tlbi0x:APA91bExampleTokenForTheAndroidAppOnly_1234567890';
+const account = (email, space, extra = '') => {
+  const id = db.prepare(`INSERT INTO accounts (user_id, email, sync_enabled, space, created_at${extra ? ', kind' : ''}) VALUES (?, ?, 0, ?, ?${extra ? ', ?' : ''})`).run(uid, email, space, Date.now(), ...(extra ? [extra] : [])).lastInsertRowid;
+  const folder = db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'INBOX', 'INBOX', ?)").run(id, extra ? null : '\\Inbox').lastInsertRowid;
+  return { id, folder };
+};
+let n = 0;
+const mail = (a, days, from = 'ana@x.example') => db.prepare(`INSERT INTO messages (user_id, account_id, folder_id, message_id, thread_id, subject, from_name, from_addr, to_json, date, created_at)
+  VALUES (?, ?, ?, ?, ?, 'Hello', 'Ana Novak', ?, '[]', ?, ?)`).run(uid, a.id, a.folder, `r${++n}@x`, `t${n}`, from, Date.now() - days * 864e5, Date.now()).lastInsertRowid;
 
 before(async () => {
-  await new Promise((r) => mock.listen(0, '127.0.0.1', r));
-  const m = `http://127.0.0.1:${mock.address().port}`;
-  const key = path.join(dataDir, 'firebase.json');
-  fs.writeFileSync(key, JSON.stringify({ type: 'service_account', project_id: 'demo', client_email: 'push@demo.iam.gserviceaccount.com',
-    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }), token_uri: `${m}/token` }));
-  process.env.HALCYON_FCM_SERVICE_ACCOUNT = key;
-  process.env.HALCYON_FCM_URL = m;
   const { buildServer } = await import('../src/index.js');
   app = await buildServer({ background: false });
   await app.listen({ host: '127.0.0.1', port: 0 });
@@ -66,49 +37,84 @@ before(async () => {
   await api('POST', '/api/auth/setup', { email: 'me@example.org', name: 'Me', password: 'password123' });
   uid = db.prepare('SELECT id FROM users').get().id;
 });
-after(async () => { await app?.close(); mock.close(); setTimeout(() => process.exit(0), 50).unref(); });
+after(async () => { await app?.close(); setTimeout(() => process.exit(0), 50).unref(); });
 
-test('the Android app registers its token; it is listed among the devices and refused when malformed', async () => {
-  assert.deepEqual(await api('GET', '/api/push/fcm'), { available: true, error: null });
-  await assert.rejects(api('POST', '/api/push/fcm/register', { token: 'x', device: 'Pixel' }), /400/);
-  await api('POST', '/api/push/fcm/register', { token: TOKEN, device: 'Pixel 9' });
-  await api('POST', '/api/push/fcm/register', { token: TOKEN, device: 'Pixel 9' }); // again (each app start): still one
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM fcm_tokens WHERE user_id = ?').get(uid).n, 1);
-  const devs = await api('GET', '/api/push/devices');
-  assert.deepEqual(devs.map((d) => [d.device, d.kind]), [['Pixel 9', 'android']]);
+test('older mail of one folder or archive is analysed by hand; mail older than the open-items window quietly', async () => {
+  const box = account('me@example.org', 'Work');
+  const arch = account('Old', '', 'archive');
+  const recent = mail(box, 3), old = mail(box, 400);
+  mail(arch, 900); mail(arch, 1000);
+  assert.deepEqual(await api('POST', '/api/ai/reprocess', { folderId: box.folder, days: 'all', mode: 'missing', count: true }), { count: 2 });
+  assert.deepEqual(await api('POST', '/api/ai/reprocess', { folderId: box.folder, days: 30, count: true }), { count: 1 });
+  assert.deepEqual(await api('POST', '/api/ai/reprocess', { accountId: arch.id, days: 'all', count: true }), { count: 2 }, 'archives too');
+  await api('POST', '/api/ai/reprocess', { folderId: box.folder, days: 'all' });
+  const job = (id) => db.prepare("SELECT options_json FROM ai_jobs WHERE type = 'analyze' AND ref_id = ?").get(String(id));
+  assert.equal(job(recent).options_json, null);
+  assert.deepEqual(JSON.parse(job(old).options_json), { quiet: true });
+  await assert.rejects(api('POST', '/api/ai/reprocess', { folderId: 999999, count: true }), /404/);
 });
 
-test('a notification goes out as a high-priority FCM data message with only what it shows', async () => {
-  await api('POST', '/api/push/test');
-  await waitFor(() => got.sends.length === 1);
-  const m = got.sends[0];
-  assert.equal(got.tokens, 1);
-  assert.equal(m.token, TOKEN);
-  assert.equal(m.android.priority, 'HIGH');
-  assert.equal(m.notification, undefined, 'data only: the app draws it');
-  assert.deepEqual(m.data, { title: 'Halcyon', body: 'Notifications work on this device.', url: '#/settings/notifications', tag: 'test', silent: 'false', as: '', kind: 'reminder' });
-  await waitFor(() => db.prepare('SELECT last_ok_at FROM fcm_tokens').get().last_ok_at > 0);
-
-  // New mail with "hide content": no sender or subject leaves the server.
-  const { notifyUser } = await import('../src/notifications.js');
-  await api('PATCH', '/api/settings', { notifications: { hideContent: true, sound: false } });
-  notifyUser(uid, 'mail', { title: 'Alice', body: 'Secret plans', url: '#/mail/unified/7', tag: 'mail-7', important: false });
-  await waitFor(() => got.sends.length === 2);
-  assert.deepEqual(got.sends[1].data, { title: 'New email', body: '', url: '#/mail/unified/7', tag: 'mail-7', silent: 'true', as: '', kind: 'mail' });
-  assert.equal(got.tokens, 1, 'the access token is reused');
+test('an event, task or contact made from an email goes to its space; the sender is saved once', async () => {
+  const work = account('me@work.example', 'Work');
+  const cal = db.prepare("INSERT INTO calendars (user_id, account_id, name, color, source, url, created_at) VALUES (?, ?, 'Work cal', '#000', 'caldav', 'https://d/w/', ?)").run(uid, work.id, Date.now()).lastInsertRowid;
+  const list = db.prepare("INSERT INTO task_lists (user_id, account_id, name, source, url, created_at) VALUES (?, ?, 'Work tasks', 'caldav', 'https://d/w/', ?)").run(uid, work.id, Date.now()).lastInsertRowid;
+  const book = db.prepare("INSERT INTO address_books (user_id, account_id, name, source, url, created_at) VALUES (?, ?, 'Work people', 'carddav', 'https://d/p/', ?)").run(uid, work.id, Date.now()).lastInsertRowid;
+  const m = mail(work, 1, 'marko@x.example');
+  const t = await api('GET', `/api/messages/${m}/targets`);
+  assert.deepEqual([t.space, t.calendarId, t.taskListId, t.bookId], ['Work', cal, list, book]);
+  // Collected before (from mail): saved now as a real contact in the space's book — no duplicate.
+  const { collectAddresses } = await import('../src/contacts/service.js');
+  collectAddresses(uid, [{ address: 'marko@x.example', name: 'Marko' }], Date.now(), true, work.id);
+  const r = await api('POST', `/api/messages/${m}/save-sender`, {});
+  assert.equal(r.book, 'Work people');
+  const rows = db.prepare("SELECT address_book_id, auto_collected, dirty FROM contacts WHERE emails_json LIKE '%marko@x.example%'").all();
+  assert.deepEqual(rows, [{ address_book_id: book, auto_collected: 0, dirty: 1 }]);
+  assert.equal((await api('POST', `/api/messages/${m}/save-sender`, {})).existed, true);
 });
 
-test('a token FCM no longer knows is forgotten; the app can unregister its own', async () => {
-  answer = () => [404, { error: { code: 404, status: 'NOT_FOUND', message: 'Requested entity was not found.', details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' }] } }];
-  await api('POST', '/api/push/test');
-  await waitFor(() => !db.prepare('SELECT 1 FROM fcm_tokens').get());
-  answer = () => [200, {}];
+test('failed server changes and unreachable sends are tried again by themselves, with growing pauses', async () => {
+  const { autoRetry, RETRY_STEPS } = await import('../src/mail/retry.js');
+  const a = account('me@retry.example', '');
+  const op = db.prepare("INSERT INTO pending_ops (account_id, op, payload_json, attempts, error, created_at) VALUES (?, 'flag', '{}', 5, 'NO server busy', ?)").run(a.id, Date.now()).lastInsertRowid;
+  const unreached = db.prepare("INSERT INTO outbox (user_id, account_id, payload_json, status, attempts, error, send_at, created_at) VALUES (?, ?, '{\"subject\":\"Hi\"}', 'failed', 5, 'connect ECONNREFUSED 1.2.3.4:587', ?, ?)").run(uid, a.id, Date.now() - 864e5, Date.now()).lastInsertRowid;
+  const maybeSent = db.prepare("INSERT INTO outbox (user_id, account_id, payload_json, status, attempts, error, send_at, created_at) VALUES (?, ?, '{\"subject\":\"Hm\"}', 'failed', 5, 'Timeout after DATA', ?, ?)").run(uid, a.id, Date.now() - 864e5, Date.now()).lastInsertRowid;
 
-  await api('POST', '/api/push/fcm/register', { token: TOKEN, device: 'Pixel 9' });
-  assert.deepEqual(await api('POST', '/api/push/fcm/unregister', { token: 'someone-elses' }), { removed: 0 });
-  assert.deepEqual(await api('POST', '/api/push/fcm/unregister', { token: TOKEN }), { removed: 1 });
-  const n = got.sends.length;
-  await api('POST', '/api/push/test');
-  await new Promise((r) => setTimeout(r, 200));
-  assert.equal(got.sends.length, n, 'nothing sent without a token');
+  let p = (await api('GET', '/api/status/problems')).problems;
+  assert.match(p.find((x) => x.key === `op:${op}`).title, /trying again automatically/);
+  assert.equal(p.find((x) => x.key === `op:${op}`).level, 'warn');
+  assert.equal(p.find((x) => x.key === `outbox:${maybeSent}`).level, 'error', 'might have gone out: left to the user');
+
+  const t0 = Date.now();
+  await autoRetry(t0);
+  const o1 = db.prepare('SELECT attempts, next_retry_at, auto_retries FROM pending_ops WHERE id = ?').get(op);
+  assert.deepEqual([o1.attempts, o1.next_retry_at, o1.auto_retries], [5, t0 + RETRY_STEPS[0], 0], 'first: the pause is set');
+  await autoRetry(t0 + RETRY_STEPS[0] + 1);
+  const o2 = db.prepare('SELECT attempts, auto_retries, next_retry_at FROM pending_ops WHERE id = ?').get(op);
+  assert.deepEqual([o2.attempts, o2.auto_retries], [4, 1], 'given one more try');
+  assert.ok(o2.next_retry_at > t0 + RETRY_STEPS[0], 'and a longer pause before the next');
+  assert.equal(db.prepare('SELECT status FROM outbox WHERE id = ?').get(unreached).status, 'queued', 'never reached the server: sent again');
+  assert.equal(db.prepare('SELECT status FROM outbox WHERE id = ?').get(maybeSent).status, 'failed');
+  // When the retry works, the change is gone — and so is the problem.
+  db.prepare('DELETE FROM pending_ops WHERE id = ?').run(op);
+  p = (await api('GET', '/api/status/problems')).problems;
+  assert.ok(!p.some((x) => x.key === `op:${op}`));
+  db.prepare('DELETE FROM outbox WHERE account_id = ?').run(a.id);
+});
+
+test('conversations pinned to the top (listed apart, not twice) and private notes on them', async () => {
+  const box = account('me@pins.example', '');
+  const a = mail(box, 1), b = mail(box, 2);
+  await api('POST', `/api/messages/${a}/pin`, {});
+  assert.equal((await api('GET', `/api/messages/${a}/pin`)).pinned, true);
+  const pinned = await api('GET', `/api/messages?view=folder&folderId=${box.folder}&pinned=1`);
+  const rest = await api('GET', `/api/messages?view=folder&folderId=${box.folder}&pinned=0`);
+  assert.deepEqual(pinned.items.map((m) => [m.id, m.pinned]), [[a, true]]);
+  assert.deepEqual(rest.items.map((m) => m.id), [b]);
+  await api('PUT', `/api/messages/${a}/note`, { note: 'Call Ana before Friday' });
+  assert.equal((await api('GET', `/api/messages/${a}/note`)).note, 'Call Ana before Friday');
+  assert.equal((await api('GET', `/api/messages?view=folder&folderId=${box.folder}`)).items.find((m) => m.id === a).hasNote, true);
+  await api('PUT', `/api/messages/${a}/note`, { note: '  ' });
+  assert.equal((await api('GET', `/api/messages/${a}/note`)).note, '');
+  await api('POST', `/api/messages/${a}/pin`, { pinned: false });
+  assert.equal((await api('GET', `/api/messages?view=folder&folderId=${box.folder}&pinned=1`)).items.length, 0);
 });

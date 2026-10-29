@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, Send, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
-  ClipboardCheck, SlidersHorizontal, Pencil,
+  ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal,
 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -13,17 +13,21 @@ import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
 import Reader from './Reader.jsx';
+import AnalyzeOld from '../components/AnalyzeOld.jsx';
 import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 
+// The views used every day; the others are one click away under "More" (and shown while open).
 const SMART = [
   ['unified', Inbox, 'All inboxes', 'unified'],
-  ['important', Flame, 'Important'],
   ['needsreply', CornerUpLeft, 'Needs reply', 'needsreply'],
   ['needsaction', ClipboardCheck, 'Action needed', 'needsaction'],
-  ['waiting', Hourglass, 'Waiting for reply', 'waiting'],
   ['flagged', Star, 'Flagged'],
   ['snoozed', Clock, 'Snoozed', 'snoozed'],
   ['scheduled', SendIcon, 'Outbox & drafts', 'scheduled'],
+];
+const MORE_VIEWS = [
+  ['important', Flame, 'Important'],
+  ['waiting', Hourglass, 'Waiting for reply', 'waiting'],
 ];
 const SORTS = [['date', 'Date', 'desc'], ['from', 'From', 'asc'], ['subject', 'Subject', 'asc'], ['size', 'Size', 'desc'], ['unread', 'Unread first', 'asc'], ['flagged', 'Flagged first', 'desc']];
 const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
@@ -78,7 +82,7 @@ function FolderNav({ view, open, onNavigate }) {
   const folders = store.use((s) => s.folders);
   const labels = store.use((s) => s.labels);
   // Collapsed sidebar blocks (topics, categories, labels, each account) — remembered on this device.
-  const [collapsed, setCollapsedState] = useState(() => { try { return JSON.parse(localStorage.getItem('halcyon.sidebar.collapsed') || '{}'); } catch { return {}; } });
+  const [collapsed, setCollapsedState] = useState(() => { try { return JSON.parse(localStorage.getItem('halcyon.sidebar.collapsed') || 'null') || { categories: true, more: true }; } catch { return { categories: true, more: true }; } });
   const setCollapsed = (c) => { setCollapsedState(c); try { localStorage.setItem('halcyon.sidebar.collapsed', JSON.stringify(c)); } catch { /* private mode */ } };
   const toggle = (k) => setCollapsed({ ...collapsed, [k]: !collapsed[k] });
   const [editCat, setEditCat] = useState(null);
@@ -100,8 +104,15 @@ function FolderNav({ view, open, onNavigate }) {
     onDragLeave: () => setDropTarget(null), onDrop: (e) => onDrop(e, folderId),
   });
 
+  const [analyze, setAnalyze] = useState(null);
+  const accountMenu = (e, acc) => openMenu(e, [
+    { label: 'New folder', icon: Plus, onClick: () => setNewFolder({ accountId: acc.accountId }) },
+    store.get().settings?.ai?.enabled && { label: 'Analyse older mail with AI…', icon: Sparkles, onClick: () => setAnalyze({ accountId: acc.accountId, name: acc.kind === 'archive' ? acc.name : acc.email }) },
+    { label: acc.kind === 'archive' ? 'Archive settings' : 'Account settings', icon: SlidersHorizontal, onClick: () => navigate(acc.kind === 'archive' ? '#/settings/archives' : '#/settings/accounts') },
+  ]);
   const folderMenu = (e, acc, f) => openMenu(e, [
     { label: 'Mark all as read', icon: MailOpen, onClick: () => api.post(`/api/folders/${f.id}/read-all`).then(loadFolders) },
+    store.get().settings?.ai?.enabled && { label: 'Analyse older mail with AI…', icon: Sparkles, onClick: () => setAnalyze({ folderId: f.id, name: f.name }) },
     { label: 'Export as .mbox (backup)', icon: Archive, onClick: () => window.open(api.url(`/api/folders/${f.id}/export.mbox`)) },
     { label: 'Export as .eml files (ZIP)', icon: Archive, hint: 'for Outlook & co.', onClick: () => window.open(api.url(`/api/archives/export?folderId=${f.id}`)) },
     acc.kind !== 'archive' && { label: 'Move older mail to an archive…', icon: Archive, onClick: () => archiveOlder(acc, f) },
@@ -114,6 +125,7 @@ function FolderNav({ view, open, onNavigate }) {
 
   return (
     <aside className={`sidebar ${open ? 'open' : ''}`}>
+      {analyze && <AnalyzeOld {...analyze} onClose={() => setAnalyze(null)} />}
       <div className="sidebar-head">
         <button className="btn primary grow" style={{ justifyContent: 'center', height: 38 }} onClick={() => openComposer({})}><PenSquare size={16} /> New message</button>
       </div>
@@ -121,13 +133,18 @@ function FolderNav({ view, open, onNavigate }) {
         {(store.get().accounts || []).filter((x) => x.autoReplyOn).map((x) => (
           <div key={`ar${x.id}`} className="notice small" style={{ margin: '0 4px 8px', cursor: 'pointer' }} title="Change or turn off in Settings → Accounts" onClick={() => navigate('#/settings/accounts')}>
             Automatic replies are on · {x.email}</div>))}
-        {SMART.map(([key, Icon, label, countKey]) => (
+        {[...SMART, ...MORE_VIEWS.filter(([key]) => view === key || !collapsed.more)].map(([key, Icon, label, countKey]) => (
           <div key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => go(key)}>
             <Icon size={16} /><span className="truncate">{label}</span>{countKey === 'unified' ? <UnreadCount n={folders.counts?.unified} important={folders.counts?.unifiedImportant} /> : countKey && folders.counts?.[countKey] > 0 && (countKey === 'scheduled' && folders.counts.outboxFailed > 0
               ? <span className="count failed" title={`${folders.counts.outboxFailed} could not be sent — open to retry, edit or keep as draft`}>{folders.counts[countKey]}</span>
               : <span className="count" title={COUNT_TITLES[countKey]}>{folders.counts[countKey]}</span>)}
           </div>
         ))}
+        <div className="nav-item faint small more-toggle" onClick={() => toggle('more')}>{collapsed.more ? <ChevronRight size={14} /> : <ChevronDown size={14} />} {collapsed.more ? 'More' : 'Less'}</div>
+        {!collapsed.more && <>
+          {!(folders.custom || []).length && <div className="nav-item faint small" onClick={() => setEditCat({})}><Plus size={14} /> New category</div>}
+          {!labels.length && <div className="nav-item faint small" onClick={async () => { const n = prompt('Label name'); if (n) { await api.post('/api/labels', { name: n, color: `hsl(${Math.random() * 360 | 0} 60% 50%)` }); loadLabels(); } }}><Plus size={14} /> New label</div>}
+        </>}
         {folders.topics?.length > 0 && <>
           <div className="nav-section" onClick={() => toggle('topics')} title="Ongoing projects, events and cases recognised by the AI — most recent and most urgent first"><Chevron k="topics" /> Topics</div>
           {!collapsed.topics && folders.topics.map((t) => (
@@ -137,9 +154,9 @@ function FolderNav({ view, open, onNavigate }) {
               {t.unread > 0 && <span className="count" style={t.next && t.next < Date.now() + 14 * 864e5 ? { marginLeft: 6 } : undefined}>{t.unread}</span>}
             </div>))}
         </>}
-        <div className="nav-section" onClick={() => toggle('custom')} title="Your own categories — described in words (the AI sorts mail into them) or a saved search">
+        {(folders.custom || []).length > 0 && <div className="nav-section" onClick={() => toggle('custom')} title="Your own categories — described in words (the AI sorts mail into them) or a saved search">
           <Chevron k="custom" /><span className="grow">My categories</span>
-          <button className="icon-btn" style={{ width: 22, height: 22 }} title="New category" onClick={(e) => { e.stopPropagation(); setEditCat({}); }}><Plus size={13} /></button></div>
+          <button className="icon-btn" style={{ width: 22, height: 22 }} title="New category" onClick={(e) => { e.stopPropagation(); setEditCat({}); }}><Plus size={13} /></button></div>}
         {!collapsed.custom && (folders.custom || []).map((c) => (
           <div key={c.id} className={`nav-item ${view === `my~${c.id}` ? 'active' : ''}`} onClick={() => go(`my~${c.id}`)} title={c.description || c.query}
             onContextMenu={(e) => openMenu(e, [
@@ -149,7 +166,6 @@ function FolderNav({ view, open, onNavigate }) {
             ])}>
             <Tag size={15} color={c.color || 'var(--accent)'} /><span className="truncate">{c.name}</span>{c.unread > 0 ? <span className="count">{c.unread}</span> : <span className="count faint">{c.count || ''}</span>}
           </div>))}
-        {!collapsed.custom && !(folders.custom || []).length && <div className="nav-item faint small" onClick={() => setEditCat({})}><Plus size={14} /> e.g. “Gift vouchers”</div>}
         {folders.categories?.length > 0 && <>
           <div className="nav-section" onClick={() => toggle('categories')}><Chevron k="categories" /> AI categories</div>
           {!collapsed.categories && folders.categories.map((c) => (
@@ -164,15 +180,16 @@ function FolderNav({ view, open, onNavigate }) {
           });
           return (
             <div key={acc.accountId}>
-              <div className="nav-section" onClick={() => setCollapsed({ ...collapsed, [acc.accountId]: !collapsed[acc.accountId] })}>
-                {collapsed[acc.accountId] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+              <div className="nav-section account-head" onClick={() => setCollapsed({ ...collapsed, [acc.accountId]: !(collapsed[acc.accountId] ?? acc.kind === 'archive') })} onContextMenu={(e) => accountMenu(e, acc)}>
+                {(collapsed[acc.accountId] ?? acc.kind === 'archive') ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 <span className="dot" style={{ background: acc.color }} />
                 {acc.kind === 'archive' && <span title="Archive — kept by Halcyon, on no mail server"><Archive size={13} /></span>}
                 <span className="truncate grow" style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>{acc.kind === 'archive' ? acc.name : acc.email}{acc.ownerName ? <span className="faint"> · {acc.ownerName}</span> : ''}</span>
                 {acc.syncState === 'syncing' && <Spinner size={12} />}
                 {acc.syncState === 'error' && <span title={acc.syncError}><AlertTriangle size={13} color="var(--danger)" /></span>}
+                <button className="icon-btn head-more" title="New folder, analyse, settings" onClick={(e) => { e.stopPropagation(); accountMenu(e, acc); }}><MoreHorizontal size={14} /></button>
               </div>
-              {!collapsed[acc.accountId] && sorted.map((f) => {
+              {!(collapsed[acc.accountId] ?? acc.kind === 'archive') && sorted.map((f) => {
                 const Icon = FOLDER_ICONS[f.specialUse] || Folder;
                 const depth = f.parentPath ? f.path.split(f.delimiter || '/').length - 1 : 0;
                 const key = `f${f.id}`;
@@ -185,11 +202,10 @@ function FolderNav({ view, open, onNavigate }) {
                   </div>
                 );
               })}
-              {!collapsed[acc.accountId] && <div className="nav-item faint small" onClick={() => setNewFolder({ accountId: acc.accountId })}><Plus size={14} /> New folder</div>}
             </div>
           );
         })}
-        <div className="nav-section" onClick={() => toggle('labels')}><Chevron k="labels" /><span className="grow">Labels</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="New label" onClick={async (e) => { e.stopPropagation(); const n = prompt('Label name'); if (n) { await api.post('/api/labels', { name: n, color: `hsl(${Math.random() * 360 | 0} 60% 50%)` }); loadLabels(); } }}><Plus size={13} /></button></div>
+        {labels.length > 0 && <div className="nav-section" onClick={() => toggle('labels')}><Chevron k="labels" /><span className="grow">Labels</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="New label" onClick={async (e) => { e.stopPropagation(); const n = prompt('Label name'); if (n) { await api.post('/api/labels', { name: n, color: `hsl(${Math.random() * 360 | 0} 60% 50%)` }); loadLabels(); } }}><Plus size={13} /></button></div>}
         {!collapsed.labels && labels.map((l) => (
           <div key={l.id} className={`nav-item ${view === `l${l.id}` ? 'active' : ''}`} onClick={() => go(`l${l.id}`)}
             onContextMenu={(e) => openMenu(e, [{ label: 'Delete label', icon: Trash2, danger: true, onClick: () => api.del(`/api/labels/${l.id}`).then(loadLabels) }])}>
@@ -316,15 +332,25 @@ function MessageList({ view, openId, onMenu }) {
   const [tabCounts, setTabCounts] = useState(null);
   const loadTabCounts = () => { if (!activeQuery) api.get(`/api/messages/tab-counts?${new URLSearchParams(viewQuery(view))}`).then(setTabCounts).catch(() => {}); };
 
+  // Pinned conversations stand above the list in the inbox views (newest-first order, no search), in every tab.
+  const pinsOn = isInboxView && !activeQuery && byDate;
+  const [pinned, setPinned] = useState([]);
+  const loadPinned = () => {
+    if (!pinsOn) { setPinned([]); return; }
+    const p = new URLSearchParams({ ...viewQuery(view), limit: 50, pinned: '1' });
+    if (!threaded) p.set('threads', '0');
+    api.get(`/api/messages?${p}`).then((r) => setPinned(r.items)).catch(() => {});
+  };
   const params = useCallback((before, offset) => {
     const p = new URLSearchParams({ ...viewQuery(view), limit: 50 });
+    if (pinsOn) p.set('pinned', '0');
     if (!byDate) { p.set('sort', sort.key); p.set('dir', sort.dir); if (offset) p.set('offset', offset); }
     if (activeQuery) { p.set('q', activeQuery); p.set('semantic', '0'); }
     if (effectiveTab !== 'all') p.set('filter', effectiveTab);
     if (before) p.set('before', before);
     if (!threaded) p.set('threads', '0');
     return p;
-  }, [view, effectiveTab, activeQuery, threaded, sort]);
+  }, [view, effectiveTab, activeQuery, threaded, sort, pinsOn]);
 
   // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one —
   // not in the AI views: an action done or a reply sent takes it off Action needed / Needs reply at once. A
@@ -382,6 +408,7 @@ function MessageList({ view, openId, onMenu }) {
     }
     load(false);
     loadTabCounts();
+    loadPinned();
   }, [params]);
 
   // After a new order: the open message is found (more pages loaded, a few at most) and scrolled into view.
@@ -393,6 +420,13 @@ function MessageList({ view, openId, onMenu }) {
     } else if (hasMore && --seekOpen.current > 0) load(true);
     else seekOpen.current = 0;
   }, [items, loading]);
+
+  // A search started from the command palette (Ctrl+K).
+  useEffect(() => {
+    const h = (e) => { setQuery(e.detail.q); setActiveQuery(e.detail.q); };
+    window.addEventListener('halcyon:search', h);
+    return () => window.removeEventListener('halcyon:search', h);
+  }, []);
 
   // The tab counts (Focused / Other / All) follow every change to mail — reading a conversation opened in Focused
   // also reads its messages counted under Other — and every refresh of the list.
@@ -409,6 +443,7 @@ function MessageList({ view, openId, onMenu }) {
   const refresh = (ms = 300) => {
     clearTimeout(reloadTimer.current);
     reloadTimer.current = setTimeout(async () => {
+      loadPinned();
       const r = await api.get(`/api/messages?${params(null)}`).catch(() => null);
       if (r) setItems((cur) => keepOpen(dedupe([...r.items, ...cur.slice(r.items.length).filter((x) => !r.items.some((y) => y.id === x.id))].slice(0, Math.max(cur.length, r.items.length))), cur));
     }, ms);
@@ -542,6 +577,8 @@ function MessageList({ view, openId, onMenu }) {
     } catch (e) { toastError(e); }
   };
 
+  const togglePin = (m) => api.post(`/api/messages/${m.id}/pin`, { pinned: !m.pinned })
+    .then(() => { toast(m.pinned ? 'Unpinned' : 'Pinned to the top of the inbox'); loadPinned(); load(false); }).catch(toastError);
   const rowMenu = (e, m) => {
     const ids = selected.has(m.id) ? [...selected] : [m.id];
     // Right-click selects what it acts on, so it is visible which messages a menu choice applies to.
@@ -550,6 +587,7 @@ function MessageList({ view, openId, onMenu }) {
       { label: 'Reply', icon: Reply, onClick: () => { open(m); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:reply', { detail: { mode: 'reply' } })), 300); } },
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
       { label: m.isFlagged ? 'Unflag' : 'Flag', icon: Star, onClick: () => act(m.isFlagged ? 'unflag' : 'flag', {}, ids) },
+      { label: m.pinned ? 'Unpin' : 'Pin to top', icon: Pin, onClick: () => togglePin(m) },
       { label: 'Create task…', icon: ClipboardCheck, onClick: () => store.set({ taskDialog: m.id }) },
       m.ai?.needsAction && { label: 'Action: done', icon: ClipboardCheck, onClick: () => settleMany(ids, 'done') },
       m.ai?.needsAction && { label: 'Action: not doing it', icon: X, onClick: () => settleMany(ids, 'skipped') },
@@ -581,7 +619,7 @@ function MessageList({ view, openId, onMenu }) {
   };
 
   const title = useMemo(() => {
-    const smart = SMART.find((s) => s[0] === view);
+    const smart = [...SMART, ...MORE_VIEWS].find((s) => s[0] === view);
     if (smart) return smart[2];
     if (view.startsWith('tp~')) return `Topic: ${decodeURIComponent(view.slice(3))}`;
     if (view.startsWith('ct~')) { const c = decodeURIComponent(view.slice(3)); return c[0].toUpperCase() + c.slice(1); }
@@ -641,14 +679,18 @@ function MessageList({ view, openId, onMenu }) {
         onTouchStart={(e) => { pullStart.current = listRef.current?.scrollTop === 0 ? e.touches[0].clientY : null; }}
         onTouchMove={(e) => { if (pullStart.current != null) setPull(Math.max(0, Math.min(110, (e.touches[0].clientY - pullStart.current) / 2))); }}
         onTouchEnd={() => { if (pull > 70) { window.dispatchEvent(new Event('halcyon:sync')); load(false); } pullStart.current = null; setPull(0); }}>
+        {pinned.length > 0 && <div className="list-group"><Pin size={12} /> Pinned · {pinned.length}</div>}
+        {pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
+          onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
+        {pinned.length > 0 && items.length > 0 && <div className="list-group">Everything else</div>}
         {items.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
-          onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => act(a, extra, [m.id])}
+          onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}
         {activeQuery && aiResults && <div className="ai-results">
           <div className="nav-section" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Sparkles size={13} /> Related by meaning (AI)
             {aiResults.status === 'loading' && <><Spinner size={12} /><span className="faint">searching…</span></>}</div>
           {aiResults.items.map((m) => <Row key={`ai${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={false}
-            onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => act(a, extra, [m.id])} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
+            onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
           {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
           {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
         </div>}
@@ -703,32 +745,36 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
       <div className="body">
         <div className="from">
           {important && <Flame size={13} className="imp-icon" title={`Important (priority ${ai.priority})`} />}
+          {m.pinned && <Pin size={12} className="state-icon" title="Pinned" />}
           <span className="truncate">{m.folder?.specialUse === '\\Sent' ? `To: ${m.to.map((a) => a.name || a.address).join(', ')}` : m.from.name || m.from.address}
             {m.onBehalfOf && m.folder?.specialUse !== '\\Sent' && <span className="faint behalf-note"> · sent by {m.onBehalfOf.name || m.onBehalfOf.address}</span>}</span>
           {threaded && m.threadCount > 1 && <span className="faint small">{m.threadCount}</span>}
+          <span className="row-states">
+            {ai?.needsReply && !m.isAnswered && !expired && <CornerUpLeft size={13} className="st reply" title="Reply needed" />}
+            {ai?.needsAction && !expired && <ClipboardCheck size={13} className="st action" title={ai.actionSummary ? `Action: ${ai.actionSummary}` : 'Action needed'} />}
+            {m.hasDraft && <PenLine size={13} className="st draft" title="You have an unsent reply in this conversation" />}
+            {m.hasNote && <StickyNote size={12} className="st" title="Your note" />}
+            {m.hasInvite && <CalendarPlus size={13} className="st" title="Invitation" />}
+            {m.hasAttachments && <Paperclip size={12} className="st" title="Attachment" />}
+            {m.isFlagged && <Star size={12} className="flag-icon" fill="#f59e0b" />}
+          </span>
           <span className="date">{m.snoozedUntil ? <span title="Snoozed until"><Clock size={11} /> {fmtListDate(m.snoozedUntil)}</span> : fmtListDate(m.date)}</span>
         </div>
-        <div className="subject truncate">
+        {/* Subject and a one-line preview (the AI summary when there is one) on one line. */}
+        <div className="subject-line truncate">
           {m.isAnswered && <ReplyIcon size={13} className="state-icon" title="You replied" />}
           {m.isForwarded && <ForwardIcon size={13} className="state-icon" title="You forwarded this" />}
-          {m.subject || '(no subject)'}</div>
-        {showAi && ai?.summary ? <div className="ai-line"><Sparkles size={12} /><span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{ai.summary}</span></div>
-          : <div className="snippet truncate">{m.snippet}</div>}
-        <div className="meta">
+          <span className="subject">{m.subject || '(no subject)'}</span>
+          <span className="preview" title={showAi && ai?.summary ? ai.summary : undefined}> — {showAi && ai?.summary ? ai.summary : m.snippet}</span></div>
+        {(m.ownerName || ai?.isPhishing || expired || ai?.topic || m.myCategories?.length > 0 || m.notOnServer || m.labels?.length > 0) && <div className="meta">
           {m.ownerName && <span className="chip shared-chip" title={`Shared space “${m.ownerName}”`}>{m.ownerName}</span>}
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
           {expired && <span className="chip faint" title="Time-sensitive content that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ai?.topic && <span className="chip topic clickable" title={`Show all mail about “${ai.topic}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/${topicView(ai.topic)}`); }}><Hash size={10} />{ai.topic}</span>}
           {(m.myCategories || []).map((id) => { const c = (store.get().folders.custom || []).find((x) => x.id === id); return c && <span key={id} className="chip clickable" style={{ color: c.color || 'var(--accent)' }} title={`Show “${c.name}”`} onClick={(e) => { e.stopPropagation(); navigate(`#/mail/my~${c.id}`); }}><Tag size={10} />{c.name}</span>; })}
-          {ai?.needsReply && !m.isAnswered && !expired && <span className="chip ai"><CornerUpLeft size={11} /> Reply needed</span>}
-          {ai?.needsAction && !expired && <span className="chip action" title={ai.actionSummary || 'Action needed'}><ClipboardCheck size={11} /> {ai.actionSummary ? (ai.actionSummary.length > 42 ? `${ai.actionSummary.slice(0, 40)}…` : ai.actionSummary) : 'Action needed'}</span>}
-          {m.hasInvite && <CalendarPlus size={13} className="faint" title="Invitation" />}
-          {m.hasAttachments && <Paperclip size={13} className="faint" />}
-          {m.hasDraft && <span className="chip draft" title="You have an unsent reply in this conversation">Draft</span>}
           {m.notOnServer && <span className="chip unsaved" title="Sent, but the copy is not saved on the mail server yet (other mail apps do not show it)">Not on server</span>}
-          {m.isFlagged && <Star size={13} className="flag-icon" />}
           {m.labels?.map((id) => { const l = store.get().labels.find((x) => x.id === id); return l && <span key={id} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
-        </div>
+        </div>}
       </div>
       <div className="hover-actions" onClick={(e) => e.stopPropagation()}>
         <button className="icon-btn" title="Archive (e)" onClick={() => onAct('archive')}><Archive size={15} /></button>
@@ -736,6 +782,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
         <button className="icon-btn" title={unread ? 'Mark read' : 'Mark unread'} onClick={() => onAct(unread ? 'read' : 'unread')}>{unread ? <MailOpen size={15} /> : <MailIcon size={15} />}</button>
         <button className="icon-btn" title="Flag (s)" onClick={() => onAct(m.isFlagged ? 'unflag' : 'flag')}><Star size={15} fill={m.isFlagged ? '#f59e0b' : 'none'} color={m.isFlagged ? '#f59e0b' : 'currentColor'} /></button>
         <button className="icon-btn" title="Snooze until tomorrow" onClick={() => onAct('snooze', { until: snoozeOptions().find((o) => o[0] === 'Tomorrow morning')[1] })}><Clock size={15} /></button>
+        <button className="icon-btn" title={m.pinned ? 'Unpin' : 'Pin to top'} onClick={() => onAct('pin')}><Pin size={15} fill={m.pinned ? 'currentColor' : 'none'} /></button>
       </div>
     </div>
     </div>

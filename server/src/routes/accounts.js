@@ -15,6 +15,7 @@ import { autoReplyOf, autoReplyActive } from '../mail/extras.js';
 import { invalidate } from '../ai/memory.js';
 import { purgeMemory } from '../mail/pipeline.js';
 import { smtpStatus } from '../mail/send.js';
+import { RETRY_STEPS, SEND_RETRIES, UNREACHED } from '../mail/retry.js';
 
 const pendingOAuth = new Map(); // state -> { userId, provider, accountId, t }
 
@@ -111,15 +112,20 @@ export default async function accountRoutes(app) {
       }
       const smtp = smtpStatus.get(a.id);
       if (smtp && !smtp.ok) out.push({ key: `smtp:${a.id}`, level: 'error', accountId: a.id, title: `${who}: sending failed`, text: smtp.error || 'no details from the server', at: smtp.at, actions: ['test'] });
-      for (const o of all('SELECT id, op, error, attempts, created_at FROM pending_ops WHERE account_id = ? AND attempts > 0 ORDER BY id DESC LIMIT 20', a.id)) {
-        out.push({ key: `op:${o.id}`, level: o.attempts >= 5 ? 'error' : 'warn', accountId: a.id, opId: o.id,
-          title: `${who}: ${o.op === 'append' ? 'saving a copy on the server' : `server change “${o.op}”`} ${o.attempts >= 5 ? 'failed' : 'is being retried'}`,
-          text: o.error || '', at: o.created_at, actions: o.attempts >= 5 ? ['retry-op', 'dismiss-op'] : [] });
+      const at = (t) => new Date(t).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+      for (const o of all('SELECT id, op, error, attempts, created_at, auto_retries, next_retry_at FROM pending_ops WHERE account_id = ? AND attempts > 0 ORDER BY id DESC LIMIT 20', a.id)) {
+        // Failed, but tried again by itself later (mail/retry.js): a warning until the tries are used up.
+        const failed = o.attempts >= 5, later = failed && (o.auto_retries || 0) < RETRY_STEPS.length;
+        out.push({ key: `op:${o.id}`, level: failed && !later ? 'error' : 'warn', accountId: a.id, opId: o.id,
+          title: `${who}: ${o.op === 'append' ? 'saving a copy on the server' : `server change “${o.op}”`} ${!failed ? 'is being retried' : later ? 'failed — trying again automatically' : 'failed'}`,
+          text: `${o.error || ''}${later && o.next_retry_at ? ` · next try ${at(o.next_retry_at)}` : ''}`, at: o.created_at, actions: failed ? ['retry-op', 'dismiss-op'] : [] });
       }
-      for (const r of all("SELECT id, payload_json, status, error, attempts, send_at FROM outbox WHERE account_id = ? AND (status = 'failed' OR (status = 'queued' AND attempts > 0))", a.id)) {
+      for (const r of all("SELECT id, payload_json, status, error, attempts, send_at, auto_retries FROM outbox WHERE account_id = ? AND (status = 'failed' OR (status = 'queued' AND attempts > 0))", a.id)) {
         const p = json(r.payload_json, {});
-        out.push({ key: `outbox:${r.id}`, level: r.status === 'failed' ? 'error' : 'warn', accountId: a.id, outboxId: r.id,
-          title: `${r.status === 'failed' ? 'Not sent' : `Not sent yet (try ${r.attempts + 1} at ${new Date(r.send_at).toLocaleTimeString()})`}: “${p.subject || '(no subject)'}”`,
+        // The mail server could not be reached: sent again by itself later (nothing went out yet).
+        const later = r.status === 'failed' && UNREACHED.test(r.error || '') && (r.auto_retries || 0) < SEND_RETRIES;
+        out.push({ key: `outbox:${r.id}`, level: r.status === 'failed' && !later ? 'error' : 'warn', accountId: a.id, outboxId: r.id,
+          title: `${later ? 'Not sent yet — the mail server could not be reached; trying again automatically' : r.status === 'failed' ? 'Not sent' : `Not sent yet (try ${r.attempts + 1} at ${new Date(r.send_at).toLocaleTimeString()})`}: “${p.subject || '(no subject)'}”`,
           text: r.error || '', actions: ['retry-send', 'to-draft'] });
       }
       // Sent, but some recipients were refused by the mail server (last 3 days).

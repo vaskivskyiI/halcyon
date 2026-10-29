@@ -737,7 +737,42 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   sample: worst main-thread stall 2.4 s before, 1 ms now. round38's PST test (TEST_PST) asserts the server stays
   responsive.
 
-### Native Android app with Firebase Cloud Messaging (migration 38)
+### Analysis by hand, space targets, automatic retries (migration 38)
+- POST /api/ai/reprocess takes `folderId` / `accountId` (one folder, mailbox or archive — any folder but Trash/Junk,
+  whatever ai.analyzeFolders says) and `count: true` (dry run). Mail older than ai.openItemsDays is queued with
+  { quiet: true } unless `quiet` is given. UI: folder menu "Analyse older mail with AI…" and the archive card
+  (`components/AnalyzeOld.jsx`).
+- `targets.js` `targetsForMessage()` → { space, calendarId, taskListId, bookId } of the email's account's space
+  (space defaults first). GET /api/messages/:id/targets (events from an email open in that calendar);
+  POST /api/messages/:id/save-sender (saves the sender into that book; a collected address becomes a saved contact,
+  no duplicate). `addressBookForAccount` now prefers the account's book, the default, then synced books; never hidden.
+- `mail/retry.js` `autoRetry()` (scheduler, every 5 min): failed pending_ops (attempts ≥ 5) get one more try after
+  15 min, 30 min, 1 h … 24 h (8 times; pending_ops.auto_retries / next_retry_at); outbox rows that failed before
+  reaching the server (UNREACHED errors) are queued again up to 6 times (other failures may have been delivered and
+  stay manual); unsaved sent copies are queued again; an SMTP "sending failed" warning is re-checked every 10 min and
+  cleared when the server answers. The problems panel shows these as warnings with the next try until they succeed.
+- AI card on phones: suggested-event and reply buttons never wider than the card (title shortened / replies wrap).
+
+### Calmer interface, command palette, pinned conversations, notes (migration 39)
+- Sidebar (MailView `FolderNav`): core views (All inboxes, Needs reply, Action needed, Flagged, Snoozed, Outbox &
+  drafts); Important and Waiting for reply under "More" (shown while open; also "New category" / "New label" when
+  none exist — their sections are hidden while empty). No "New folder" rows: account header menu (right-click or "…"):
+  New folder, Analyse older mail, settings. AI categories and archives start folded (stored per device).
+- List rows: line 1 sender + state icons (reply needed, action, draft, note, invitation, attachment, flag) + date;
+  line 2 subject — preview (AI summary when shown); a third line only for topic / categories / labels / phishing /
+  shared space / not on server.
+- Pinned conversations: `pinned_threads` (user, thread_key = thread id or "m:<id>"); GET/POST
+  /api/messages/:id/pin (by message, so shared-space mail is pinned in its space); list `pinned` / `hasNote` flags,
+  `?pinned=1|0`; in inbox views (newest first, no search) a "Pinned" group above the list.
+- Notes: `thread_notes`; GET/PUT /api/messages/:id/note; reader shows a note box (autosaved), header chips Pin /
+  Note / Unsubscribe (when List-Unsubscribe).
+- Reader AI card: category, priority, important / not important and "mark as needs reply" in one "⋯" menu; the
+  contact profile moved into "Recent with", which is a one-line toggle.
+- Command palette (`components/CommandPalette.jsx`): Ctrl/⌘+K or the ⌘ button in the rail — actions, views, folders,
+  spaces, settings, mail and people found for the text, "Search mail for …", "Ask the assistant …" (via
+  sessionStorage halcyon.ask). Events: `halcyon:palette`, `halcyon:search` (MailView), `halcyon:new-event` (Calendar).
+
+### Native Android app with Firebase Cloud Messaging (migration 40)
 - Why: the Trusted Web Activity depended on Chrome's Web Push staying alive (notifications often missing on a real
   phone), and its launcher shortcuts reopened the last page instead of the chosen one (Chrome reused the tab).
 - `android/`: Kotlin app (minSdk 24, target/compile 36, AGP 8.9.1, Kotlin 2.1, Gradle 8.11.1, no AppCompat), package
@@ -758,11 +793,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   refuse unless the page origin is the server): `pushState()`, `call(id,'enable')` → POST_NOTIFICATIONS (13+) + FCM
   token, answered by `window.halcyonAndroidResolve(id, result)`; `setOn`, `ready`, `saveFile`, `retry`, `changeServer`.
 - Server: `fcm.js` (HTTP v1, service-account JWT → OAuth token cached ~1 h, 401 → new token; 404 / UNREGISTERED /
-  invalid token → `{ gone }` → row deleted); `fcm_tokens` (migration 38, token UNIQUE, moves to the user who registers
+  invalid token → `{ gone }` → row deleted); `fcm_tokens` (migration 40, token UNIQUE, moves to the user who registers
   it last); notifications.js `pushFcm` next to Web Push with the same message (+ `kind`, `as` as strings; hideContent
   already applied) and the same decision of what notifies. Routes: `GET /api/push/fcm` (available, error),
   `POST /api/push/fcm/register|unregister`; `/api/push/devices` lists Android devices too (kind 'android').
-  Config: `HALCYON_FCM_SERVICE_ACCOUNT` (path; `HALCYON_FCM_URL` only for tests). round47 tests registration, the
+  Config: `HALCYON_FCM_SERVICE_ACCOUNT` (path; `HALCYON_FCM_URL` only for tests). round48 tests registration, the
   message shape (data only, priority HIGH, hidden content), token reuse of the access token and forgetting dead tokens
   against a local mock of Google's token + FCM endpoints.
 - Web: push.js uses the bridge when present (Settings → Notifications shows why push is unavailable: no Firebase in

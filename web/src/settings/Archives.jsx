@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, Plus, Upload, Download, Trash2, Pencil, FolderOpen } from 'lucide-react';
+import { Archive, Plus, Upload, Download, Trash2, Pencil, FolderOpen, Sparkles } from 'lucide-react';
+import AnalyzeOld from '../components/AnalyzeOld.jsx';
 import { api, onEvent } from '../api.js';
 import { loadFolders, loadAccounts } from '../data.js';
 import { toast, toastError, fmtSize, navigate } from '../util.js';
@@ -15,6 +16,7 @@ const STATUS = { queued: 'Waiting', running: 'Working', done: 'Done', failed: 'F
 export default function Archives() {
   const [data, setData] = useState(null);
   const [upload, setUpload] = useState(null);
+  const [analyze, setAnalyze] = useState(null);
   const file = useRef();
   const target = useRef(null);
   const load = () => api.get('/api/archives').then(setData).catch(toastError);
@@ -118,6 +120,7 @@ export default function Archives() {
   return (
     <div className="settings-section">
       <h2>Archives</h2>
+      {analyze && <AnalyzeOld {...analyze} onClose={() => setAnalyze(null)} />}
       <div className="muted">Mail kept here by Halcyon, on no mail server — like Outlook's archive (.pst) files. Import Outlook data files (.pst, .ost) and other mail files (.mbox, .eml, a .zip of .eml files), or move mail out of your mailbox to free space there (right-click a message or a folder → archive). Archived mail is searchable and shown with your folders; the AI does not analyse it again (moved mail keeps its analysis).</div>
       <input type="file" ref={file} accept={ACCEPT} hidden onChange={(e) => { const f = e.target.files[0]; e.target.value = ''; if (f) send(f); }} />
       {upload && <div className="notice upload-progress">
@@ -140,6 +143,7 @@ export default function Archives() {
             {a.folders.filter((f) => f.total).map((f) => <a key={f.id} href={`#/mail/f${f.id}`}>{f.path} ({f.total})</a>)}</div>}
           <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
             <button className="btn sm" onClick={() => importInto(a.id)}><Upload size={14} /> Import a file…</button>
+            {a.messages > 0 && <button className="btn sm" title="Summaries, topics and facts of its emails for search and the assistant" onClick={() => setAnalyze({ accountId: a.id, name: a.name })}><Sparkles size={14} /> Analyse with AI…</button>}
             <button className="btn sm" disabled={!a.messages} title="All folders as .eml files in a ZIP — open it in Explorer and drag the emails into Outlook or another mail program, or import it back here" onClick={() => window.open(api.url(`/api/archives/export?archiveId=${a.id}`))}><Download size={14} /> Export (.eml in ZIP)</button>
             {a.folders[0] && <button className="btn sm ghost" onClick={() => navigate(`#/mail/f${a.folders.find((f) => f.total)?.id || a.folders[0].id}`)}><FolderOpen size={14} /> Open</button>}
             <button className="btn sm ghost" onClick={() => rename(a)}><Pencil size={14} /> Rename</button>

@@ -64,7 +64,8 @@ test('when storing it on the server fails, the local copy is never cleaned up an
   new AccountSync(account.id).reconcileOrphans();
   assert.ok(db.prepare('SELECT 1 FROM messages WHERE id = ?').get(localId), 'still there');
   const { problems } = await api('GET', '/api/status/problems');
-  assert.ok(problems.some((p) => p.key.startsWith('op:') && p.level === 'error' && p.actions.includes('retry-op')));
+  // Reported, retryable by hand — and tried again by itself later (a warning until those tries are used up).
+  assert.ok(problems.some((p) => p.key.startsWith('op:') && p.level === 'warn' && /trying again automatically/.test(p.title) && p.actions.includes('retry-op')));
   db.prepare("DELETE FROM pending_ops WHERE op = 'append'").run(); // e.g. dismissed
   const again = (await api('GET', '/api/status/problems')).problems.find((p) => p.key.startsWith('unsaved:'));
   assert.match(again.title, /1 sent message is not saved on the server/);

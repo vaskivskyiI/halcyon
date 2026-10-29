@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing, offlineState } from './api.js';
 import './back.js';
 import { pushIsOn } from './push.js';
@@ -17,6 +17,7 @@ import ContactsView from './contacts/ContactsView.jsx';
 import TasksView from './tasks/TasksView.jsx';
 import TaskDialog from './tasks/TaskDialog.jsx';
 import Problems from './components/Problems.jsx';
+import CommandPalette from './components/CommandPalette.jsx';
 import { openComposer } from './mail/Composer.jsx';
 import AssistantView from './assistant/AssistantView.jsx';
 import SettingsView from './settings/SettingsView.jsx';
@@ -197,6 +198,7 @@ function Shell() {
     <div className="app">
       {(readOnly || acting || offline !== null) && <div className={`readonly-pill ${acting && !readOnly && offline === null ? 'shared' : ''}`} title={offline !== null ? 'Halcyon cannot reach your server: you see the copy saved on this device. Changes (sending, moving, marking) need the connection.' : readOnly ? 'This browser session cannot change anything: no sending, deleting, moving, marking or settings. Sign out and sign in normally to make changes.' : `You are working in the shared space “${acting.name}” — its mail, calendar, contacts and tasks are shared with its members.`}>
         {[offline !== null && 'Offline — saved copy', acting && `Shared: ${acting.name}`, readOnly && 'Read-only session'].filter(Boolean).join(' · ')}</div>}
+      <CommandPalette />
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
         {nav.map(([id, Icon, label, badge]) => (
@@ -205,13 +207,14 @@ function Shell() {
             <Icon size={21} />{badge > 0 && <span className="badge">{badge > 99 ? '99+' : badge}</span>}
           </button>
         ))}
+        <button title="Go to, do, find — Ctrl+K" aria-label="Go to or do (Ctrl+K)" onClick={() => window.dispatchEvent(new Event('halcyon:palette'))}><Command size={19} /></button>
         <div className="spacer" />
         <Problems />
         <SpaceSwitcher />
         <button title={connected ? 'Sync now' : 'Sync now — live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'}
           aria-label="Sync now" onClick={syncNow} className={connected ? '' : 'offline'}>{syncing ? <Spinner size={18} /> : <RefreshCw size={19} />}{!connected && <span className="offline-dot" />}</button>
         {/* Light → dark → automatic (follows the device) → light … */}
-        <button title={`Theme: ${{ light: 'light', dark: 'dark', system: 'automatic (as the device)' }[theme]} — click for ${{ light: 'dark', dark: 'automatic', system: 'light' }[theme]}`} aria-label="Change theme"
+        <button className="desk-only" title={`Theme: ${{ light: 'light', dark: 'dark', system: 'automatic (as the device)' }[theme]} — click for ${{ light: 'dark', dark: 'automatic', system: 'light' }[theme]}`} aria-label="Change theme"
           onClick={() => saveSettings({ ui: { theme: { light: 'dark', dark: 'system', system: 'light' }[theme] } })}>{theme === 'system' ? <SunMoon size={19} /> : dark ? <Moon size={19} /> : <Sun size={19} />}</button>
         <button className={section === 'settings' ? 'active' : ''} title="Settings" aria-label="Settings" onClick={() => navigate('#/settings')}><Settings size={21} /></button>
       </nav>

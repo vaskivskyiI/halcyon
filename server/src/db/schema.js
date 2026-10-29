@@ -452,7 +452,20 @@ export const migrations = [
   ALTER TABLE task_lists ADD COLUMN hidden INTEGER DEFAULT 0;
   ALTER TABLE address_books ADD COLUMN hidden INTEGER DEFAULT 0;
   `,
-  // 38: the native Android app gets its notifications through Firebase Cloud Messaging: its device token per user
+  // 38: failed server changes and sends that could not reach the server are tried again automatically, with growing
+  // pauses (scheduler.js autoRetry): how often already, and when next.
+  `
+  ALTER TABLE pending_ops ADD COLUMN auto_retries INTEGER DEFAULT 0;
+  ALTER TABLE pending_ops ADD COLUMN next_retry_at INTEGER;
+  ALTER TABLE outbox ADD COLUMN auto_retries INTEGER DEFAULT 0;
+  `,
+  // 39: conversations pinned to the top of the list, and private notes on conversations (thread_key: the thread id,
+  // or "m:<message id>" for a message without one).
+  `
+  CREATE TABLE pinned_threads (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_key TEXT NOT NULL, pinned_at INTEGER, PRIMARY KEY (user_id, thread_key));
+  CREATE TABLE thread_notes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_key TEXT NOT NULL, note TEXT, updated_at INTEGER, PRIMARY KEY (user_id, thread_key));
+  `,
+  // 40: the native Android app gets its notifications through Firebase Cloud Messaging: its device token per user
   // (a token moves to whoever registers it last — the app signed in as someone else).
   `
   CREATE TABLE fcm_tokens (
