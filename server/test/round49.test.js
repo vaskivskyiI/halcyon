@@ -75,3 +75,12 @@ test('automatic retries start quickly and then wait longer and longer', async ()
   assert.ok(RETRY_STEPS[0] <= 60e3 && RETRY_STEPS[1] <= 2 * 60e3, 'the first tries come within a minute or two');
   for (let i = 1; i < RETRY_STEPS.length; i++) assert.ok(RETRY_STEPS[i] > RETRY_STEPS[i - 1]);
 });
+
+test('searches and recipient suggestions ignore accents; people from mail are suggested too', async () => {
+  const id = add(inbox, 'Pozdrav iz Ljubljane');
+  db.prepare("UPDATE messages SET from_addr = 'sasa@example.si', from_name = 'Saša Žagar' WHERE id = ?").run(id);
+  const s = await api('GET', '/api/contacts/autocomplete?q=zagar');
+  assert.ok(s.some((x) => x.address === 'sasa@example.si' && x.name === 'Saša Žagar'), 'from the mail, without the accents');
+  const found = await api('GET', `/api/messages?view=unified&q=${encodeURIComponent('from:sasa subject:ljubljane')}`);
+  assert.ok(found.items.some((m) => m.id === id));
+});

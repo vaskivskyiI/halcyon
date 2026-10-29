@@ -1,4 +1,4 @@
-import { get, all, run, now, json, tx } from '../db/index.js';
+import { get, all, run, now, json, tx, fold } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { serializeContact, autocomplete } from '../contacts/service.js';
@@ -116,7 +116,7 @@ export default async function contactRoutes(app) {
     const { q, group, filter } = req.query;
     const sc = scope(req.user.id, reqSpace(req));
     const where = ['c.user_id = ?', 'c.deleted = 0', inIds('c.address_book_id', sc?.bookIds), 'c.address_book_id NOT IN (SELECT id FROM address_books WHERE hidden = 1)'], params = [req.user.id];
-    if (q) { where.push("(c.display_name LIKE ? OR c.emails_json LIKE ? OR c.org LIKE ? OR c.phones_json LIKE ?)"); params.push(...Array(4).fill(`%${q}%`)); }
+    if (q) { where.push('(fold(c.display_name) LIKE ? OR fold(c.emails_json) LIKE ? OR fold(c.org) LIKE ? OR c.phones_json LIKE ?)'); params.push(...Array(4).fill(`%${fold(q)}%`)); }
     if (group) { where.push('EXISTS (SELECT 1 FROM json_each(c.groups_json) j WHERE j.value = ?)'); params.push(group); }
     if (filter === 'favorites') where.push('c.favorite = 1');
     if (filter === 'collected') where.push('c.auto_collected = 1');

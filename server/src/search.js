@@ -1,5 +1,5 @@
 // Search: Outlook- and Gmail-like operators, FTS5 keyword search and semantic (embedding) search, fused with RRF.
-import { all, get } from './db/index.js';
+import { all, get, fold } from './db/index.js';
 import { embed } from './ai/router.js';
 import { searchMemory } from './ai/memory.js';
 import { inIds } from './spaces.js';
@@ -100,15 +100,15 @@ const ftsEscape = (t) => `"${t.replace(/"/g, '""')}"*`;
 export function buildWhere(userId, f, sc = null) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
   const add = (sql, ...p) => { where.push(sql); params.push(...p); };
-  for (const { val, neg } of f.from || []) add(`${neg ? 'NOT ' : ''}(m.from_addr LIKE ? OR m.from_name LIKE ?)`, `%${val}%`, `%${val}%`);
-  for (const { val, neg } of f.to || []) add(`${neg ? 'NOT ' : ''}(m.to_json LIKE ? OR m.cc_json LIKE ?)`, `%${val}%`, `%${val}%`);
-  for (const { val, neg } of f.cc || []) add(`${neg ? 'NOT ' : ''}m.cc_json LIKE ?`, `%${val}%`);
-  for (const { val, neg } of f.bcc || []) add(`${neg ? 'NOT ' : ''}COALESCE(m.bcc_json, '') LIKE ?`, `%${val}%`);
-  for (const { val, neg } of f.participants || []) add(`${neg ? 'NOT ' : ''}(m.from_addr LIKE ? OR m.from_name LIKE ? OR m.to_json LIKE ? OR m.cc_json LIKE ?)`, ...Array(4).fill(`%${val}%`));
+  for (const { val, neg } of f.from || []) add(`${neg ? 'NOT ' : ''}(fold(m.from_addr) LIKE ? OR fold(m.from_name) LIKE ?)`, `%${fold(val)}%`, `%${fold(val)}%`);
+  for (const { val, neg } of f.to || []) add(`${neg ? 'NOT ' : ''}(fold(m.to_json) LIKE ? OR fold(m.cc_json) LIKE ?)`, `%${fold(val)}%`, `%${fold(val)}%`);
+  for (const { val, neg } of f.cc || []) add(`${neg ? 'NOT ' : ''}fold(m.cc_json) LIKE ?`, `%${fold(val)}%`);
+  for (const { val, neg } of f.bcc || []) add(`${neg ? 'NOT ' : ''}fold(COALESCE(m.bcc_json, '')) LIKE ?`, `%${fold(val)}%`);
+  for (const { val, neg } of f.participants || []) add(`${neg ? 'NOT ' : ''}(fold(m.from_addr) LIKE ? OR fold(m.from_name) LIKE ? OR fold(m.to_json) LIKE ? OR fold(m.cc_json) LIKE ?)`, ...Array(4).fill(`%${fold(val)}%`));
   // subject:"a phrase" as written; subject:(two words) each somewhere in the subject.
-  for (const { val, neg, phrase } of f.subject || []) for (const w of phrase ? [val] : val.split(/\s+/)) add(`${neg ? 'NOT ' : ''}m.subject LIKE ?`, `%${w}%`);
+  for (const { val, neg, phrase } of f.subject || []) for (const w of phrase ? [val] : val.split(/\s+/)) add(`${neg ? 'NOT ' : ''}fold(m.subject) LIKE ?`, `%${fold(w)}%`);
   for (const { val, neg } of f.has || []) if (/attach/.test(val)) add(`m.has_attachments = ${neg ? 0 : 1}`);
-  for (const { val, neg } of f.attachments || []) add(`${neg ? 'NOT ' : ''}(m.has_attachments = 1 AND m.attachments_json LIKE ?)`, `%${val.replace(/[%_]/g, '')}%`);
+  for (const { val, neg } of f.attachments || []) add(`${neg ? 'NOT ' : ''}(m.has_attachments = 1 AND fold(m.attachments_json) LIKE ?)`, `%${fold(val.replace(/[%_]/g, ''))}%`);
   for (const { val, neg } of f.received || []) {
     const r = dateRange(val);
     if (!r) { where.push('0'); continue; }

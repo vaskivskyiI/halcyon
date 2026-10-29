@@ -7,6 +7,9 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
+/** Text for comparing: lower case without accents (č → c, š → s, ž → z), so a search may leave them out. */
+export const fold = (s) => (s == null ? s : String(s).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase());
+db.function('fold', { deterministic: true }, fold);
 
 const current = db.pragma('user_version', { simple: true });
 for (let v = current; v < migrations.length; v++) {
