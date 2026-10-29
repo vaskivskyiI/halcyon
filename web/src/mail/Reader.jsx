@@ -14,6 +14,7 @@ import { openComposer, replyPayload, Composer } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
 import PersonProfile from '../components/PersonProfile.jsx';
+import InkwellNotes from '../components/InkwellNotes.jsx';
 import { loadFolders, setSpace } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 import { topicView, categoryView } from './MailView.jsx';
@@ -375,6 +376,7 @@ export default function Reader({ id, view }) {
           }} />}
 
         {!isDraftMsg(latest) && <RecentWith messageId={latest.id} view={view} />}
+        {!isDraftMsg(latest) && <InkwellNotes kind="email" refs={msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)} />}
 
         {msgs.map((m, i) => {
           if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;

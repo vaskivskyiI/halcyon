@@ -24,6 +24,7 @@ import contactRoutes from './routes/contacts.js';
 import taskRoutes from './routes/tasks.js';
 import aiRoutes from './routes/ai.js';
 import settingsRoutes from './routes/settings.js';
+import integrationRoutes from './routes/integrations.js';
 import spaceRoutes from './routes/spaces.js';
 import { syncManager } from './mail/sync.js';
 import { startQueue } from './ai/queue.js';
@@ -98,6 +99,7 @@ export async function buildServer({ background = true } = {}) {
 
   await app.register(authRoutes);
   await app.register(settingsRoutes);
+  await app.register(integrationRoutes);
   await app.register(spaceRoutes);
   await app.register(diagnosticsRoutes);
   await app.register(threadRoutes);

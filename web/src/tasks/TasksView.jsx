@@ -6,6 +6,7 @@ import { Modal, useMenu } from '../components/common.jsx';
 import { store } from '../store.js';
 import { jump } from '../back.js';
 import LocalDefault from '../components/LocalDefault.jsx';
+import InkwellNotes from '../components/InkwellNotes.jsx';
 import { dueOptions, fmtDue, DueField, RepeatField, ListField, repeatLabel } from './TaskDialog.jsx';
 
 // The list shown (null = all lists of the active space), remembered on this device.
@@ -200,6 +201,7 @@ function TaskEditor({ task, lists, onClose, onSave }) {
         <div className="field">Repeat<RepeatField value={f.rrule} disabled={!f.due} onChange={(rrule) => setF({ ...f, rrule })} /></div>
         {lists.filter((l) => !l.readonly).length > 1 && <div className="field">List<ListField lists={lists} auto={false} value={f.listId} onChange={(listId) => setF({ ...f, listId })} /></div>}
         {task.readonly && <div className="small faint"><Lock size={11} /> This list is read-only.</div>}
+        <InkwellNotes kind="task" refs={[task.id]} style={{ margin: 0 }} />
         <label className="row small"><input type="checkbox" checked={!!f.priority} onChange={(e) => setF({ ...f, priority: e.target.checked ? 1 : 0 })} /> Important</label>
       </div>
     </Modal>

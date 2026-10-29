@@ -4,6 +4,7 @@ import { api, onEvent, stream } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import LocalDefault from '../components/LocalDefault.jsx';
+import InkwellNotes from '../components/InkwellNotes.jsx';
 import { toast, toastError, startOfDay, addDays, startOfWeek, toLocalInput, toDateInput, fmtTime, navigate } from '../util.js';
 
 const HOUR_PX = 48;
@@ -623,6 +624,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
         </select>
       </div>
       <textarea className="input" rows={4} placeholder="Description" value={ev.description || ''} onChange={(e) => set('description', e.target.value)} disabled={readonly} />
+      {isExisting && <InkwellNotes kind="event" refs={[initial.id, initial.seriesId]} style={{ margin: 0 }} />}
       {ev.organizer?.email && <div className="small faint">Organizer: {ev.organizer.name || ev.organizer.email}</div>}
       {ev.sourceMessageId && <div className="small"><a href={`#/mail/unified/${ev.sourceMessageId}`} onClick={onClose}>Open related email</a></div>}
       {scopeFor && <ScopeModal title={scopeFor === 'delete' ? 'Delete recurring event' : 'Save recurring event'} onClose={() => setScopeFor(null)} onPick={(s) => { const f = scopeFor; setScopeFor(null); f === 'delete' ? remove(s) : save(s); }} />}

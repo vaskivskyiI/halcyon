@@ -570,3 +570,6 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 @media (max-width: 600px) { .sender-row { flex-wrap: wrap; } }
 /* Contacts → Tidy up */
 .review-item { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.card.inkwell-notes { margin-bottom: 12px; padding: 6px 10px; }
+.inkwell-notes .inkwell-head { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
+.inkwell-notes .btn { text-decoration: none; }

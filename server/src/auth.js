@@ -65,7 +65,7 @@ export function userFromRequest(req) {
 }
 
 export const AS_COOKIE = 'halcyon_as';
-const PERSON_ONLY = /^\/api\/(auth|admin|shared|mcp-tokens)(\/|$|\?)/;
+const PERSON_ONLY = /^\/api\/(auth|admin|shared|mcp-tokens|integrations)(\/|$|\?)/;
 
 /** The shared-space user this request acts as: a user row, null (acting as oneself) or false (not a member). */
 export function actingAs(req, person, path = req.url) {

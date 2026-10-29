@@ -490,4 +490,12 @@ export const migrations = [
     PRIMARY KEY (user_id, address)
   );
   `,
+  // 43: other self-hosted apps the user connects (integrations.js) — for now Inkwell, whose pages link to mail, events
+  // and tasks: its address and the user's API token for it (encrypted).
+  `
+  CREATE TABLE integrations (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, base_url TEXT, token_enc TEXT, updated_at INTEGER,
+    PRIMARY KEY (user_id, kind)
+  );
+  `,
 ];

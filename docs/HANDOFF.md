@@ -872,3 +872,18 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Contact review: names compared by `sounds()` (Cyrillic transliterated; č/ч, š/ш, ž/ж, г/h/g, й/и/y/j/i, doubled
   letters unified), so "Ігор Васківський" = "Ihor Vaskivskyi"; reason "Same name in Latin and Cyrillic". AI variant
   pairs also include contacts in different scripts sharing a surname (contacts without email but with phones too).
+
+### Inkwell notes next to mail, events and tasks (migration 43, round53)
+- Inkwell (the user's self-hosted notes app, its own repo) links its pages to Halcyon items through the MCP endpoint
+  (refs = Halcyon's numeric ids as strings; kinds `email`, `event`, `task`). This is the reverse direction.
+- `integrations` table (user_id, kind = 'inkwell', base_url, token_enc): Settings → Integrations stores the address and
+  an Inkwell API token (`ink_…`, made in Inkwell → Settings → Apps & tokens), encrypted, never returned
+  (GET/PUT /api/integrations/inkwell → { url, hasToken, configured }; PUT { url: '' } disconnects; POST …/test).
+  `/api/integrations` always acts as the person (PERSON_ONLY), so a person's own Inkwell also serves shared spaces.
+- GET /api/integrations/inkwell/links?kind=…&ref=1,2,… (integrations.js `inkwellLookup`): one request to Inkwell's
+  /api/links/lookup for up to 100 numeric refs, 4 s timeout; only refs asked for are passed on; a relative or
+  non-http(s) `url` (Inkwell without INKWELL_PUBLIC_URL) becomes `<base>/#/n/<id>`. Not set up, unreachable or token
+  refused → { url: null, links: [] [, error] } and the views render exactly as without Inkwell.
+- Web `components/InkwellNotes.jsx` (answers cached 1 min per page load): the reader (all messages of the
+  conversation), the event editor (id + seriesId) and the task editor show "Notes" with the linked pages and
+  "New note in Inkwell" (opens `<base>/#/`).
