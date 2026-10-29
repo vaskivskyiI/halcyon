@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A server with a certificate from a private CA works when that CA is installed on the phone (Settings → Security →
+     Install a certificate → CA certificate) or added in the app's connect screen (Trust.kt). Plain http only for a
+     server the user typed in on purpose (LAN / VPN); the connect screen warns. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

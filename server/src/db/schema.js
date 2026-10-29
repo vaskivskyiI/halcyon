@@ -452,4 +452,13 @@ export const migrations = [
   ALTER TABLE task_lists ADD COLUMN hidden INTEGER DEFAULT 0;
   ALTER TABLE address_books ADD COLUMN hidden INTEGER DEFAULT 0;
   `,
+  // 38: the native Android app gets its notifications through Firebase Cloud Messaging: its device token per user
+  // (a token moves to whoever registers it last — the app signed in as someone else).
+  `
+  CREATE TABLE fcm_tokens (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, token TEXT NOT NULL UNIQUE,
+    device TEXT, created_at INTEGER, last_ok_at INTEGER
+  );
+  CREATE INDEX idx_fcm_tokens_user ON fcm_tokens(user_id);
+  `,
 ];

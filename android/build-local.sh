@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Builds the Android app on this machine (Linux / WSL): JDK 17 in $T/jdk, Android SDK in $T/sdk (with build-tools and
-# platform 36), Bubblewrap in $T/bw. Makes a signing key on the first run in $KEYDIR — keep that folder; every update
-# of the installed app must be signed with the same key.
-#   HOST=mail.example.com ./android/build-local.sh
+# Builds the native Android app (android/) on this machine (Linux / WSL) as a signed release APK in dist-apps/.
+#   ./android/build-local.sh                         (HOST=mail.example.com pre-fills the server on the first start)
+# Needs JDK 17 in $T/jdk and the Android SDK in $T/sdk (platform 36, build-tools 36.1.0); Gradle is downloaded into
+# $T once. Notifications need your Firebase project's android/app/google-services.json (or GOOGLE_SERVICES_JSON=path;
+# android/README.md) — without it the app is built without them. Makes a signing key on the first run in $KEYDIR:
+# keep that folder; every update of the installed app must be signed with the same key.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
-HOST=${HOST:?set HOST, e.g. HOST=mail.example.com}; PKG=${PKG:-cc.halcyon.mail}; APP_NAME=${APP_NAME:-Halcyon}; VERSION=${VERSION:-1.0.0}
+HOST=${HOST:-}; PKG=${PKG:-cc.halcyon.mail}; APP_NAME=${APP_NAME:-Halcyon}; VERSION=${VERSION:-2.0.0}
 KEYDIR=${KEYDIR:-$ROOT/../halcyon-android-signing}
 T=${T:-$HOME/android-build}
-# JAVA_HOME / ANDROID_HOME / BW from the environment win (the GitHub workflow sets them).
+GRADLE_VERSION=8.11.1
+# JAVA_HOME / ANDROID_HOME / GRADLE from the environment win (the GitHub workflow sets them).
 [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/keytool" ] || JAVA_HOME=$T/jdk
 export JAVA_HOME ANDROID_HOME=${ANDROID_HOME:-$T/sdk} PATH="$JAVA_HOME/bin:$PATH"
-BW=${BW:-$T/bw/node_modules/.bin/bubblewrap}
-# Bubblewrap still looks for the old `tools` folder of the SDK.
-[ -e "$ANDROID_HOME/tools" ] || ln -s cmdline-tools/latest "$ANDROID_HOME/tools"
-mkdir -p ~/.bubblewrap; echo "{\"jdkPath\":\"$JAVA_HOME\",\"androidSdkPath\":\"$ANDROID_HOME\"}" > ~/.bubblewrap/config.json
-mkdir -p "$KEYDIR"
+mkdir -p "$T" "$KEYDIR"
+
 if [ -n "${KEYSTORE_PASSWORD:-}" ]; then
   printf '%s\n' "$KEYSTORE_PASSWORD" > "$KEYDIR/password.txt"
 elif [ ! -f "$KEYDIR/halcyon-android.keystore" ]; then
@@ -26,28 +26,33 @@ elif [ ! -f "$KEYDIR/halcyon-android.keystore" ]; then
   printf '%s\n' "$P" > "$KEYDIR/password.txt"; chmod 600 "$KEYDIR/password.txt"
 fi
 P=$(cat "$KEYDIR/password.txt")
-W=$T/project; rm -rf "$W"; mkdir -p "$W"; cd "$W"
-cp "$KEYDIR/halcyon-android.keystore" android.keystore
-# Icons are read from the repo's copy (the same files the server serves): the build then also works when the server's
-# certificate comes from a private CA. The real addresses are put back before compiling.
-HOST=$HOST PKG=$PKG APP_NAME=$APP_NAME VERSION=$VERSION node -e '
-  const fs = require("fs"), e = process.env;
-  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8").replace("\"__CODE__\"", "0"),
-    (k, v) => typeof v === "string" ? v.replaceAll("__HOST__", e.HOST).replaceAll("__NAME__", e.APP_NAME)
-      .replaceAll("__PACKAGE__", e.PKG).replaceAll("__VERSION__", e.VERSION) : v);
-  m.appVersionCode = Math.floor(Date.now() / 60000) - 29000000;
-  const local = (u) => u.replace("https://" + e.HOST + "/", "http://127.0.0.1:8765/");
-  for (const k of ["iconUrl", "maskableIconUrl", "monochromeIconUrl", "webManifestUrl"]) m[k] = local(m[k]);
-  for (const s of m.shortcuts) s.chosenIconUrl = local(s.chosenIconUrl);
-  fs.writeFileSync("twa-manifest.json", JSON.stringify(m, null, 2));' "$ROOT/android/twa-manifest.template.json"
-(cd "$ROOT/web/public" && exec python3 -m http.server 8765 --bind 127.0.0.1) > /dev/null 2>&1 & ICONS=$!
-trap 'kill $ICONS 2>/dev/null' EXIT; sleep 1
-{ yes || true; } | $BW update --skipVersionUpgrade --manifest=./twa-manifest.json
-sed -i "s#http://127.0.0.1:8765/#https://$HOST/#g" app/build.gradle; ! grep -q 127.0.0.1 app/build.gradle
-BUBBLEWRAP_KEYSTORE_PASSWORD=$P BUBBLEWRAP_KEY_PASSWORD=$P $BW build --skipPwaValidation --manifest=./twa-manifest.json
-rm -f android.keystore
+
+G=${GRADLE:-$T/gradle-$GRADLE_VERSION/bin/gradle}
+if [ ! -x "$G" ]; then
+  curl -fsSL -o "$T/gradle.zip" "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+  (cd "$T" && jar xf gradle.zip && rm gradle.zip && chmod +x "gradle-$GRADLE_VERSION/bin/gradle")
+fi
+
+# Built in a copy: the Firebase file goes in there, and the checkout stays clean.
+W=$T/native; rm -rf "$W"; mkdir -p "$W"
+tar -C "$ROOT/android" --exclude=build --exclude=.gradle --exclude=local.properties -cf - . | tar -C "$W" -xf -
+GS=${GOOGLE_SERVICES_JSON:-$ROOT/android/app/google-services.json}
+if [ -f "$GS" ]; then
+  grep -q "\"package_name\": *\"$PKG\"" "$GS" || { echo "$GS has no Android app with the package $PKG (Firebase console → Project settings → Your apps)"; exit 1; }
+  cp "$GS" "$W/app/google-services.json"
+else
+  echo "WARNING: no google-services.json — the app is built WITHOUT notifications (android/README.md)."
+fi
+
+# Each build gets a higher version code (minutes since 2025; above the earlier Trusted Web Activity's builds).
+CODE=$(( $(date +%s) / 60 - 29000000 ))
+# The password goes in the build copy's properties (not on the command line) and is removed right after.
+(umask 077; printf 'halcyon.keystorePassword=%s\n' "$P" >> "$W/gradle.properties")
+trap 'rm -f "$W/gradle.properties"' EXIT
+"$G" -p "$W" --no-daemon -q assembleRelease \
+  -Phalcyon.package="$PKG" -Phalcyon.name="$APP_NAME" -Phalcyon.version="$VERSION" -Phalcyon.versionCode="$CODE" \
+  -Phalcyon.server="$HOST" -Phalcyon.keystore="$KEYDIR/halcyon-android.keystore"
+
 OUT=$ROOT/dist-apps; mkdir -p "$OUT"
-cp app-release-signed.apk "$OUT/Halcyon-$VERSION.apk"; cp app-release-bundle.aab "$OUT/Halcyon-$VERSION.aab"
-echo "Built $OUT/Halcyon-$VERSION.apk. For the server environment:"
-echo "HALCYON_ANDROID_PACKAGE=$PKG"
-keytool -list -v -keystore "$KEYDIR/halcyon-android.keystore" -alias halcyon -storepass "$P" | sed -n 's/.*SHA256: /HALCYON_ANDROID_SHA256=/p'
+cp "$W/app/build/outputs/apk/release/app-release.apk" "$OUT/Halcyon-$VERSION.apk"
+echo "Built $OUT/Halcyon-$VERSION.apk (package $PKG, version $VERSION / $CODE$([ -f "$GS" ] && echo ', with notifications'))."

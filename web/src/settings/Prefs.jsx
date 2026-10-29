@@ -94,7 +94,7 @@ export function Notifications() {
           <button className="btn sm ghost" onClick={async () => { await disablePush(); resetPushCache(); refresh(); }}>Turn off here</button></>
           : <><span className="small grow">Get notifications on this device even when Halcyon is closed (phone, browser, the Android app).</span>
             <button className="btn sm primary" onClick={async () => { try { await enablePush(); resetPushCache(); toast('Push notifications are on'); refresh(); } catch (e) { toastError(e); } }}>Turn on</button></>}
-      </div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
+      </div> : push?.android ? <div className="small muted">{push.problem}</div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
       {devs.length > 0 && <div className="small faint">Devices with push: {devs.map((d) => d.device || 'device').join(', ')}</div>}
 
       <h3>What notifies</h3>

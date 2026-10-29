@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connect_title">Your Halcyon server</string>
+    <string name="connect_intro">Enter the address of your Halcyon server. You sign in on the next page; the app remembers you.</string>
+    <string name="connect_hint">https://mail.example.com</string>
+    <string name="connect_go">Connect</string>
+    <string name="connect_checking">Checking…</string>
+    <string name="connect_http">Plain http: passwords and mail cross the network unencrypted. Use https, or http only over a VPN or your own network.</string>
+    <string name="ca_title">Certificate from your own CA</string>
+    <string name="ca_intro">If the server\'s certificate comes from your own certificate authority, add that CA certificate (.crt, .pem or .cer) here, or install it on the phone: Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate.</string>
+    <string name="ca_add">Add CA certificate…</string>
+    <string name="ca_clear">Remove</string>
+    <string name="ca_none">No CA certificate added.</string>
+    <string name="ch_mail">New mail</string>
+    <string name="ch_mail_quiet">New mail (silent)</string>
+    <string name="ch_reminders">Reminders</string>
+    <string name="sc_mail">Mail</string>
+    <string name="sc_calendar">Calendar</string>
+    <string name="sc_tasks">Tasks</string>
+    <string name="sc_contacts">Contacts</string>
+    <string name="sc_compose">New message</string>
+    <string name="sc_compose_short">Write</string>
+    <string name="saved_to">Saved to Downloads: %1$s</string>
+    <string name="download_failed">Download failed: %1$s</string>
+    <string name="no_app">No app on this phone opens %1$s</string>
+</resources>

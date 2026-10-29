@@ -1,5 +1,6 @@
-// Notifications on the user's devices: the open app (over the event socket) and Web Push to phones and browsers that
-// subscribed (also when Halcyon is closed — no Google/Firebase account needed; the browser's push service is used).
+// Notifications on the user's devices: the open app (over the event socket), Web Push to phones and browsers that
+// subscribed (also when Halcyon is closed — no Google/Firebase account needed; the browser's push service is used) and
+// Firebase Cloud Messaging to the native Android app (fcm.js; only when the server has a Firebase service account).
 // One place decides what notifies, by the user's settings: which mail (all / important / none), reminders, quiet
 // hours, muted accounts and shared spaces, and whether the content is shown on the lock screen.
 import webpush from 'web-push';
@@ -7,6 +8,7 @@ import { get, all, run, json, now } from './db/index.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
+import { fcmSend } from './fcm.js';
 
 const log = logger('notify');
 
@@ -26,7 +28,19 @@ export function subscribe(userId, sub, device = '') {
   userId, String(sub.endpoint), JSON.stringify(sub.keys), String(device || '').slice(0, 80), now());
 }
 export const unsubscribe = (userId, endpoint) => run('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', userId, String(endpoint || '')).changes;
-export const devices = (userId) => all('SELECT id, device, created_at AS createdAt, last_ok_at AS lastOkAt FROM push_subscriptions WHERE user_id = ? ORDER BY id', userId);
+export const devices = (userId) => [
+  ...all('SELECT id, device, created_at AS createdAt, last_ok_at AS lastOkAt FROM push_subscriptions WHERE user_id = ? ORDER BY id', userId),
+  ...all("SELECT id, device, created_at AS createdAt, last_ok_at AS lastOkAt, 'android' AS kind FROM fcm_tokens WHERE user_id = ? ORDER BY id", userId),
+];
+
+/** The Android app on this device registers its FCM token (moves to this user if another had it). */
+export function registerFcm(userId, token, device = '') {
+  token = String(token || '').trim();
+  if (!/^[\w:.-]{20,4096}$/.test(token)) throw new Error('Not an FCM token');
+  run(`INSERT INTO fcm_tokens (user_id, token, device, created_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, device = excluded.device`, userId, token, String(device || '').slice(0, 80), now());
+}
+export const unregisterFcm = (userId, token) => run('DELETE FROM fcm_tokens WHERE user_id = ? AND token = ?', userId, String(token || '')).changes;
 
 /** The notification settings with defaults (older settings: newMail / onlyImportant). */
 export function prefsOf(userId) {
@@ -75,6 +89,7 @@ export function notifyUser(ownerId, kind, data) {
     };
     notify(r.id, 'notify:show', msg);
     push(r.id, msg).catch((e) => log.warn(`push: ${e.message}`));
+    pushFcm(r.id, kind, msg).catch((e) => log.warn(`fcm: ${e.message}`));
   }
 }
 
@@ -93,5 +108,16 @@ async function push(userId, msg) {
       if ([404, 410].includes(e.statusCode)) run('DELETE FROM push_subscriptions WHERE id = ?', s.id);
       else log.warn(`push to ${s.device || s.id}: ${e.statusCode || ''} ${e.message}`);
     }
+  }
+}
+
+async function pushFcm(userId, kind, msg) {
+  const tokens = all('SELECT * FROM fcm_tokens WHERE user_id = ?', userId);
+  for (const t of tokens) {
+    try {
+      const r = await fcmSend(t.token, { ...msg, kind, as: msg.as || '' }, { ttlSeconds: kind === 'reminder' ? 3600 : 6 * 3600 });
+      if (r.gone) run('DELETE FROM fcm_tokens WHERE id = ?', t.id);
+      else run('UPDATE fcm_tokens SET last_ok_at = ? WHERE id = ?', now(), t.id);
+    } catch (e) { log.warn(`fcm to ${t.device || t.id}: ${e.message}`); }
   }
 }

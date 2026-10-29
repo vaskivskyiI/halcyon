@@ -10,8 +10,9 @@ services:
       HALCYON_SECRET: ${HALCYON_SECRET:?set HALCYON_SECRET in .env (openssl rand -base64 32)}
       HALCYON_PUBLIC_URL: ${HALCYON_PUBLIC_URL:-}
       HALCYON_TRUST_PROXY: ${HALCYON_TRUST_PROXY:-}
-      HALCYON_ANDROID_PACKAGE: ${HALCYON_ANDROID_PACKAGE:-}   # Android app (android/README.md)
+      HALCYON_ANDROID_PACKAGE: ${HALCYON_ANDROID_PACKAGE:-}   # the earlier Android app (Trusted Web Activity)
       HALCYON_ANDROID_SHA256: ${HALCYON_ANDROID_SHA256:-}
+      HALCYON_FCM_SERVICE_ACCOUNT: ${HALCYON_FCM_SERVICE_ACCOUNT:-}   # Android notifications, e.g. /data/firebase-service-account.json (android/README.md)
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}

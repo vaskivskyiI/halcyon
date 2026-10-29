@@ -531,7 +531,7 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   rewritten; PNG icons + manifest (maskable, shortcuts) for installing as an app.
 
 ### Android app, touch gestures, desktop window from notifications (no migration)
-- Android = Trusted Web Activity built by Bubblewrap: `android/twa-manifest.template.json` + `.github/workflows/android.yml`
+- (Replaced by the native app, see "Native Android app" below.) Android = Trusted Web Activity built by Bubblewrap: `android/twa-manifest.template.json` + `.github/workflows/android.yml`
   (manual run with host/name/package/version; signing key only from repository secrets, never uploaded). The server
   serves `/.well-known/assetlinks.json` from `HALCYON_ANDROID_PACKAGE` / `HALCYON_ANDROID_SHA256` (config.android),
   so the app opens without a browser bar. Steps for the owner: android/README.md. NOT verified: the workflow itself,
@@ -736,3 +736,41 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   in the main thread a 4 GB file blocked the whole server for minutes (open + folder count); measured on the 14 MB
   sample: worst main-thread stall 2.4 s before, 1 ms now. round38's PST test (TEST_PST) asserts the server stays
   responsive.
+
+### Native Android app with Firebase Cloud Messaging (migration 38)
+- Why: the Trusted Web Activity depended on Chrome's Web Push staying alive (notifications often missing on a real
+  phone), and its launcher shortcuts reopened the last page instead of the chosen one (Chrome reused the tab).
+- `android/`: Kotlin app (minSdk 24, target/compile 36, AGP 8.9.1, Kotlin 2.1, Gradle 8.11.1, no AppCompat), package
+  `cc.halcyon.mail` signed with the same key as the TWA, so it installs as an update. MainActivity = the server in a
+  WebView (singleTask; cookies flushed on pause; back = web history, then to background; window.open / target=_blank
+  caught by a throwaway WebView; same-origin `/api/` links and downloads fetched natively with the session cookie →
+  Downloads (MediaStore) or, for `?inline=1`, cache + ACTION_VIEW via FileProvider; blob: read by the page and passed
+  as base64; mailto: → `#/compose?url=…`; other links open outside). ConnectActivity: server address checked with
+  `/api/health` before saving; CA certificates added in the app (Trust.kt, filesDir/ca) are accepted in
+  `onReceivedSslError` only for the configured host, only when the issuer is the sole problem; network_security_config
+  trusts user-installed CAs too. Dynamic shortcuts (Shortcuts in MainActivity.kt): New message, Mail, Calendar,
+  Tasks, Contacts → `ACTION_OPEN` + `route` extra; `onNewIntent` moves a running page with `window.halcyonOpen(route,
+  as)` (push.js, also enters the shared space of a notification), a page that is not ready is loaded at
+  `<server>/#/route`. Routes must start with `#/` (the activity is exported).
+- Push: PushService (FirebaseMessagingService) draws data messages itself (channels mail / mail_quiet / reminders;
+  tag = notification tag so updates replace; tap → MainActivity with route + as); onNewToken only stores the token,
+  the web app registers it again on each start. Bridge `window.halcyonAndroid` (addJavascriptInterface; methods
+  refuse unless the page origin is the server): `pushState()`, `call(id,'enable')` → POST_NOTIFICATIONS (13+) + FCM
+  token, answered by `window.halcyonAndroidResolve(id, result)`; `setOn`, `ready`, `saveFile`, `retry`, `changeServer`.
+- Server: `fcm.js` (HTTP v1, service-account JWT → OAuth token cached ~1 h, 401 → new token; 404 / UNREGISTERED /
+  invalid token → `{ gone }` → row deleted); `fcm_tokens` (migration 38, token UNIQUE, moves to the user who registers
+  it last); notifications.js `pushFcm` next to Web Push with the same message (+ `kind`, `as` as strings; hideContent
+  already applied) and the same decision of what notifies. Routes: `GET /api/push/fcm` (available, error),
+  `POST /api/push/fcm/register|unregister`; `/api/push/devices` lists Android devices too (kind 'android').
+  Config: `HALCYON_FCM_SERVICE_ACCOUNT` (path; `HALCYON_FCM_URL` only for tests). round47 tests registration, the
+  message shape (data only, priority HIGH, hidden content), token reuse of the access token and forgetting dead tokens
+  against a local mock of Google's token + FCM endpoints.
+- Web: push.js uses the bridge when present (Settings → Notifications shows why push is unavailable: no Firebase in
+  the build / server not configured); the service worker is still registered there (offline cache).
+- Build: `android/build-local.sh` (JDK + SDK in ~/android-build, Gradle downloaded there; builds in a copy;
+  `google-services.json` from android/app or GOOGLE_SERVICES_JSON, package checked; versionCode = minutes − 29e6 like
+  the TWA); `.github/workflows/android.yml` (secrets incl. GOOGLE_SERVICES_JSON_BASE64). Owner steps (Firebase project,
+  service-account key): android/README.md. The assetlinks.json route / HALCYON_ANDROID_* stay for old TWA installs.
+- Verified: the release APK builds and is signed with the TWA's key (with a placeholder google-services.json); server
+  tests. NOT verified: running on a phone or emulator (no KVM access in the dev WSL) — WebView loading, the private-CA
+  path, shortcuts/onNewIntent, file chooser, downloads, and real FCM delivery need a check on the owner's phone.

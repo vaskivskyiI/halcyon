@@ -11,10 +11,6 @@ deploy/halcyon.env
 /Halcyon-Setup-*.exe
 /halcyon-source.zip
 deploy/pod.options
-# Android build (android/README.md)
-/android/*
-!/android/README.md
-!/android/twa-manifest.template.json
-!/android/build-local.sh
+# Android app: build outputs and your Firebase file stay out (android/.gitignore)
 *.keystore
 /dist-apps/

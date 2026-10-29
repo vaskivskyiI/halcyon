@@ -33,6 +33,9 @@ export const config = {
   // The Android app (android/README.md): its package and signing-key fingerprint(s), published in assetlinks.json so
   // Android opens the app without a browser bar.
   android: { package: env.HALCYON_ANDROID_PACKAGE || '', sha256: (env.HALCYON_ANDROID_SHA256 || '').split(/[\s,]+/).filter(Boolean) },
+  // Push to the native Android app through Firebase Cloud Messaging (docs/HANDOFF.md, android/README.md): the path of
+  // the Firebase project's service-account key (JSON). Unset = no Android push; Web Push works without it.
+  fcm: { serviceAccount: env.HALCYON_FCM_SERVICE_ACCOUNT || '', url: (env.HALCYON_FCM_URL || 'https://fcm.googleapis.com').replace(/\/$/, '') },
   logLevel: env.HALCYON_LOG_LEVEL || 'info',
 };
 fs.mkdirSync(config.mailStoreDir, { recursive: true });

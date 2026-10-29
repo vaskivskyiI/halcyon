@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+*.keystore
+*.jks
+# Your Firebase project's file: download it yourself (android/README.md), never commit it.
+app/google-services.json

@@ -5,7 +5,8 @@ import { backfillAnalysis } from '../mail/pipeline.js';
 import { oauthAvailable } from '../mail/oauth.js';
 import { config } from '../config.js';
 import { run } from '../db/index.js';
-import { vapidKeys, subscribe, unsubscribe, devices, notifyUser } from '../notifications.js';
+import { vapidKeys, subscribe, unsubscribe, devices, notifyUser, registerFcm, unregisterFcm } from '../notifications.js';
+import { fcmAccount, fcmError } from '../fcm.js';
 
 export default async function settingsRoutes(app) {
   // ---- Web Push (notifications.js): this device subscribes / unsubscribes; a test notification.
@@ -19,6 +20,13 @@ export default async function settingsRoutes(app) {
     } catch (e) { return reply.code(400).send({ error: e.message }); }
   });
   app.post('/api/push/unsubscribe', { preHandler: requireUser }, async (req) => ({ removed: unsubscribe(req.person?.id || req.user.id, req.body?.endpoint) }));
+  // ---- The native Android app (FCM): whether this server can reach it; its token registered / removed.
+  app.get('/api/push/fcm', { preHandler: requireUser }, async () => ({ available: !!fcmAccount(), error: fcmError() }));
+  app.post('/api/push/fcm/register', { preHandler: requireUser }, async (req, reply) => {
+    if (!fcmAccount()) return reply.code(409).send({ error: 'This server is not set up for Android notifications (HALCYON_FCM_SERVICE_ACCOUNT)' });
+    try { registerFcm(req.person?.id || req.user.id, req.body?.token, req.body?.device); return { ok: true }; } catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.post('/api/push/fcm/unregister', { preHandler: requireUser }, async (req) => ({ removed: unregisterFcm(req.person?.id || req.user.id, req.body?.token) }));
   app.post('/api/push/test', { preHandler: requireUser }, async (req) => {
     const uid = req.person?.id || req.user.id;
     const { inQuietHours, prefsOf } = await import('../notifications.js');
