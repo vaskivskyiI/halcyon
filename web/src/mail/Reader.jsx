@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
-  CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
+  CalendarPlus, CalendarClock, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
   ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
@@ -520,7 +520,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
               <button className="btn sm" onClick={() => onForward(c.id)}><Forward size={12} /> Forward to {requester?.name?.split(' ')[0] || requester?.address}</button>
             </div>)) : <div className="small faint">No matching email found — try search.</div>}
         </div>))}
-      <FollowUp ins={ins} related={related} onTask={onTask} onTasks={onTasks} onEvent={onEvent} />
+      <FollowUp ins={ins} related={related} onTask={onTask} onTasks={onTasks} onEvent={onEvent} latest={latest} />
       {(ins?.needsReply || ins?.suggestedReplies?.length > 0) && (
         <div className="replies">
           {ins.draftReply && <button className="btn sm ai" onClick={() => onReply(null)}><Sparkles size={13} /> Use prepared draft</button>}
@@ -538,14 +538,16 @@ const when = (t, allDay) => new Date(t).toLocaleString([], allDay ? { weekday: '
  * Follow-up in one place: what was already made from this mail (tasks, events) first, then the AI's suggestions —
  * so a task that exists is seen right next to "Add to tasks", and suggested events already in the calendar show so.
  */
-function FollowUp({ ins, related, onTask, onTasks, onEvent }) {
+function FollowUp({ ins, related, onTask, onTasks, onEvent, latest }) {
   const tasks = related?.tasks || [], events = related?.events || [];
   const items = ins?.actionItems || [];
   const added = (e) => events.some((x) => Math.abs(x.start - Date.parse(e.start)) < 60e3 || (x.title || '').toLowerCase() === String(e.title || '').toLowerCase());
   const suggested = (ins?.events || []).filter((e) => !added(e));
-  if (!tasks.length && !events.length && !items.length && !suggested.length) return null;
+  const scheduling = latest && (suggested.length > 0 || MEETING_TALK.test(`${latest.subject || ''} ${ins?.summary || ''} ${ins?.actionSummary || ''}`));
+  if (!tasks.length && !events.length && !items.length && !suggested.length && !scheduling) return null;
   return (
     <div className="follow-up">
+      {scheduling && <Scheduling key={latest.id} latest={latest} suggested={suggested} />}
       {tasks.map((t) => (
         <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
           <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
@@ -570,6 +572,52 @@ function FollowUp({ ins, related, onTask, onTasks, onEvent }) {
           {suggested.map((e, i) => <button key={i} className="btn sm suggest-event" onClick={() => onEvent(e)} title={`${e.title}${e.read ? ` — read from the email as ${e.read.date}${e.read.time ? ` ${e.read.time}` : ''} (${e.read.tz})` : ''}`}><CalendarPlus size={13} /><span className="truncate">{e.title}</span><span className="when">· {new Date(e.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></button>)}
         </div>
       )}
+    </div>
+  );
+}
+
+// A meeting being arranged (English / Slovenian): the reader offers the user's availability.
+const MEETING_TALK = /\b(meet(ing)?s?|call|appointment|schedul\w*|availab\w*|sestan\w*|termin\w*|klic\w*|dobiva|dobimo|zoom|teams)\b/i;
+const slotText = (s) => `${new Date(s.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}–${new Date(s.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+/**
+ * Arranging a meeting: the times the email proposes, checked against the user's calendar (free / what they clash
+ * with), and the user's next free slots in working hours — offered in a reply with one click.
+ */
+function Scheduling({ latest, suggested }) {
+  const [checked, setChecked] = useState(null);
+  const [duration, setDuration] = useState(30);
+  const [slots, setSlots] = useState(null);
+  const [pick, setPick] = useState(() => new Set());
+  useEffect(() => {
+    if (!suggested.length) return;
+    api.post('/api/calendar/check', { ranges: suggested.map((e) => ({ start: Date.parse(e.start), end: e.end ? Date.parse(e.end) : undefined })) }).then(setChecked).catch(() => {});
+  }, []);
+  const findFree = (d = duration) => api.get(`/api/calendar/free-slots?duration=${d}&from=${Date.now() + 3600e3}`).then((r) => { setSlots(r.slice(0, 8)); setPick(new Set(r.slice(0, 3).map((s) => s.start))); }).catch(toastError);
+  const offer = () => {
+    const chosen = (slots || []).filter((s) => pick.has(s.start));
+    if (!chosen.length) return;
+    const list = chosen.map((s) => `- ${slotText(s)}`).join('\n');
+    const base = replyPayload('reply', latest, store.get().accounts);
+    openComposer(store.get().settings?.ai?.enabled
+      ? { ...base, aiIntent: `Propose these times for the meeting (written in the language of the conversation, as a short list), and ask which one suits them:\n${list}` }
+      : { ...base, prefixHtml: textToHtml(`Would one of these times suit you?\n${list}`) });
+  };
+  return (
+    <div className="scheduling">
+      <div className="small muted" style={{ fontWeight: 600 }}><CalendarClock size={13} /> Your availability</div>
+      {checked?.map((c, i) => (
+        <div key={i} className="small">{slotText(c)} · {c.free ? <span style={{ color: 'var(--success)' }}>you are free</span>
+          : <span style={{ color: 'var(--danger)' }}>clashes with {c.conflicts.map((x) => `“${x.title}”`).join(', ')}</span>}</div>))}
+      {!slots ? <button className="link-btn small" onClick={() => findFree()}>{suggested.length ? 'Propose other times…' : 'Find times when you are free…'}</button> : <>
+        <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <select className="input" style={{ width: 'auto', height: 26 }} value={duration} onChange={(e) => { const d = Number(e.target.value); setDuration(d); findFree(d); }}>
+            {[15, 30, 45, 60, 90, 120].map((d) => <option key={d} value={d}>{d < 60 ? `${d} min` : `${d / 60} h`}</option>)}</select>
+          {slots.map((s) => <button key={s.start} className={`chip clickable ${pick.has(s.start) ? 'on' : ''}`} onClick={() => setPick((p) => { const n = new Set(p); if (n.has(s.start)) n.delete(s.start); else n.add(s.start); return n; })}>{pick.has(s.start) ? '✓ ' : ''}{slotText(s)}</button>)}
+          {!slots.length && <span className="faint">No free time in your working hours in the next week.</span>}
+        </div>
+        {slots.length > 0 && <button className="btn sm" style={{ justifySelf: 'start' }} disabled={!pick.size} onClick={offer}><Reply size={13} /> Reply with {pick.size} time{pick.size === 1 ? '' : 's'}</button>}
+      </>}
     </div>
   );
 }

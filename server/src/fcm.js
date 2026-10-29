@@ -41,15 +41,25 @@ async function accessToken(a) {
 }
 
 /**
- * Sends one data message. data: flat string values. Resolves { ok } or { gone } (the token is no longer valid: the app
+ * Sends one message. data: flat string values. notification ({ title, body, channel, tag, silent }): also shown by
+ * Google Play services itself while the app is in the background — it does not depend on the app being woken (which
+ * battery savers on many phones delay or refuse); in the foreground the app draws it from the data.
+ * Resolves { ok } or { gone } (the token is no longer valid: the app
  * was uninstalled or its data cleared); other failures throw.
  */
-export async function fcmSend(token, data, { ttlSeconds = 6 * 3600 } = {}) {
+export async function fcmSend(token, data, { ttlSeconds = 6 * 3600, notification = null } = {}) {
   const a = fcmAccount();
   if (!a) throw new Error(accountErr || 'Android push is not set up (HALCYON_FCM_SERVICE_ACCOUNT)');
   const send = async () => fetch(`${config.fcm.url}/v1/projects/${encodeURIComponent(a.project_id)}/messages:send`, {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${await accessToken(a)}` },
-    body: JSON.stringify({ message: { token, data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? '' : String(v)])), android: { priority: 'HIGH', ttl: `${ttlSeconds}s` } } }),
+    body: JSON.stringify({ message: {
+      token, data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? '' : String(v)])),
+      ...(notification ? { notification: { title: notification.title, body: notification.body || '' } } : {}),
+      android: { priority: 'HIGH', ttl: `${ttlSeconds}s`, ...(notification ? { notification: {
+        channel_id: notification.channel, tag: notification.tag, icon: 'ic_notify', color: '#2563EB', default_sound: !notification.silent,
+        notification_priority: notification.silent ? 'PRIORITY_LOW' : 'PRIORITY_HIGH', visibility: 'PRIVATE',
+      } } : {}) },
+    } }),
   });
   let r = await send();
   if (r.status === 401) { access = null; r = await send(); } // the access token was revoked or expired early

@@ -74,6 +74,9 @@ test('the Android app registers its token; it is listed among the devices and re
   await api('POST', '/api/push/fcm/register', { token: TOKEN, device: 'Pixel 9' });
   await api('POST', '/api/push/fcm/register', { token: TOKEN, device: 'Pixel 9' }); // again (each app start): still one
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM fcm_tokens WHERE user_id = ?').get(uid).n, 1);
+  // The app replaces Chrome's Web Push on that phone (it would notify twice).
+  db.prepare("INSERT INTO push_subscriptions (user_id, endpoint, keys_json, device, created_at) VALUES (?, 'https://push.example/x', '{}', 'Android', ?)").run(uid, Date.now());
+  assert.equal((await api('POST', '/api/push/fcm/register', { token: TOKEN, device: 'Pixel 9' })).replaced, 1);
   const devs = await api('GET', '/api/push/devices');
   assert.deepEqual(devs.map((d) => [d.device, d.kind]), [['Pixel 9', 'android']]);
 });
@@ -85,8 +88,11 @@ test('a notification goes out as a high-priority FCM data message with only what
   assert.equal(got.tokens, 1);
   assert.equal(m.token, TOKEN);
   assert.equal(m.android.priority, 'HIGH');
-  assert.equal(m.notification, undefined, 'data only: the app draws it');
-  assert.deepEqual(m.data, { title: 'Halcyon', body: 'Notifications work on this device.', url: '#/settings/notifications', tag: 'test', silent: 'false', as: '', kind: 'reminder' });
+  // Shown by the system in the background (no need to wake the app); the data lets the app draw it and open its place.
+  assert.deepEqual(m.notification, { title: 'Halcyon', body: 'Notifications work on this device.' });
+  assert.equal(m.android.notification.channel_id, 'reminders');
+  assert.equal(m.android.notification.tag, 'test');
+  assert.deepEqual(m.data, { title: 'Halcyon', body: 'Notifications work on this device.', url: '#/settings/notifications', tag: 'test', silent: 'false', as: '', kind: 'reminder', route: '#/settings/notifications' });
   await waitFor(() => db.prepare('SELECT last_ok_at FROM fcm_tokens').get().last_ok_at > 0);
 
   // New mail with "hide content": no sender or subject leaves the server.
@@ -94,7 +100,9 @@ test('a notification goes out as a high-priority FCM data message with only what
   await api('PATCH', '/api/settings', { notifications: { hideContent: true, sound: false } });
   notifyUser(uid, 'mail', { title: 'Alice', body: 'Secret plans', url: '#/mail/unified/7', tag: 'mail-7', important: false });
   await waitFor(() => got.sends.length === 2);
-  assert.deepEqual(got.sends[1].data, { title: 'New email', body: '', url: '#/mail/unified/7', tag: 'mail-7', silent: 'true', as: '', kind: 'mail' });
+  assert.deepEqual(got.sends[1].data, { title: 'New email', body: '', url: '#/mail/unified/7', tag: 'mail-7', silent: 'true', as: '', kind: 'mail', route: '#/mail/unified/7' });
+  assert.deepEqual(got.sends[1].notification, { title: 'New email', body: '' });
+  assert.equal(got.sends[1].android.notification.channel_id, 'mail_quiet');
   assert.equal(got.tokens, 1, 'the access token is reused');
 });
 

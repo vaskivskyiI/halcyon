@@ -4,7 +4,7 @@
 // themselves: with "propose" access they can write drafts (not sent) and tasks, and ask for mail actions, which wait
 // in Halcyon for the user's approval (ai_approvals, as for AI-driven rules).
 import crypto from 'node:crypto';
-import { get, all, run, json, now } from '../db/index.js';
+import { get, all, run, json, now, fold } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from '../routes/util.js';
 import { getSettings } from '../settings.js';
@@ -161,9 +161,9 @@ const READ_TOOLS = {
     input: { query: { type: 'string', description: 'Name, email, company or phone' } },
     required: ['query'],
     run: async (ctx, a) => {
-      const q = `%${String(a.query || '').slice(0, 80)}%`;
+      const q = `%${fold(String(a.query || '').slice(0, 80))}%`;
       return all(`SELECT * FROM contacts WHERE user_id = ? AND deleted = 0 AND ${inIds('address_book_id', ctx.sc?.bookIds)}
-        AND (display_name LIKE ? OR emails_json LIKE ? OR org LIKE ? OR phones_json LIKE ?) ORDER BY favorite DESC, contact_count DESC LIMIT 15`, ctx.uid, q, q, q, q)
+        AND (fold(display_name) LIKE ? OR fold(emails_json) LIKE ? OR fold(org) LIKE ? OR phones_json LIKE ?) ORDER BY favorite DESC, contact_count DESC LIMIT 15`, ctx.uid, q, q, q, q)
         .map((c) => {
           const emails = json(c.emails_json, []).map((e) => e.value);
           const p = emails.length ? contactProfile(ctx.uid, emails[0]) : null;

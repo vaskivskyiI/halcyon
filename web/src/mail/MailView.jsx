@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
-  Inbox, Star, Clock, Send, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
+  Inbox, Star, Clock, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
   ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal,
 } from 'lucide-react';
@@ -13,6 +13,7 @@ import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
 import Reader from './Reader.jsx';
+import SendersList from './Senders.jsx';
 import AnalyzeOld from '../components/AnalyzeOld.jsx';
 import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 
@@ -28,6 +29,7 @@ const SMART = [
 const MORE_VIEWS = [
   ['important', Flame, 'Important'],
   ['waiting', Hourglass, 'Waiting for reply', 'waiting'],
+  ['senders', Users, 'Senders'],
 ];
 const SORTS = [['date', 'Date', 'desc'], ['from', 'From', 'asc'], ['subject', 'Subject', 'asc'], ['size', 'Size', 'desc'], ['unread', 'Unread first', 'asc'], ['flagged', 'Flagged first', 'desc']];
 const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
@@ -66,15 +68,42 @@ export default function MailView({ route }) {
     window.halcyonBack = () => { setSidebarOpen(false); return true; };
     return () => { window.removeEventListener('keydown', esc); delete window.halcyonBack; };
   }, [sidebarOpen]);
+  const [cols, setCols] = useState(loadCols);
+  const sized = cols.sidebar || cols.list;
   return (
-    <div className={`main ${openId ? 'mail-reading' : 'mail-list-only'}`}>
+    <div className={`main ${openId ? 'mail-reading' : 'mail-list-only'} ${sized ? 'sized' : ''}`}
+      style={sized ? { '--sidebar-w': `${cols.sidebar || 250}px`, '--list-w': `${cols.list || 400}px` } : undefined}>
       <FolderNav view={view} open={sidebarOpen} onNavigate={() => setSidebarOpen(false)} />
+      <ColResizer col="sidebar" min={160} max={420} cols={cols} setCols={setCols} selector=".sidebar" />
       {/* On a phone the folder list slides over the mail: tapping beside it closes it. */}
       {sidebarOpen && <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} />}
-      {view === 'scheduled' ? <OutboxList onMenu={() => setSidebarOpen(true)} /> : <MessageList key={view} view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
-      {view !== 'scheduled' && <Reader id={openId} view={view} />}
+      {view === 'scheduled' ? <OutboxList onMenu={() => setSidebarOpen(true)} /> : view === 'senders' ? <SendersList onMenu={() => setSidebarOpen(true)} />
+        : <MessageList key={view} view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
+      {view !== 'scheduled' && view !== 'senders' && <ColResizer col="list" min={260} max={900} cols={cols} setCols={setCols} selector=".list-pane" />}
+      {view !== 'scheduled' && view !== 'senders' && <Reader id={openId} view={view} />}
     </div>
   );
+}
+
+// Column widths chosen by dragging the borders (this device only); a double click goes back to the default.
+const COLS_KEY = 'halcyon.mailColumns';
+function loadCols() { try { return JSON.parse(localStorage.getItem(COLS_KEY)) || {}; } catch { return {}; } }
+function ColResizer({ col, min, max, cols, setCols, selector }) {
+  const save = (next) => { setCols(next); try { localStorage.setItem(COLS_KEY, JSON.stringify(next)); } catch { /* private mode */ } };
+  const down = (e) => {
+    const pane = e.currentTarget.parentElement.querySelector(selector);
+    if (!pane) return;
+    e.preventDefault();
+    const x0 = e.clientX, w0 = pane.getBoundingClientRect().width;
+    let next = cols;
+    const move = (ev) => { next = { ...cols, [col]: Math.round(Math.min(max, Math.max(min, w0 + ev.clientX - x0))) }; setCols(next); };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); document.body.classList.remove('col-resizing'); save(next); };
+    document.body.classList.add('col-resizing');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return <div className="col-resizer" role="separator" aria-orientation="vertical" title="Drag to change the width · double-click for the default" onPointerDown={down}
+    onDoubleClick={() => { const next = { ...cols }; delete next[col]; save(next); }} />;
 }
 
 /** Unread conversations: the important ones stand out, the rest is shown faded next to them. */

@@ -156,8 +156,9 @@ export default function TasksView() {
                 <div key={t.id} className={`task-row ${t.done ? 'done' : ''}`} onContextMenu={(e) => taskMenu(e, t)}>
                   <input type="checkbox" checked={t.done} disabled={t.readonly} title={t.readonly ? 'This list is read-only' : undefined} onChange={(e) => patch(t, { done: e.target.checked })} />
                   <div className="grow" style={{ minWidth: 0 }}>
-                    <div className="t" onDoubleClick={() => setEditing(t)}>
-                      {t.notes && <button className="icon-btn inline" title={open.has(t.id) ? 'Hide details' : 'Show details'} onClick={() => toggleOpen(t.id)}>{open.has(t.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>}
+                    {/* A click on the text shows the details (or, without any, opens the task); a double click edits. */}
+                    <div className="t clickable" title={t.notes ? (open.has(t.id) ? 'Hide details' : 'Show details') : 'Open'} onClick={() => (t.notes ? toggleOpen(t.id) : setEditing(t))} onDoubleClick={() => setEditing(t)}>
+                      {t.notes && <button className="icon-btn inline" title={open.has(t.id) ? 'Hide details' : 'Show details'} onClick={(e) => { e.stopPropagation(); toggleOpen(t.id); }}>{open.has(t.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>}
                       {t.priority ? <Flag size={12} className="imp-flag" /> : null}{t.title}
                     </div>
                     {t.notes && (open.has(t.id) ? <div className="task-notes">{t.notes}</div> : <div className="small faint truncate" onClick={() => toggleOpen(t.id)} style={{ cursor: 'pointer' }}>{t.notes.split('\n').filter(Boolean).slice(-1)[0]}</div>)}

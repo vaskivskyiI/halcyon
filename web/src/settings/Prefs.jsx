@@ -95,7 +95,10 @@ export function Notifications() {
           : <><span className="small grow">Get notifications on this device even when Halcyon is closed (phone, browser, the Android app).</span>
             <button className="btn sm primary" onClick={async () => { try { await enablePush(); resetPushCache(); toast('Push notifications are on'); refresh(); } catch (e) { toastError(e); } }}>Turn on</button></>}
       </div> : push?.android ? <div className="small muted">{push.problem}</div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
-      {devs.length > 0 && <div className="small faint">Devices with push: {devs.map((d) => d.device || 'device').join(', ')}</div>}
+      {devs.length > 0 && <div className="small faint row" style={{ flexWrap: 'wrap', gap: 6 }}>Devices with push:
+        {devs.map((d) => <span key={`${d.kind || 'web'}${d.id}`} className="chip" title={`${d.kind === 'android' ? 'The Halcyon app' : 'A browser'} · added ${new Date(d.createdAt).toLocaleDateString()}${d.lastOkAt ? ` · last notified ${new Date(d.lastOkAt).toLocaleString()}` : ''}`}>
+          {d.kind === 'android' ? `${d.device || 'Android'} (app)` : `${d.device || 'device'} (browser)`}
+          <button className="icon-btn" style={{ width: 16, height: 16 }} title="Stop notifications to this device" onClick={() => api.del(`/api/push/devices/${d.kind || 'web'}/${d.id}`).then(refresh).catch(toastError)}>×</button></span>)}</div>}
 
       <h3>What notifies</h3>
       <label className="field" style={{ maxWidth: 420 }}>New mail<select className="input" value={mail} onChange={(e) => save({ notifications: { mail: e.target.value } })}>

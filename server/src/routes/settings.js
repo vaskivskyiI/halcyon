@@ -5,7 +5,7 @@ import { backfillAnalysis } from '../mail/pipeline.js';
 import { oauthAvailable } from '../mail/oauth.js';
 import { config } from '../config.js';
 import { run } from '../db/index.js';
-import { vapidKeys, subscribe, unsubscribe, devices, notifyUser, registerFcm, unregisterFcm } from '../notifications.js';
+import { vapidKeys, subscribe, unsubscribe, devices, notifyUser, registerFcm, unregisterFcm, removeDevice } from '../notifications.js';
 import { fcmAccount, fcmError } from '../fcm.js';
 
 export default async function settingsRoutes(app) {
@@ -24,8 +24,9 @@ export default async function settingsRoutes(app) {
   app.get('/api/push/fcm', { preHandler: requireUser }, async () => ({ available: !!fcmAccount(), error: fcmError() }));
   app.post('/api/push/fcm/register', { preHandler: requireUser }, async (req, reply) => {
     if (!fcmAccount()) return reply.code(409).send({ error: 'This server is not set up for Android notifications (HALCYON_FCM_SERVICE_ACCOUNT)' });
-    try { registerFcm(req.person?.id || req.user.id, req.body?.token, req.body?.device); return { ok: true }; } catch (e) { return reply.code(400).send({ error: e.message }); }
+    try { return { ok: true, replaced: registerFcm(req.person?.id || req.user.id, req.body?.token, req.body?.device) }; } catch (e) { return reply.code(400).send({ error: e.message }); }
   });
+  app.delete('/api/push/devices/:kind/:id', { preHandler: requireUser }, async (req) => ({ removed: removeDevice(req.person?.id || req.user.id, req.params.kind, req.params.id) }));
   app.post('/api/push/fcm/unregister', { preHandler: requireUser }, async (req) => ({ removed: unregisterFcm(req.person?.id || req.user.id, req.body?.token) }));
   app.post('/api/push/test', { preHandler: requireUser }, async (req) => {
     const uid = req.person?.id || req.user.id;

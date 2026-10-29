@@ -84,3 +84,10 @@ test('searches and recipient suggestions ignore accents; people from mail are su
   const found = await api('GET', `/api/messages?view=unified&q=${encodeURIComponent('from:sasa subject:ljubljane')}`);
   assert.ok(found.items.some((m) => m.id === id));
 });
+
+test('the contacts search ignores accents', async () => {
+  const c = await api('POST', '/api/contacts', { displayName: 'Čedomir Šuštar', emails: [{ type: 'work', value: 'ced@example.si' }] });
+  const list = await api('GET', '/api/contacts?q=sustar');
+  assert.ok(list.some((x) => x.displayName === 'Čedomir Šuštar'), JSON.stringify({ c, list }));
+  assert.ok((await api('GET', '/api/contacts/autocomplete?q=cedo')).some((x) => x.name === 'Čedomir Šuštar'));
+});

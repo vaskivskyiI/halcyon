@@ -39,7 +39,12 @@ export function registerFcm(userId, token, device = '') {
   if (!/^[\w:.-]{20,4096}$/.test(token)) throw new Error('Not an FCM token');
   run(`INSERT INTO fcm_tokens (user_id, token, device, created_at) VALUES (?, ?, ?, ?)
     ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, device = excluded.device`, userId, token, String(device || '').slice(0, 80), now());
+  // The app replaces Chrome's Web Push on Android (the earlier app): both would notify twice, and Chrome warns about
+  // a site that keeps notifying through it.
+  return run("DELETE FROM push_subscriptions WHERE user_id = ? AND device = 'Android'", userId).changes;
 }
+/** A device removed in Settings → Notifications (kind 'android': the app; else a browser's Web Push). */
+export const removeDevice = (userId, kind, id) => run(`DELETE FROM ${kind === 'android' ? 'fcm_tokens' : 'push_subscriptions'} WHERE user_id = ? AND id = ?`, userId, Number(id)).changes;
 export const unregisterFcm = (userId, token) => run('DELETE FROM fcm_tokens WHERE user_id = ? AND token = ?', userId, String(token || '')).changes;
 
 /** The notification settings with defaults (older settings: newMail / onlyImportant). */
@@ -115,7 +120,11 @@ async function pushFcm(userId, kind, msg) {
   const tokens = all('SELECT * FROM fcm_tokens WHERE user_id = ?', userId);
   for (const t of tokens) {
     try {
-      const r = await fcmSend(t.token, { ...msg, kind, as: msg.as || '' }, { ttlSeconds: kind === 'reminder' ? 3600 : 6 * 3600 });
+      // route: the extra the app reads when the system's own notification is tapped (data travels as intent extras).
+      const r = await fcmSend(t.token, { ...msg, kind, as: msg.as || '', route: msg.url }, {
+        ttlSeconds: kind === 'reminder' ? 3600 : 6 * 3600,
+        notification: { title: msg.title, body: msg.body, tag: msg.tag, silent: msg.silent, channel: kind === 'reminder' ? 'reminders' : msg.silent ? 'mail_quiet' : 'mail' },
+      });
       if (r.gone) run('DELETE FROM fcm_tokens WHERE id = ?', t.id);
       else run('UPDATE fcm_tokens SET last_ok_at = ? WHERE id = ?', now(), t.id);
     } catch (e) { log.warn(`fcm to ${t.device || t.id}: ${e.message}`); }

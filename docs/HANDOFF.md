@@ -838,3 +838,26 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   for a passing reason (502-504, connection) is tried again after 5 s, 15 s, 30 s, 1, 2, 5 min before the 10-minute
   cycle; background syncs stay out of the problems panel for the first DAV_QUIET (3) tries, then show as a warning
   with the next try's time. Syncs the user waits for (`syncDav(a, { asked: true })`: saving, "Try again") report at once.
+
+### Reliable Android push, resizable columns, scheduling help, Senders cleanup, contact tidying (migration 41)
+- FCM messages now carry a `notification` part (+ android.notification: channel, tag, icon, color) next to the data:
+  in the background Google Play services shows it itself (no need to wake the app — battery savers on many phones
+  refused that, so data-only messages went missing); in the foreground the app draws it from the data. Data carries
+  `route` (= url), the extra MainActivity reads when the system's notification is tapped. Registering the app deletes
+  the user's Web Push subscriptions named "Android" (Chrome / the old TWA notified twice and Chrome flagged the site
+  as spamming). Settings → Notifications lists devices with a × each (DELETE /api/push/devices/:kind/:id).
+- Mail columns: drag the borders (MailView `ColResizer`; widths in localStorage `halcyon.mailColumns`, CSS variables
+  --sidebar-w / --list-w above 860 px); double-click resets.
+- Touch screens never show the row hover buttons (`@media (hover: none)`); Tasks: a click on the text shows the
+  details (or opens a task without any).
+- Arranging a meeting (Reader `Scheduling`, in the AI card's follow-up when the email proposes times or talks about
+  meeting): proposed times checked against the calendar (POST /api/calendar/check → free / clashes with), and the
+  next free slots (existing /api/calendar/free-slots; 15 min–2 h) chosen and sent in a reply (AI writes it in the
+  conversation's language when enabled).
+- Mail → More → Senders (routes/senders.js, mail/Senders.jsx): senders by volume with read rate, inbox count,
+  unsubscribe (existing endpoint), archive all from the inbox, mark all read.
+- Contacts → Tidy up (contacts/review.js, contacts/Review.jsx, `contact_suggestions`): merge suggestions (same address,
+  same name with accents/order ignored, AI-confirmed name variants at the same non-public domain or same local part)
+  and save suggestions (collected contacts written to ≥ 3 times, correspondents with an AI profile and ≥ 5 emails, with
+  the profile's organisation); accept (merge into the chosen contact) / reject (never again) / all; scanned daily.
+- Accent-insensitive: `fold()` SQL function also in event search and the assistant's contact tool.

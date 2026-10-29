@@ -71,6 +71,12 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px
 
 /* Sidebar */
 .sidebar-scrim { display: none; }
+/* Borders between the mail columns can be dragged (MailView ColResizer); widths kept per device */
+.col-resizer { flex: none; width: 6px; margin: 0 -3px; position: relative; z-index: 5; cursor: col-resize; touch-action: none; }
+.col-resizer:hover, body.col-resizing .col-resizer { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+body.col-resizing { cursor: col-resize; user-select: none; }
+@media (min-width: 861px) { .main.sized .sidebar { width: var(--sidebar-w); } .main.sized .list-pane { width: var(--list-w); } }
+@media (max-width: 860px) { .col-resizer { display: none; } }
 .sidebar { width: 250px; flex: none; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .sidebar-head { padding: 12px; display: flex; gap: 8px; }
 .sidebar-scroll { flex: 1; overflow: auto; padding: 4px 8px 16px; }
@@ -113,6 +119,8 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px
 .msg-row:hover .check, .list.selecting .msg-row .check { display: block; }
 .msg-row .hover-actions { position: absolute; right: 8px; bottom: 6px; display: none; background: var(--panel); border-radius: 8px; box-shadow: var(--shadow); }
 .msg-row:hover .hover-actions { display: flex; }
+/* Touch screens: no hover buttons (a long press flashed them before the menu opened) — swipe and the menu do it. */
+@media (hover: none) { .msg-row:hover .hover-actions { display: none; } }
 .prio-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .bulk-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: var(--accent-soft); border-bottom: 1px solid var(--border); }
 
@@ -552,3 +560,13 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
   .settings-section > .row { flex-wrap: wrap; }
   .settings-section > .row > .grow { flex-basis: 100%; }
 }
+/* Arranging a meeting (Reader Scheduling): proposed times checked against the calendar, free slots to offer */
+.scheduling { display: grid; gap: 5px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); margin-bottom: 6px; }
+.scheduling .chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* Mail → More → Senders */
+.sender-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.sender-row .read-bar { height: 3px; border-radius: 2px; background: var(--panel-2); margin-top: 5px; max-width: 220px; overflow: hidden; }
+.sender-row .read-bar span { display: block; height: 100%; background: var(--accent); }
+@media (max-width: 600px) { .sender-row { flex-wrap: wrap; } }
+/* Contacts → Tidy up */
+.review-item { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }

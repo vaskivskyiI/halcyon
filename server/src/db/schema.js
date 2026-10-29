@@ -475,4 +475,12 @@ export const migrations = [
   );
   CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user ON fcm_tokens(user_id);
   `,
+  // 41: suggestions to tidy the contacts (merge duplicates, save people the user writes with), reviewed by the user:
+  // open until accepted or rejected; a rejected one (its key) is not suggested again (contacts/review.js).
+  `
+  CREATE TABLE contact_suggestions (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, key TEXT NOT NULL,
+    payload_json TEXT, reason TEXT, status TEXT DEFAULT 'open', created_at INTEGER, decided_at INTEGER, UNIQUE (user_id, key)
+  );
+  `,
 ];

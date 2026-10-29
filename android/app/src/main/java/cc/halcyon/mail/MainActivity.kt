@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
         i ?: return null
         if (i.data?.scheme == "mailto") return Target("#/compose?url=" + Uri.encode(i.dataString))
         // Only places inside the web app: another app may start this activity too.
+        // EXTRA_ROUTE: shortcuts, the app's own notifications, and the system's (its data comes as extras).
         val route = i.getStringExtra(EXTRA_ROUTE)?.takeIf { it.startsWith("#/") } ?: return null
         return Target(route, i.getStringExtra(EXTRA_AS).orEmpty())
     }

@@ -20,6 +20,7 @@ import { syncLinked } from './calendar/linked.js';
 import { cleanUploads } from './mail/uploads.js';
 import { notifyUser } from './notifications.js';
 import { autoRetry } from './mail/retry.js';
+import { scanAll } from './contacts/review.js';
 
 const log = logger('scheduler');
 const davBusy = new Map();
@@ -170,6 +171,8 @@ export function startScheduler() {
   setTimeout(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 60e3).unref();
   setInterval(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
+  // Contact tidying suggestions, once a day per user (contacts/review.js).
+  setInterval(() => scanAll().catch((e) => log.error(e)), 3600e3).unref();
   // Failed server changes, unreachable sends, unsaved sent copies, SMTP warnings: tried again by themselves (mail/retry.js).
   setInterval(() => autoRetry().catch((e) => log.error(e)), 20e3).unref();
   // Clean up old reminder markers.

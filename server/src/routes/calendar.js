@@ -1,4 +1,4 @@
-import { get, all, run, now, json, tx } from '../db/index.js';
+import { get, all, run, now, json, tx, fold } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import * as repo from '../calendar/repo.js';
@@ -233,9 +233,9 @@ export default async function calendarRoutes(app) {
   }
 
   app.get('/api/events/search', async (req) => {
-    const q = `%${req.query.q || ''}%`;
+    const q = `%${fold(req.query.q || '')}%`;
     const sc = scope(req.user.id, reqSpace(req));
-    return all(`SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} AND e.deleted = 0 AND (e.title LIKE ? OR e.location LIKE ? OR e.description LIKE ?) ORDER BY e.start DESC LIMIT 50`, req.user.id, q, q, q).map(repo.serializeEvent);
+    return all(`SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} AND e.deleted = 0 AND (fold(e.title) LIKE ? OR fold(e.location) LIKE ? OR fold(e.description) LIKE ?) ORDER BY e.start DESC LIMIT 50`, req.user.id, q, q, q).map(repo.serializeEvent);
   });
 
   app.get('/api/events/:id', async (req, reply) => {
@@ -284,6 +284,20 @@ export default async function calendarRoutes(app) {
     if (notifyAttendees === '1') sendInvitations(req.user.id, e.id, { method: 'CANCEL' });
     repo.deleteEvent(req.user.id, e.id);
     return { ok: true };
+  });
+
+  // Times proposed in an email checked against the user's calendar (busy time of all their calendars: one person, one
+  // schedule): free, or what they clash with.
+  app.post('/api/calendar/check', async (req) => {
+    const ranges = (Array.isArray(req.body?.ranges) ? req.body.ranges : []).slice(0, 20).map((r) => ({ start: Number(r.start), end: Number(r.end) || Number(r.start) + 3600e3 }))
+      .filter((r) => r.start > 0 && r.end > r.start);
+    if (!ranges.length) return [];
+    const from = Math.min(...ranges.map((r) => r.start)), to = Math.max(...ranges.map((r) => r.end));
+    const busy = repo.listRange(req.user.id, from - 864e5, to + 864e5, null, { includeInfo: false }).filter((e) => e.busy);
+    return ranges.map((r) => {
+      const clash = busy.filter((e) => e.start < r.end && e.end > r.start);
+      return { ...r, free: !clash.length, conflicts: clash.slice(0, 3).map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: !!e.allDay })) };
+    });
   });
 
   app.get('/api/calendar/free-slots', async (req) => {

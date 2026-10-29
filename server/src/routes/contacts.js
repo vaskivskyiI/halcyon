@@ -8,6 +8,7 @@ import { notify } from '../util/events.js';
 import { serializeMessage } from '../mail/store.js';
 import { scope, reqSpace, spaceMap, inIds, spaceDefault } from '../spaces.js';
 import { originOf } from './spaces.js';
+import { mergeContacts, scanContacts, openSuggestions, decide } from '../contacts/review.js';
 import { queueMemory } from '../ai/queue.js';
 import { syncDav } from '../scheduler.js';
 import { targetsForMessage } from '../targets.js';
@@ -188,22 +189,20 @@ export default async function contactRoutes(app) {
 
   app.post('/api/contacts/merge', async (req, reply) => {
     const [keepId, ...rest] = (req.body?.ids || []).map(Number);
-    const keep = get('SELECT * FROM contacts WHERE id = ? AND user_id = ?', keepId, req.user.id);
-    if (!keep || !rest.length) return httpError(reply, 400, 'Select at least two contacts');
-    const k = serializeContact(keep);
-    for (const id of rest) {
-      const o = get('SELECT * FROM contacts WHERE id = ? AND user_id = ?', id, req.user.id);
-      if (!o) continue;
-      const x = serializeContact(o);
-      const uniq = (arr) => [...new Map(arr.map((v) => [String(v.value || JSON.stringify(v)).toLowerCase(), v])).values()];
-      k.emails = uniq([...k.emails, ...x.emails]); k.phones = uniq([...k.phones, ...x.phones]); k.addresses = [...k.addresses, ...x.addresses];
-      k.groups = [...new Set([...k.groups, ...x.groups])];
-      for (const f of ['org', 'title', 'birthday', 'notes', 'photo', 'website', 'nickname']) k[f] ||= x[f];
-      deleteContact(req.user.id, id);
-    }
-    const c = updateContact(req.user.id, keepId, k);
+    const c = rest.length ? mergeContacts(req.user.id, keepId, rest) : null;
+    if (!c) return httpError(reply, 400, 'Select at least two contacts');
     notify(req.user.id, 'contacts:changed', {});
     return serializeContact(c);
+  });
+
+  // Tidying suggestions (contacts/review.js): listed, scanned for now, accepted or rejected one by one.
+  app.get('/api/contacts/suggestions', async (req) => openSuggestions(req.user.id));
+  app.post('/api/contacts/suggestions/scan', async (req) => scanContacts(req.user.id));
+  app.post('/api/contacts/suggestions/:id', async (req, reply) => {
+    const r = decide(req.user.id, Number(req.params.id), req.body?.accept === true, { keepId: req.body?.keepId });
+    if (!r) return httpError(reply, 404, 'Not found');
+    notify(req.user.id, 'contacts:changed', {});
+    return r;
   });
 }
 

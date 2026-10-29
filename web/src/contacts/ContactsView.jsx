@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef, Fragment } from 'react';
-import { Search, Plus, Star, Mail, Phone, Building2, Trash2, Upload, Download, ArrowLeft, Pencil, X, Merge, MapPin, Cake, Globe, Calendar, Settings2 } from 'lucide-react';
+import { Search, Plus, Sparkles, Star, Mail, Phone, Building2, Trash2, Upload, Download, ArrowLeft, Pencil, X, Merge, MapPin, Cake, Globe, Calendar, Settings2 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { Avatar, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError, navigate, fmtListDate } from '../util.js';
 import { openComposer } from '../mail/Composer.jsx';
 import PersonProfile from '../components/PersonProfile.jsx';
 import LocalDefault from '../components/LocalDefault.jsx';
+import ReviewContacts, { useSuggestionCount } from './Review.jsx';
 
 export default function ContactsView({ route }) {
   const selId = route[1] ? Number(route[1]) : null;
@@ -18,6 +19,8 @@ export default function ContactsView({ route }) {
   const loadBooks = () => api.get('/api/address-books').then(setBooks).catch(() => {});
   useEffect(() => { loadBooks(); }, []);
   const [editing, setEditing] = useState(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [suggestions, loadSuggestions] = useSuggestionCount();
   const [checked, setChecked] = useState(new Set());
   const fileRef = useRef();
   const load = () => {
@@ -41,6 +44,7 @@ export default function ContactsView({ route }) {
             <button className="icon-btn" title="Address books (move from local, hide, delete)" onClick={() => navigate('#/settings/calendars')}><Settings2 size={16} /></button>
             <button className="icon-btn" title="Import vCard / CSV" onClick={() => fileRef.current.click()}><Upload size={16} /></button>
             <button className="icon-btn" title="Export vCard" onClick={() => window.open(api.url('/api/contacts/export.vcf'))}><Download size={16} /></button>
+            <button className={`btn sm ${suggestions ? '' : 'ghost'}`} title="Merge duplicates and save people you write with — suggested, you decide" onClick={() => setReviewing(true)}><Sparkles size={13} /> Tidy up{suggestions ? ` (${suggestions})` : ''}</button>
             <button className="btn primary sm" onClick={() => setEditing({ emails: [{ type: 'work', value: '' }], phones: [], addresses: [], groups: [] })}><Plus size={14} /> New</button>
             <input ref={fileRef} type="file" accept=".vcf,.csv,text/vcard,text/csv" hidden onChange={(e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ''; }} />
           </div>
@@ -74,6 +78,7 @@ export default function ContactsView({ route }) {
         </div>
       </div>
       <div className="pane-detail">{selId ? <ContactDetail id={selId} onEdit={setEditing} onChanged={load} /> : <div className="empty">Select a contact</div>}</div>
+      {reviewing && <ReviewContacts onClose={() => { setReviewing(false); loadSuggestions(); }} onChanged={load} />}
       {editing && <ContactEditor contact={editing} groups={groups.map((g) => g.name)} onClose={() => setEditing(null)} onSaved={(c) => { setEditing(null); load(); navigate(`#/contacts/${c.id}`); }} />}
     </div>
   );
