@@ -466,12 +466,13 @@ export const migrations = [
   CREATE TABLE thread_notes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_key TEXT NOT NULL, note TEXT, updated_at INTEGER, PRIMARY KEY (user_id, thread_key));
   `,
   // 40: the native Android app gets its notifications through Firebase Cloud Messaging: its device token per user
-  // (a token moves to whoever registers it last — the app signed in as someone else).
+  // (a token moves to whoever registers it last — the app signed in as someone else). IF NOT EXISTS: a database that
+  // ran the Android branch before it was merged has it already, made as migration 38 (see db/index.js).
   `
-  CREATE TABLE fcm_tokens (
+  CREATE TABLE IF NOT EXISTS fcm_tokens (
     id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, token TEXT NOT NULL UNIQUE,
     device TEXT, created_at INTEGER, last_ok_at INTEGER
   );
-  CREATE INDEX idx_fcm_tokens_user ON fcm_tokens(user_id);
+  CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user ON fcm_tokens(user_id);
   `,
 ];

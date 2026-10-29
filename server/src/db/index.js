@@ -15,6 +15,9 @@ for (let v = current; v < migrations.length; v++) {
     db.pragma(`user_version = ${v + 1}`);
   })();
 }
+// A database that ran the Android app branch before it was merged had that branch's migration as number 38 and so
+// skipped this repository's 38 (automatic retries): its columns are added now.
+if (!db.prepare('PRAGMA table_info(pending_ops)').all().some((c) => c.name === 'auto_retries')) db.exec(migrations[37]); // "38" in schema.js (1-based)
 // Table statistics let SQLite pick the list/count indexes; cheap, and only redone when the data changed a lot.
 db.pragma('optimize = 0x10002');
 

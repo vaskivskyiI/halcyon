@@ -225,9 +225,10 @@ export default async function taskRoutes(app) {
       // Due as read from the email (unchanged in the dialog) is tied to the zone it was read in.
       const due = Number(t.due) || null;
       const read = due && p.items.some((x) => x.due === due) ? p.tz : null;
-      const r = run(`INSERT INTO tasks (user_id, list_id, list, uid, dirty, title, notes, due, due_tz, priority, source_message_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.user.id, list.id, list.name, newTaskUid(), list.source === 'caldav' ? 1 : 0,
-      String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), due, read, t.priority ? 1 : 0, p.messageId, now(), now());
+      const rrule = due ? cleanRule(t.rrule) || null : null; // repeats from the due date; not understood = once
+      const r = run(`INSERT INTO tasks (user_id, list_id, list, uid, dirty, title, notes, due, due_tz, priority, rrule, source_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.user.id, list.id, list.name, newTaskUid(), list.source === 'caldav' ? 1 : 0,
+      String(t.title).trim().slice(0, 300), String(t.notes ?? p.context).slice(0, 4000), due, read, t.priority ? 1 : 0, rrule, p.messageId, now(), now());
       created.push(out(one(r.lastInsertRowid)));
     }
     notify(req.user.id, 'tasks:changed', {});

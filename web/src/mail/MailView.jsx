@@ -742,7 +742,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
       <div onClick={(e) => { e.stopPropagation(); onCheck(); }} style={{ cursor: 'pointer' }}>
         {checked ? <div className="avatar" style={{ background: 'var(--accent)' }}><CheckSquare size={18} /></div> : <Avatar name={m.from.name} email={m.from.address} />}
       </div>
-      <div className="body">
+      <div className="body" title={rowDetails(m, ai, showAi)}>
         <div className="from">
           {important && <Flame size={13} className="imp-icon" title={`Important (priority ${ai.priority})`} />}
           {m.pinned && <Pin size={12} className="state-icon" title="Pinned" />}
@@ -760,12 +760,13 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
           </span>
           <span className="date">{m.snoozedUntil ? <span title="Snoozed until"><Clock size={11} /> {fmtListDate(m.snoozedUntil)}</span> : fmtListDate(m.date)}</span>
         </div>
-        {/* Subject and a one-line preview (the AI summary when there is one) on one line. */}
         <div className="subject-line truncate">
           {m.isAnswered && <ReplyIcon size={13} className="state-icon" title="You replied" />}
           {m.isForwarded && <ForwardIcon size={13} className="state-icon" title="You forwarded this" />}
-          <span className="subject">{m.subject || '(no subject)'}</span>
-          <span className="preview" title={showAi && ai?.summary ? ai.summary : undefined}> — {showAi && ai?.summary ? ai.summary : m.snippet}</span></div>
+          <span className="subject">{m.subject || '(no subject)'}</span></div>
+        {/* The AI summary on its own line (up to two lines), else the text's beginning. */}
+        {showAi && ai?.summary ? <div className="ai-line"><Sparkles size={12} /><span className="clamp-2">{ai.summary}</span></div>
+          : <div className="snippet truncate">{m.snippet}</div>}
         {(m.ownerName || ai?.isPhishing || expired || ai?.topic || m.myCategories?.length > 0 || m.notOnServer || m.labels?.length > 0) && <div className="meta">
           {m.ownerName && <span className="chip shared-chip" title={`Shared space “${m.ownerName}”`}>{m.ownerName}</span>}
           {ai?.isPhishing && <span className="chip" style={{ background: '#fee2e2', color: '#991b1b' }}><AlertTriangle size={11} /> Suspicious</span>}
@@ -787,6 +788,19 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
     </div>
     </div>
   );
+}
+
+/** What the row shows in short, in full: hovering a row shows who, when, the subject and the whole summary. */
+function rowDetails(m, ai, showAi) {
+  const who = (a) => (a.name && a.address && a.name !== a.address ? `${a.name} <${a.address}>` : a.name || a.address);
+  const sent = m.folder?.specialUse === '\\Sent';
+  return [
+    sent ? `To: ${(m.to || []).map(who).join(', ')}` : `From: ${who(m.from)}`,
+    new Date(m.date).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    m.subject || '(no subject)',
+    showAi && ai?.summary ? `\n${ai.summary}` : m.snippet ? `\n${m.snippet}` : '',
+    showAi && ai?.actionSummary ? `\nTo do: ${ai.actionSummary}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 function OutboxList({ onMenu }) {

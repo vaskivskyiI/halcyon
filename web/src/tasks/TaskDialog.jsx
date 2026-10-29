@@ -93,6 +93,7 @@ export default function TaskDialog({ messageId, onClose }) {
             <textarea className="input" rows={4} value={it.notes} onChange={(e) => set(i, { notes: e.target.value })} placeholder="Details" />
             <div className="row small faint" style={{ gap: 6 }}><Calendar size={12} /> Due</div>
             <DueField value={it.due} onChange={(due) => set(i, { due })} />
+            <RepeatField value={it.rrule} disabled={!it.due} onChange={(rrule) => set(i, { rrule })} />
           </div>
         </div>
       ))}

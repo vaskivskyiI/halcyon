@@ -62,7 +62,12 @@ const FOCUSED = `(i.message_id IS NULL OR (i.priority >= 40 AND COALESCE(i.categ
 function scopeFor(userId, q, sc) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
   const view = q.view || 'unified';
-  if (view === 'folder' && q.folderId) { where.push('m.folder_id = ?'); params.push(Number(q.folderId)); }
+  const virtual = view === 'folder' && q.folderId ? get('SELECT account_id, special_use FROM folders WHERE id = ?', Number(q.folderId)) : null;
+  // A server's "Flagged" folder (special-use \Flagged, e.g. Dovecot's virtual one) is not synced (sync.js): opening it
+  // shows that account's flagged mail as Halcyon knows it, so a message flagged here is there at once.
+  if (virtual?.special_use === '\\Flagged') {
+    where.push("m.account_id = ? AND m.is_flagged = 1 AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))"); params.push(virtual.account_id);
+  } else if (view === 'folder' && q.folderId) { where.push('m.folder_id = ?'); params.push(Number(q.folderId)); }
   else if (view === 'unified') where.push("m.folder_id IN (SELECT f.id FROM folders f WHERE f.special_use = '\\Inbox')");
   else if (view === 'flagged') where.push("m.is_flagged = 1 AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))");
   else if (view === 'snoozed') where.push('m.snoozed_until IS NOT NULL');

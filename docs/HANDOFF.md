@@ -809,3 +809,16 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Verified: the release APK builds and is signed with the TWA's key (with a placeholder google-services.json); server
   tests. NOT verified: running on a phone or emulator (no KVM access in the dev WSL) — WebView loading, the private-CA
   path, shortcuts/onNewIntent, file chooser, downloads, and real FCM delivery need a check on the owner's phone.
+
+### List rows, task wrapping, Flagged folder, repeating tasks from mail (no migration)
+- Message list: subject on its own line again, the AI summary (up to two lines, ✦) or the text's beginning below it;
+  the sender 600 (unread 700). Hovering a row shows a tooltip (`rowDetails` in MailView.jsx): from/to with addresses,
+  full date, subject, the whole summary and the to-do.
+- Reader: tasks / events made from an email wrap inside the AI card (`.follow-up` was a grid whose track grew to the
+  single-line text and widened the reading pane).
+- A server's virtual `\Flagged` folder is never synced (sync.js sets sync_enabled = 0), so it stayed empty or stale:
+  opening it (view=folder) now lists that account's flagged mail from Halcyon's own flags (routes/mail.js scopeFor).
+- "Add to tasks" from an email has the Repeat choice (needs a due date); POST /api/tasks/from-message takes `rrule`.
+- Migration safety: the Android branch first shipped its FCM table as migration 38; after merging, 38 is automatic
+  retries and FCM is 40 (`CREATE TABLE IF NOT EXISTS`). db/index.js adds 38's columns when they are missing, so a
+  database that ran the branch before the merge starts normally (round50). round49: Flagged folder, repeating tasks.
