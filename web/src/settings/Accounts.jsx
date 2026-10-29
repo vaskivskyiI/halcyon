@@ -150,7 +150,7 @@ function AccountStatus({ st, test, account, reload }) {
  * certificates, a company or home CA), or not checked (anyone on the way could read along — only for a server you
  * reach privately).
  */
-function CertField({ value, onChange }) {
+export function CertField({ value, onChange }) {
   const v = value || { ca: '', insecure: false };
   const mode = v.insecure ? 'skip' : v.ca ? 'ca' : v.mode === 'ca' ? 'ca' : 'check';
   return (
@@ -162,11 +162,20 @@ function CertField({ value, onChange }) {
           <option value="skip">Do not check (not safe)</option>
         </select></label>
       {mode === 'ca' && <textarea className="input" rows={4} style={{ fontFamily: 'monospace', fontSize: 11 }} placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'} value={v.ca} onChange={(e) => onChange({ ...v, ca: e.target.value, insecure: false, mode: 'ca' })} />}
+      {mode === 'ca' && <label className="btn sm" style={{ justifySelf: 'start' }}>Load from file…<input type="file" accept=".pem,.crt,.cer,.der" hidden onChange={async (e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) onChange({ ...v, ca: await certText(file), insecure: false, mode: 'ca' }); }} /></label>}
       {mode === 'ca' && <div className="small faint">The certificate of the authority that signed the server's certificate (or the server's own self-signed certificate), as text. On the server: e.g. <code>/etc/ssl/certs/…</code> or your CA's .crt/.pem file.</div>}
       {mode === 'skip' && <div className="small error-text">Passwords and mail are still encrypted, but Halcyon cannot tell your server from an impostor. Prefer adding your certificate authority.</div>}
     </div>);
 }
-const tlsBody = (t) => (t ? { ca: t.insecure ? (t.ca || '') : (t.ca || ''), insecure: !!t.insecure } : undefined);
+// A .pem/.crt file is text; a binary (DER) .cer/.crt becomes PEM here.
+async function certText(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const text = new TextDecoder().decode(buf);
+  if (text.includes('-----BEGIN')) return text.trim();
+  const b64 = btoa(String.fromCharCode(...buf)).replace(/.{64}/g, '$&\n').trim();
+  return `-----BEGIN CERTIFICATE-----\n${b64}\n-----END CERTIFICATE-----`;
+}
+export const tlsBody = (t) => (t ? { ca: t.insecure ? (t.ca || '') : (t.ca || ''), insecure: !!t.insecure } : undefined);
 
 /** What to add: mail, a calendar, an address book, or (Google) any of them. */
 function AddChooser({ oauth, onPick, onClose }) {

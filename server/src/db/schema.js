@@ -498,4 +498,10 @@ export const migrations = [
     PRIMARY KEY (user_id, kind)
   );
   `,
+  // 44: Inkwell behind a private certificate authority or a self-signed certificate: its CA (PEM, added to Node's
+  // roots) or no check, as for accounts (mail/connection.js tlsOf).
+  `
+  ALTER TABLE integrations ADD COLUMN tls_ca TEXT;
+  ALTER TABLE integrations ADD COLUMN tls_insecure INTEGER DEFAULT 0;
+  `,
 ];

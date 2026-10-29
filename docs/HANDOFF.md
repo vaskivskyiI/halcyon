@@ -887,3 +887,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Web `components/InkwellNotes.jsx` (answers cached 1 min per page load): the reader (all messages of the
   conversation), the event editor (id + seriesId) and the task editor show "Notes" with the linked pages and
   "New note in Inkwell" (opens `<base>/#/`).
+- Inkwell behind a private CA (migration 44: `integrations.tls_ca` / `tls_insecure`): its CA as PEM (pasted or loaded
+  from a .pem/.crt/.cer file — DER is turned into PEM in the browser; the same "Load from file…" now also serves the
+  accounts' Server certificate) or no check; requests then go through an undici Agent built from `tlsOf()`.
+  Certificate errors say what to do (`inkwellError`). Tests use `server/test/fixtures/tls` (test CA + server
+  certificate for 127.0.0.1, valid for 100 years; the CA key is not kept).

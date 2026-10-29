@@ -1,9 +1,11 @@
 // Inkwell integration: the address and token are saved (token encrypted, never returned), Halcyon asks Inkwell which
 // pages link to mail / events / tasks — several refs at once — and stays quiet when Inkwell is not set up or not there.
+// Behind a private CA: its certificate (fixtures/tls: test CA, and a server certificate for 127.0.0.1) or no check.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -32,17 +34,18 @@ const PAGES = [
   { ref: '43', id: 'p3', title: 'Sneaky', icon: null, kind: 'page', updatedAt: 1, snippet: '', url: 'javascript:alert(1)' },
   { ref: '99', id: 'p4', title: 'Not asked for', url: '/#/n/p4' },
 ];
+function handler(req, res) {
+  const u = new URL(req.url, 'http://x');
+  seen.push({ path: u.pathname, kind: u.searchParams.get('kind'), ref: u.searchParams.get('ref'), auth: req.headers.authorization });
+  res.setHeader('content-type', 'application/json');
+  if (req.headers.authorization !== `Bearer ${TOKEN}`) { res.statusCode = 401; return res.end(JSON.stringify({ error: 'bad token' })); }
+  if (u.pathname !== '/api/links/lookup') { res.statusCode = 404; return res.end('{}'); }
+  const refs = String(u.searchParams.get('ref') || '').split(',');
+  // Like the real one, but also the page for ref 99: Halcyon must only pass on what it asked for.
+  res.end(JSON.stringify(u.searchParams.get('kind') === 'event' ? PAGES.filter((p) => refs.includes(p.ref) || p.ref === '99') : []));
+}
 before(async () => {
-  ink = http.createServer((req, res) => {
-    const u = new URL(req.url, 'http://x');
-    seen.push({ path: u.pathname, kind: u.searchParams.get('kind'), ref: u.searchParams.get('ref'), auth: req.headers.authorization });
-    res.setHeader('content-type', 'application/json');
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) { res.statusCode = 401; return res.end(JSON.stringify({ error: 'bad token' })); }
-    if (u.pathname !== '/api/links/lookup') { res.statusCode = 404; return res.end('{}'); }
-    const refs = String(u.searchParams.get('ref') || '').split(',');
-    // Like the real one, but also the page for ref 99: Halcyon must only pass on what it asked for.
-    res.end(JSON.stringify(u.searchParams.get('kind') === 'event' ? PAGES.filter((p) => refs.includes(p.ref) || p.ref === '99') : []));
-  });
+  ink = http.createServer(handler);
   await new Promise((r) => ink.listen(0, '127.0.0.1', r));
   inkBase = `http://127.0.0.1:${ink.address().port}`;
 
@@ -57,7 +60,7 @@ before(async () => {
 after(async () => { await app?.close(); ink?.close(); setTimeout(() => process.exit(0), 50).unref(); });
 
 test('not set up: no url, no links, and Inkwell is not asked', async () => {
-  assert.deepEqual(await api('GET', '/api/integrations/inkwell'), { url: '', hasToken: false, configured: false });
+  assert.deepEqual(await api('GET', '/api/integrations/inkwell'), { url: '', hasToken: false, configured: false, tls: { ca: '', insecure: false } });
   assert.deepEqual(await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42'), { url: null, links: [] });
   assert.equal(seen.length, 0);
 });
@@ -66,7 +69,7 @@ test('saving: only http(s) addresses and ink_ tokens; the token is encrypted and
   assert.equal((await call('PUT', '/api/integrations/inkwell', { url: 'ftp://notes.example.org', token: TOKEN })).status, 400);
   assert.equal((await call('PUT', '/api/integrations/inkwell', { url: inkBase, token: 'hmcp_wrong_kind' })).status, 400);
   const saved = await api('PUT', '/api/integrations/inkwell', { url: `${inkBase}/`, token: TOKEN });
-  assert.deepEqual(saved, { url: inkBase, hasToken: true, configured: true }, 'trailing slash dropped, no token in the answer');
+  assert.deepEqual(saved, { url: inkBase, hasToken: true, configured: true, tls: { ca: '', insecure: false } }, 'trailing slash dropped, no token in the answer');
   assert.ok(!JSON.stringify(await api('GET', '/api/integrations/inkwell')).includes(TOKEN));
   assert.ok(!JSON.stringify(await api('GET', '/api/me')).includes(TOKEN));
   const row = db.prepare("SELECT token_enc FROM integrations WHERE kind = 'inkwell'").get();
@@ -105,6 +108,31 @@ test('Inkwell refusing the token or not reachable: no url, no links (the views l
   assert.deepEqual([down.url, down.links], [null, []]);
   assert.ok(down.error);
 
-  assert.deepEqual(await api('PUT', '/api/integrations/inkwell', { url: '' }), { url: '', hasToken: false, configured: false });
+  assert.deepEqual(await api('PUT', '/api/integrations/inkwell', { url: '' }), { url: '', hasToken: false, configured: false, tls: { ca: '', insecure: false } });
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM integrations").get().n, 0);
+});
+
+test('Inkwell behind a private CA: refused until its CA is added or checking is switched off', async () => {
+  const fx = (f) => fs.readFileSync(new URL(`./fixtures/tls/${f}`, import.meta.url), 'utf8');
+  const secure = https.createServer({ key: fx('server.key'), cert: fx('server.pem') }, handler);
+  await new Promise((r) => secure.listen(0, '127.0.0.1', r));
+  const url = `https://127.0.0.1:${secure.address().port}`;
+  try {
+    await api('PUT', '/api/integrations/inkwell', { url, token: TOKEN });
+    const untrusted = await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42');
+    assert.deepEqual([untrusted.url, untrusted.links], [null, []]);
+    assert.match(untrusted.error, /certificate is not trusted/);
+    assert.match((await api('POST', '/api/integrations/inkwell/test')).error, /certificate authority/);
+
+    assert.equal((await call('PUT', '/api/integrations/inkwell', { url, tls: { ca: 'not a certificate' } })).status, 400);
+    const saved = await api('PUT', '/api/integrations/inkwell', { url, tls: { ca: fx('ca.pem'), insecure: false } });
+    assert.deepEqual([saved.configured, saved.tls.insecure, saved.tls.ca.startsWith('-----BEGIN CERTIFICATE-----')], [true, false, true]);
+    assert.deepEqual((await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42')).links.map((l) => l.id), ['p1']);
+    assert.equal((await api('PUT', '/api/integrations/inkwell', { url })).tls.ca, saved.tls.ca, 'kept when not sent');
+
+    await api('PUT', '/api/integrations/inkwell', { url, tls: { ca: '', insecure: true } });
+    assert.deepEqual((await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42')).links.map((l) => l.id), ['p1']);
+    await api('PUT', '/api/integrations/inkwell', { url, tls: { ca: '', insecure: false } });
+    assert.ok((await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42')).error, 'checked again');
+  } finally { await new Promise((r) => secure.close(r)); }
 });
