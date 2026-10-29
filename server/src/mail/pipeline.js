@@ -8,6 +8,7 @@ import { invalidateAll } from '../ai/memory.js';
 import { collectAddresses } from '../contacts/service.js';
 import { processIncomingIcs } from '../calendar/invites.js';
 import { senderPreference } from '../ai/learning.js';
+import { rarelyRead } from '../ai/habits.js';
 import { spamMessages } from './actions.js';
 import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
@@ -72,10 +73,12 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
         messages: unread.slice(0, 5).map((m) => ({ id: m.id, from: m.from_name || m.from_addr, subject: m.subject, snippet: m.snippet?.slice(0, 120) })),
       });
       // On the user's devices (and the shared space's members'), as their notification settings allow.
-      const one = unread.length === 1 ? unread[0] : null;
-      notifyUser(account.user_id, 'mail', one
+      // Senders the user habitually leaves unread do not buzz (ai/habits.js).
+      const loud = unread.filter((m) => !rarelyRead(account.user_id, m.from_addr));
+      const one = loud.length === 1 ? loud[0] : null;
+      if (loud.length) notifyUser(account.user_id, 'mail', one
         ? { title: one.from_name || one.from_addr, body: `${one.subject || '(no subject)'}${one.snippet ? `\n${one.snippet.slice(0, 120)}` : ''}`, url: `#/mail/unified/${one.id}`, tag: `mail-${one.id}`, accountId: account.id }
-        : { title: `${unread.length} new emails`, body: unread.slice(0, 4).map((m) => `${m.from_name || m.from_addr}: ${m.subject || ''}`).join('\n'), url: '#/mail/unified', tag: `mail-batch-${folder.id}`, accountId: account.id });
+        : { title: `${loud.length} new emails`, body: loud.slice(0, 4).map((m) => `${m.from_name || m.from_addr}: ${m.subject || ''}`).join('\n'), url: '#/mail/unified', tag: `mail-batch-${folder.id}`, accountId: account.id });
     }
   }
 }

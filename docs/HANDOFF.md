@@ -861,3 +861,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   and save suggestions (collected contacts written to ≥ 3 times, correspondents with an AI profile and ≥ 5 emails, with
   the profile's organisation); accept (merge into the chosen contact) / reject (never again) / all; scanned daily.
 - Accent-insensitive: `fold()` SQL function also in event search and the assistant's contact tool.
+
+### Learned from habit; Latin/Cyrillic contacts (round52)
+- `ai/habits.js`: a sender whose last ≤ 10 emails of 90 days (≥ 1 day old) number ≥ 5, with ≤ 1 in 10 read and none
+  answered, is "rarely read" — analysis holds it at priority ≤ 20, no needs-reply, no suggested replies, and new mail
+  from it does not notify (pipeline). Never for addresses in the contacts or the user's own addresses, never against an
+  explicit important/unimportant correction; switches off when the user reads them again. Per-sender opt-out in
+  `sender_habits` (migration 42) via POST /api/senders/habit {address, keep}; Senders shows "Learned" / "Treated normally".
+  Cached per user for 10 min (`forgetHabits`).
+- Contact review: names compared by `sounds()` (Cyrillic transliterated; č/ч, š/ш, ž/ж, г/h/g, й/и/y/j/i, doubled
+  letters unified), so "Ігор Васківський" = "Ihor Vaskivskyi"; reason "Same name in Latin and Cyrillic". AI variant
+  pairs also include contacts in different scripts sharing a surname (contacts without email but with phones too).

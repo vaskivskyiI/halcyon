@@ -483,4 +483,11 @@ export const migrations = [
     payload_json TEXT, reason TEXT, status TEXT DEFAULT 'open', created_at INTEGER, decided_at INTEGER, UNIQUE (user_id, key)
   );
   `,
+  // 42: senders the user wants treated normally although they rarely read their mail (ai/habits.js).
+  `
+  CREATE TABLE sender_habits (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, address TEXT NOT NULL, keep INTEGER DEFAULT 1, created_at INTEGER,
+    PRIMARY KEY (user_id, address)
+  );
+  `,
 ];

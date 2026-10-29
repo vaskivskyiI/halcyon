@@ -32,7 +32,17 @@ export function mergeContacts(userId, keepId, otherIds) {
   return updateContact(userId, keep.id, k);
 }
 
-const nameKey = (n) => fold(n || '').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
+// Names in Cyrillic are written in Latin letters, and both are reduced to how they sound, so "Ігор Васківський",
+// "Igor Vaskivskij" and "Ihor Vaskivskyi" (or "Шуштар" and "Šuštar") give the same key: č/ч, š/ш, ž/ж fold alike,
+// г/h/g are one, й/и/y/j/i are one, doubled letters count once.
+const CYR = { а: 'a', б: 'b', в: 'v', г: 'g', ґ: 'g', д: 'd', е: 'e', є: 'e', ё: 'e', ж: 'z', з: 'z', и: 'i', і: 'i', ї: 'i', й: 'i', к: 'k', л: 'l',
+  м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'c', ш: 's', щ: 's', ъ: '', ы: 'i', ь: '', э: 'e',
+  ю: 'iu', я: 'ia', ђ: 'd', ј: 'i', љ: 'l', њ: 'n', ћ: 'c', џ: 'd', ѓ: 'g', ќ: 'k', ѕ: 'dz' };
+export const sounds = (s) => fold(s || '').replace(/[\u0400-\u04ff]/g, (c) => CYR[c] ?? '')
+  .replace(/shch|sch/g, 's').replace(/kh/g, 'h').replace(/zh/g, 'z').replace(/ch|tz|ts/g, 'c').replace(/sh/g, 's').replace(/dj|dzh/g, 'd')
+  .replace(/h/g, 'g').replace(/w/g, 'v').replace(/[yj]/g, 'i').replace(/([a-z])\1+/g, '$1');
+const nameKey = (n) => sounds(n).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
+const scriptOf = (n) => (/[\u0400-\u04ff]/.test(n || '') ? 'cyr' : 'lat');
 const contactsOf = (userId) => all('SELECT * FROM contacts WHERE user_id = ? AND deleted = 0', userId).map((c) => ({ ...c, emails: json(c.emails_json, []).map((e) => String(e.value || '').toLowerCase()).filter(Boolean) }));
 /** The contact the others merge into: a saved one before collected ones, then the fullest, then the oldest. */
 const best = (list) => [...list].sort((a, b) => (a.auto_collected - b.auto_collected) || (b.favorite - a.favorite)
@@ -56,7 +66,11 @@ export async function scanContacts(userId) {
   // The same full name (accents, order and case aside).
   const byName = new Map();
   for (const c of contacts) { const k = nameKey(c.display_name); if (k.split(' ').length >= 2 && k.length >= 5) { if (!byName.has(k)) byName.set(k, []); byName.get(k).push(c.id); } }
-  for (const ids of byName.values()) if (ids.length > 1) groups.push({ ids, reason: 'Same name' });
+  for (const ids of byName.values()) {
+    if (ids.length < 2) continue;
+    const mixed = new Set(ids.map((id) => scriptOf(byId.get(id).display_name))).size > 1;
+    groups.push({ ids, reason: mixed ? 'Same name in Latin and Cyrillic' : 'Same name' });
+  }
   // Overlapping groups become one.
   const merged = [];
   for (const g of groups) {
@@ -105,14 +119,18 @@ async function nameVariants(userId, contacts, known) {
   const decided = new Set(all('SELECT key FROM contact_suggestions WHERE user_id = ?', userId).map((r) => r.key));
   const first = (c) => nameKey(c.first_name || String(c.display_name || '').split(/\s+/)[0]).split(' ')[0] || '';
   const domain = (c) => (c.emails[0] || '').split('@')[1] || '';
+  const phones = (c) => json(c.phones_json, []).map((p) => p.value).filter(Boolean).join(', ');
   const pairs = [];
-  const list = contacts.filter((c) => !done.has(c.id) && c.emails.length);
+  const list = contacts.filter((c) => !done.has(c.id) && (c.emails.length || c.phones_json !== '[]'));
+  const words = (c) => nameKey(c.display_name).split(' ').filter((w) => w.length >= 4);
   for (let i = 0; i < list.length && pairs.length < 25; i++) {
     for (let j = i + 1; j < list.length && pairs.length < 25; j++) {
       const a = list[i], b = list[j];
       const sameDomain = domain(a) && domain(a) === domain(b) && !PUBLIC_MAIL.test(domain(a));
-      const sameLocal = a.emails[0].split('@')[0] === b.emails[0].split('@')[0];
-      if (!(first(a) && first(a) === first(b) && (sameDomain || sameLocal)) || nameKey(a.display_name) === nameKey(b.display_name)) continue;
+      const sameLocal = a.emails[0] && a.emails[0].split('@')[0] === b.emails[0]?.split('@')[0];
+      // One in Cyrillic, one in Latin letters with a surname in common: maybe one person (a nickname, another spelling).
+      const acrossScripts = scriptOf(a.display_name) !== scriptOf(b.display_name) && words(a).some((w) => words(b).includes(w));
+      if (!((first(a) && first(a) === first(b) && (sameDomain || sameLocal)) || acrossScripts) || nameKey(a.display_name) === nameKey(b.display_name)) continue;
       if (decided.has(`merge:${[a.id, b.id].sort((x, y) => x - y).join(',')}`)) continue;
       pairs.push([a, b]);
     }
@@ -120,8 +138,8 @@ async function nameVariants(userId, contacts, known) {
   if (!pairs.length) return [];
   const { data } = await chatJSON(userId, 'background', {
     messages: [
-      { role: 'system', content: 'You tidy an address book. For each numbered pair of contacts, decide whether both are very likely the SAME person (a nickname, initials, a second address of the same person). Different people who share a first name and a company are NOT the same. Answer JSON: {"same": [{"pair": number, "reason": short reason}]} listing only the pairs that are the same person.' },
-      { role: 'user', content: pairs.map(([a, b], i) => `${i + 1}. "${a.display_name}" <${a.emails.join(', ')}>${a.org ? ` (${a.org})` : ''}  —  "${b.display_name}" <${b.emails.join(', ')}>${b.org ? ` (${b.org})` : ''}`).join('\n') },
+      { role: 'system', content: 'You tidy an address book. For each numbered pair of contacts, decide whether both are very likely the SAME person (a nickname, initials, a second address of the same person, the name written in Cyrillic in one and in Latin letters in the other — e.g. "Олена Коваль" and "Olena Koval"). Different people who share a first name and a company are NOT the same. Answer JSON: {"same": [{"pair": number, "reason": short reason}]} listing only the pairs that are the same person.' },
+      { role: 'user', content: pairs.map(([a, b], i) => `${i + 1}. ${[a, b].map((c) => `"${c.display_name}" <${[c.emails.join(', '), phones(c)].filter(Boolean).join('; ')}>${c.org ? ` (${c.org})` : ''}`).join('  —  ')}`).join('\n') },
     ],
     temperature: 0, maxTokens: 600,
   });

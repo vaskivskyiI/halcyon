@@ -14,6 +14,7 @@ import { contactByEmail } from '../contacts/service.js';
 import { scope, inIds } from '../spaces.js';
 import { localToEpoch, normalizeEvent } from '../util/time.js';
 import { senderPreference, applyPreference, preferenceExamples } from './learning.js';
+import { applyHabit } from './habits.js';
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
@@ -307,6 +308,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       try { await verifyOpen(userId, m, res.data, { ctx, conversation, message, interactive, language: summaryLanguage(settings, uiLanguage) }); } catch (e) { log.warn(`verify ${m.id}: ${e.message}`); }
     }
     applyPreference(res.data, pref);
+    if (!fromMe) applyHabit(userId, res.data, m, pref, contact);
     res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.needs_action = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
     res.data.requested_items = checkRequests(m, res.data.requested_items);

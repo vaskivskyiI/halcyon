@@ -30,14 +30,19 @@ export default function SendersList({ onMenu }) {
     else toast(x.method === 'mailto' ? 'Unsubscribe email sent' : 'Unsubscribed');
     setRows((cur) => cur.map((y) => (y.address === r.address ? { ...y, unsubscribed: true } : y)));
   });
-  const shown = (rows || []).filter((r) => !unread || r.readRate < 20);
+  const habit = (r, keep) => run(r, 'habit', async () => {
+    const x = await api.post('/api/senders/habit', { address: r.address, keep });
+    toast(keep ? 'Their mail is treated normally again' : x.learned ? 'Their mail is held as not important again' : 'Will learn from what you read');
+    setRows((cur) => cur.map((y) => (y.address === r.address ? { ...y, kept: keep, learned: x.learned } : y)));
+  });
+  const shown = (rows || []).filter((r) => !unread || r.readRate < 20 || r.learned);
   return (
     <section className="list-pane senders" style={{ flex: 1, width: 'auto' }}>
       <div className="list-head" style={{ paddingBottom: 10 }}>
         <div className="row"><button className="icon-btn mobile-only" onClick={onMenu}><MenuIcon size={18} /></button><h3 style={{ margin: 0, fontSize: 17 }} className="grow">Senders</h3>
           <select className="input" style={{ width: 'auto', height: 30 }} value={days} onChange={(e) => setDays(Number(e.target.value))}>{PERIODS.map(([d, l]) => <option key={d} value={d}>Last {l}</option>)}</select></div>
         <div className="row small" style={{ marginTop: 8, gap: 12, flexWrap: 'wrap' }}>
-          <span className="muted grow">Who sends you the most, and how much of it you read. Clear out what you never read: unsubscribe and archive in one go.</span>
+          <span className="muted grow">Who sends you the most, and how much of it you read. Clear out what you never read: unsubscribe and archive in one go. Senders you keep leaving unread are learned as not important.</span>
           <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={unread} onChange={(e) => setUnread(e.target.checked)} /> Only rarely read</label>
         </div>
       </div>
@@ -47,6 +52,9 @@ export default function SendersList({ onMenu }) {
             <div className="grow" style={{ minWidth: 0 }}>
               <div className="truncate" style={{ fontWeight: 600 }}>{r.name || r.address} {r.name && <span className="faint small" style={{ fontWeight: 400 }}>{r.address}</span>}</div>
               <div className="small muted">{r.total} emails · <span style={{ color: r.readRate < 20 ? 'var(--danger)' : undefined }}>{r.readRate}% read</span>{r.inbox ? ` · ${r.inbox} in the inbox` : ''} · last {fmtListDate(r.last)}{r.category ? ` · ${r.category}` : ''}</div>
+              {r.learned && <div className="small" style={{ marginTop: 3 }}><span className="chip" title="You rarely open their mail, so new mail from them is held as not important: no notification, not in Important / Focused, no reply suggestions. It switches off by itself when you read them again.">Learned: you rarely read this</span>{' '}
+                <button className="link-btn small" disabled={busy[`${r.address}habit`]} onClick={() => habit(r, true)}>Undo — treat normally</button></div>}
+              {r.kept && <div className="small muted" style={{ marginTop: 3 }}>Treated normally, whatever you read · <button className="link-btn small" disabled={busy[`${r.address}habit`]} onClick={() => habit(r, false)}>let Halcyon learn</button></div>}
               <div className="read-bar"><span style={{ width: `${r.readRate}%` }} /></div>
             </div>
             <div className="row" style={{ gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
