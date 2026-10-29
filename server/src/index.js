@@ -10,6 +10,7 @@ import './db/index.js';
 import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from './auth.js';
 import { recordTiming } from './util/metrics.js';
 import diagnosticsRoutes from './routes/diagnostics.js';
+import threadRoutes from './routes/threads.js';
 import sharedRoutes from './routes/shared.js';
 import mcpRoutes from './mcp/server.js';
 import archiveRoutes from './routes/archives.js';
@@ -98,6 +99,7 @@ export async function buildServer({ background = true } = {}) {
   await app.register(settingsRoutes);
   await app.register(spaceRoutes);
   await app.register(diagnosticsRoutes);
+  await app.register(threadRoutes);
   await app.register(sharedRoutes);
   await app.register(mcpRoutes);
   await app.register(archiveRoutes);

@@ -496,3 +496,40 @@ div.provider { cursor: default; background: var(--panel-2); }
 /* Nothing in the AI card is wider than the card: long suggested replies wrap onto two lines */
 .ai-card .btn { max-width: 100%; }
 .ai-card .replies .btn { white-space: normal; text-align: left; height: auto; min-height: 28px; padding-top: 4px; padding-bottom: 4px; line-height: 1.3; }
+/* Calmer list rows: subject and preview on one line; states as small icons next to the date */
+.msg-row .subject-line { font-size: 13.5px; color: var(--text); }
+.msg-row .subject-line .preview { color: var(--text-2); font-weight: 400; font-size: 12.5px; }
+.msg-row.unread .subject-line .subject { font-weight: 700; }
+.msg-row .row-states { display: inline-flex; gap: 5px; align-items: center; color: var(--text-3); flex: none; margin-left: auto; }
+.msg-row .row-states + .date { margin-left: 6px; }
+.msg-row .row-states .st.reply, .msg-row .row-states .st.action { color: var(--ai); }
+.msg-row .row-states .st.draft { color: var(--danger); }
+.msg-row .row-states:empty { display: none; }
+.msg-row .row-states:empty + .date { margin-left: auto; }
+.list-group { padding: 7px 12px 5px; font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--text-3); display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--border); }
+/* Sidebar: account actions on hover; "More" quieter than the views */
+.nav-section.account-head .head-more { width: 22px; height: 22px; opacity: 0; flex: none; }
+.nav-section.account-head:hover .head-more { opacity: 1; }
+@media (hover: none) { .nav-section.account-head .head-more { opacity: .6; } }
+.nav-item.more-toggle { margin-bottom: 4px; }
+/* Reader: the private note, the one-line "recent with", chips that are buttons */
+.thread-note { margin: 0 0 12px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, #f59e0b 10%, var(--panel)); border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--border)); display: grid; gap: 6px; }
+.thread-note textarea { background: transparent; resize: vertical; }
+.card.recent-with { padding: 6px 10px; }
+.card.recent-with.open { padding-bottom: 10px; }
+.recent-with .recent-head { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: 0; padding: 4px 0; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.recent-with.open .recent-head { margin-bottom: 4px; }
+button.chip.clickable { border: 1px solid var(--border); background: transparent; cursor: pointer; font: inherit; font-size: 12px; }
+button.chip.clickable.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+/* Command palette (Ctrl+K) */
+.palette-backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 28%); z-index: 1000; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; }
+.palette { width: min(620px, 100%); max-height: 70vh; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 24px 60px rgb(0 0 0 / 25%); overflow: hidden; }
+.palette-input { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text-2); }
+.palette-input input { flex: 1; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15px; color: var(--text); }
+.palette-input kbd { font-size: 11px; border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; color: var(--text-3); }
+.palette-list { overflow: auto; padding: 6px; }
+.palette-group { font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--text-3); padding: 8px 8px 4px; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
+.palette-item.sel { background: var(--accent-soft); }
+/* Phones: the bottom bar keeps what is used often (theme: Settings → Appearance) */
+@media (max-width: 767px) { .rail .desk-only { display: none; } }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -23,6 +23,15 @@ const threadCache = new Map();
 
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
+  // Pin and note state of the open conversation (hooks stay above the early returns below).
+  const [pinned, setPinned] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const openKey = thread?.current ? (thread.current.threadId || `m:${thread.current.id}`) : '';
+  useEffect(() => {
+    setNoteOpen(false);
+    if (!openKey) return;
+    api.get(`/api/messages/${thread.current.id}/pin`).then((r) => setPinned(r.pinned)).catch(() => {});
+  }, [openKey]);
   const [loading, setLoading] = useState(false);
   const [allowImages, setAllowImages] = useState(false);
   const [expanded, setExpanded] = useState(new Set());
@@ -235,6 +244,12 @@ export default function Reader({ id, view }) {
       setEventDraft({ ...draft, ...(calendarId && !draft.calendarId ? { calendarId } : {}) });
     } catch (e) { toastError(e); } finally { setAiWorking(false); }
   };
+  // Pinned to the top of the inbox, and the private note: per conversation (thread id, or the message alone).
+  const threadKey = latest?.threadId || (latest ? `m:${latest.id}` : '');
+  const noteMsg = latest?.id;
+  const togglePin = async () => {
+    try { await api.post(`/api/messages/${latest.id}/pin`, { pinned: !pinned }); setPinned(!pinned); toast(pinned ? 'Unpinned' : 'Pinned to the top of the inbox'); window.dispatchEvent(new Event('halcyon:poll')); } catch (e) { toastError(e); }
+  };
   const saveSender = async () => {
     try {
       const r = await api.post(`/api/messages/${latest.id}/save-sender`, {});
@@ -308,6 +323,9 @@ export default function Reader({ id, view }) {
         <h1>{target.subject || '(no subject)'}</h1>
         <div className="row" style={{ gap: 6, marginTop: -6, marginBottom: 12, flexWrap: 'wrap' }}>
           {target.folder && <span className="chip"><Folder size={11} /> {target.folder.name}</span>}
+          <button className={`chip clickable ${pinned ? 'on' : ''}`} title={pinned ? 'Unpin' : 'Pin to the top of the inbox'} onClick={togglePin}><Pin size={11} /> {pinned ? 'Pinned' : 'Pin'}</button>
+          <button className={`chip clickable ${noteOpen ? 'on' : ''}`} title="A private note on this conversation — only you see it" onClick={() => setNoteOpen(true)}><StickyNote size={11} /> Note</button>
+          {target.listUnsubscribe && <button className="chip clickable" title="Stop receiving these emails — Halcyon contacts the sender's unsubscribe address" onClick={unsubscribe}><BellOff size={11} /> Unsubscribe</button>}
           {ins?.category && <span className="chip" style={{ color: CATEGORY_COLORS[ins.category] }}>{ins.category}</span>}
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
           {(target.myCategories || []).map((cid) => { const c = (folders.custom || []).find((x) => x.id === cid); return c && <a key={`c${cid}`} className="chip" style={{ color: c.color || 'var(--accent)' }} href={`#/mail/my~${c.id}`}><Tag size={11} /> {c.name}</a>; })}
@@ -319,6 +337,8 @@ export default function Reader({ id, view }) {
               } };
             })])}><Tag size={11} /> ▾</button>}
         </div>
+
+        <ThreadNote threadKey={threadKey} messageId={noteMsg} open={noteOpen} onOpen={setNoteOpen} />
 
         {/* The user's own email that asked something and has no answer yet: nudge, or stop waiting. */}
         {target.insight?.expectsReply && !target.insight.dismissed && !msgs.some((x) => x.date > target.date && x.folder?.specialUse !== '\\Sent') && (
@@ -460,13 +480,18 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
         <span className="row" style={{ marginLeft: 'auto', gap: 4, flexWrap: 'wrap' }}>
           {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ins?.topic && <a className="chip topic" href={`#/mail/${topicView(ins.topic)}`} title={`Show all mail about “${ins.topic}”`}>#{ins.topic}</a>}
-          {ins?.category && <button className="chip" style={{ border: 0, cursor: 'pointer' }} title="Show this category, or change it (the AI learns from it)"
-            onClick={(e) => openMenu(e, [{ label: `Show all ${ins.category} mail`, onClick: () => jump(`#/mail/${categoryView(ins.category)}`) }, 'sep', { section: 'Change category' }, ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => correct('category', c) }))])}>{ins.category} ▾</button>}
-          {ins?.priority != null && <span className="chip" style={{ background: ins.priority >= 70 ? '#fee2e2' : undefined, color: ins.priority >= 70 ? '#991b1b' : undefined }}>Priority {ins.priority}{ins.priorityReason ? ` · ${ins.priorityReason}` : ''}</span>}
-          {ins && <button className={`chip ${ins.needsReply ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={ins.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply'} onClick={() => onNeedsReply(!ins.needsReply)}>
-            <CornerUpLeft size={11} /> {ins.needsReply ? 'Needs reply ✕' : 'Needs reply?'}</button>}
-          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Important — the AI learns from this" onClick={() => correct('important')}><ThumbsUp size={14} /></button>}
-          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Not important — the AI learns from this" onClick={() => correct('unimportant')}><ThumbsDown size={14} /></button>}
+          {ins?.needsReply && <button className="chip ai" style={{ border: 0, cursor: 'pointer' }} title="Remove “needs reply”" onClick={() => onNeedsReply(false)}><CornerUpLeft size={11} /> Needs reply ✕</button>}
+          {ins && <button className="icon-btn" style={{ width: 26, height: 26 }} title="Category, priority, and teaching the AI"
+            onClick={(e) => openMenu(e, [
+              ins.priority != null && { section: `Priority ${ins.priority}${ins.priorityReason ? ` · ${ins.priorityReason}` : ''}` },
+              { label: 'Important', icon: ThumbsUp, hint: 'AI learns', onClick: () => correct('important') },
+              { label: 'Not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => correct('unimportant') },
+              !ins.needsReply && { label: 'Mark as needs reply', icon: CornerUpLeft, onClick: () => onNeedsReply(true) },
+              ins.category && 'sep',
+              ins.category && { label: `Show all ${ins.category} mail`, onClick: () => jump(`#/mail/${categoryView(ins.category)}`) },
+              { section: 'Category (AI learns)' },
+              ...CATEGORIES.map((c) => ({ label: c === ins.category ? `${c} ✓` : c, onClick: () => correct('category', c) })),
+            ])}><MoreHorizontal size={15} /></button>}
         </span>
       </div>
       {menuNode}
@@ -481,8 +506,6 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
         </div>
       </div>}
       {summary ? <Markdown text={summary} /> : <div>{ins?.summary}</div>}
-      {/* Who the sender is and how the user writes with them (contact profile; editable). */}
-      {requester?.address && <PersonProfile email={requester.address} name={requester.name} compact />}
       {ins?.resolution === 'replied' && !ins.needsAction && <div className="notice action-needed done" style={{ margin: '8px 0 0' }}>
         <CornerUpLeft size={15} /><span className="grow"><b>Answered</b>{ins.resolvedBy ? <> by <a href={`#/mail/unified/${ins.resolvedBy}`}>your email</a></> : ''}{ins.resolvedAt ? ` of ${new Date(ins.resolvedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}` : ''}</span>
         <button className="btn sm ghost" title="Your email did not answer it: put it back in Needs reply" onClick={() => onNeedsReply(true)}>Still needs a reply</button>
@@ -607,14 +630,15 @@ function RecentWith({ messageId, view }) {
     api.get(`/api/messages/${messageId}/recent-with?limit=6`).then(setData).catch(() => setData(null));
   }, [messageId]);
   const list = data?.threads;
-  if (!list?.length) return null;
-  const shown = open ? list : list.slice(0, 2);
+  if (!list?.length && !data?.person?.address) return null;
   const name = data.person.name || data.person.address;
+  // One line until opened: who it is and how much there is; opened, what the AI knows of them and the conversations.
   return (
-    <div className="card recent-with">
-      <div className="row small muted" style={{ gap: 6, marginBottom: 4 }}><MailIcon size={13} /><span className="grow">Recent with <b>{name}</b></span>
-        {list.length > 2 && <button className="btn sm ghost" onClick={() => setOpen(!open)}>{open ? 'Less' : `All ${list.length}`}</button>}</div>
-      {shown.map((t) => (
+    <div className={`card recent-with ${open ? 'open' : ''}`}>
+      <button className="recent-head" onClick={() => setOpen(!open)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<MailIcon size={13} />
+        <span className="grow truncate"><b>{name}</b>{list?.length ? <span className="muted"> · {list.length} other conversation{list.length === 1 ? '' : 's'}</span> : ''}</span></button>
+      {open && data.person.address && <PersonProfile email={data.person.address} name={data.person.name} compact />}
+      {open && (list || []).map((t) => (
         <a key={t.id} className={`recent-row ${t.unread ? 'unread' : ''}`} href={`#/mail/${view}/${t.id}`} onClick={(e) => { e.preventDefault(); jump(`#/mail/${view}/${t.id}`); }}>
           <span className="row" style={{ gap: 6 }}><span className="grow truncate">{t.subject || '(no subject)'}</span>
             {t.count > 1 && <span className="chip">{t.count}</span>}<span className="small faint" style={{ flex: 'none' }}>{fmtFull(t.date)}</span></span>
@@ -981,6 +1005,30 @@ function QuickReply({ latest, onSent, hasDraft }) {
       <div className="small faint" style={{ marginTop: 4, textAlign: 'right' }}>Ctrl+Enter to send</div>
     </div>
   );
+}
+
+/** The user's private note on a conversation (never sent, never shown to anyone else); saved as it is typed. */
+function ThreadNote({ threadKey, messageId, open, onOpen }) {
+  const [note, setNote] = useState('');
+  const [saved, setSaved] = useState('');
+  const typed = useRef(false);
+  useEffect(() => {
+    typed.current = false; setNote(''); setSaved('');
+    if (threadKey) api.get(`/api/messages/${messageId}/note`).then((r) => { setNote(r.note); setSaved(r.note); }).catch(() => {});
+  }, [threadKey]);
+  useEffect(() => {
+    if (!typed.current || note === saved) return undefined;
+    const t = setTimeout(() => api.put(`/api/messages/${messageId}/note`, { note }).then(() => setSaved(note)).catch(toastError), 700);
+    return () => clearTimeout(t);
+  }, [note]);
+  if (!open && !saved) return null;
+  return (
+    <div className="thread-note">
+      <div className="row small" style={{ gap: 6 }}><StickyNote size={13} /><b className="grow">Your note</b><span className="faint">{note === saved ? (saved ? 'Saved · only you see it' : 'Only you see it') : 'Saving…'}</span>
+        {open && <button className="icon-btn" aria-label="Close note" onClick={() => onOpen(false)}><XIcon size={13} /></button>}</div>
+      <textarea className="input" rows={Math.min(8, Math.max(2, note.split('\n').length))} autoFocus={open && !saved} placeholder="What to remember about this conversation…" value={note}
+        onChange={(e) => { typed.current = true; setNote(e.target.value); }} />
+    </div>);
 }
 
 function printThread(msgs) {

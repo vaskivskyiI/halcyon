@@ -100,3 +100,21 @@ test('failed server changes and unreachable sends are tried again by themselves,
   assert.ok(!p.some((x) => x.key === `op:${op}`));
   db.prepare('DELETE FROM outbox WHERE account_id = ?').run(a.id);
 });
+
+test('conversations pinned to the top (listed apart, not twice) and private notes on them', async () => {
+  const box = account('me@pins.example', '');
+  const a = mail(box, 1), b = mail(box, 2);
+  await api('POST', `/api/messages/${a}/pin`, {});
+  assert.equal((await api('GET', `/api/messages/${a}/pin`)).pinned, true);
+  const pinned = await api('GET', `/api/messages?view=folder&folderId=${box.folder}&pinned=1`);
+  const rest = await api('GET', `/api/messages?view=folder&folderId=${box.folder}&pinned=0`);
+  assert.deepEqual(pinned.items.map((m) => [m.id, m.pinned]), [[a, true]]);
+  assert.deepEqual(rest.items.map((m) => m.id), [b]);
+  await api('PUT', `/api/messages/${a}/note`, { note: 'Call Ana before Friday' });
+  assert.equal((await api('GET', `/api/messages/${a}/note`)).note, 'Call Ana before Friday');
+  assert.equal((await api('GET', `/api/messages?view=folder&folderId=${box.folder}`)).items.find((m) => m.id === a).hasNote, true);
+  await api('PUT', `/api/messages/${a}/note`, { note: '  ' });
+  assert.equal((await api('GET', `/api/messages/${a}/note`)).note, '');
+  await api('POST', `/api/messages/${a}/pin`, { pinned: false });
+  assert.equal((await api('GET', `/api/messages?view=folder&folderId=${box.folder}&pinned=1`)).items.length, 0);
+});

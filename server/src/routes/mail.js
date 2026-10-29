@@ -32,7 +32,9 @@ const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.threa
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special,
   CASE WHEN i.needs_reply = 1 AND i.needs_reply_user IS NULL THEN ${supersededSql('reply')} ELSE 0 END AS ai_superseded_reply,
   CASE WHEN i.needs_action = 1 THEN ${supersededSql('action')} ELSE 0 END AS ai_superseded_action,
-  (SELECT group_concat(category_id) FROM message_tags WHERE message_id = m.id AND source IN ('ai', 'user')) AS my_tags`;
+  (SELECT group_concat(category_id) FROM message_tags WHERE message_id = m.id AND source IN ('ai', 'user')) AS my_tags,
+  EXISTS (SELECT 1 FROM pinned_threads pt WHERE pt.user_id = m.user_id AND pt.thread_key = COALESCE(m.thread_id, 'm:' || m.id)) AS is_pinned,
+  EXISTS (SELECT 1 FROM thread_notes tn WHERE tn.user_id = m.user_id AND tn.thread_key = COALESCE(m.thread_id, 'm:' || m.id) AND tn.note != '') AS has_note`;
 
 // Message list orders (t = table prefix: 'm.' or '' inside the threaded CTE).
 const SORTS = {
@@ -50,7 +52,7 @@ function listItem(r, open) {
     ai: r.ai_summary != null || r.ai_category != null ? { summary: r.ai_summary, category: r.ai_category, priority: r.ai_priority, needsReply: open ? open(r).reply : !!r.ai_needs_reply, isPhishing: !!r.ai_phishing, hasDraft: !!r.ai_has_draft,
       topic: r.ai_topic || null, expired: !!(r.ai_expires_at && r.ai_expires_at < Date.now()),
       needsAction: open ? open(r).action : !!r.ai_needs_action && !r.ai_dismissed, actionSummary: r.ai_action_summary || null } : null,
-    hasDraft: !!r.has_user_draft, myCategories: r.my_tags ? String(r.my_tags).split(',').map(Number) : [],
+    hasDraft: !!r.has_user_draft, myCategories: r.my_tags ? String(r.my_tags).split(',').map(Number) : [], pinned: !!r.is_pinned, hasNote: !!r.has_note,
     threadCount: r.thread_count || 1, threadUnread: r.thread_unread || 0, folder: { id: r.folder_id, specialUse: r.folder_special },
   });
 }
@@ -88,6 +90,9 @@ function scopeFor(userId, q, sc) {
     default: break;
   }
   if (q.category && view !== 'category') { where.push('i.category = ?'); params.push(q.category); }
+  // Pinned conversations only (shown above the list), or the list without them (they are not shown twice).
+  const pinned = "EXISTS (SELECT 1 FROM pinned_threads pt WHERE pt.user_id = m.user_id AND pt.thread_key = COALESCE(m.thread_id, 'm:' || m.id))";
+  if (q.pinned === '1') where.push(pinned); else if (q.pinned === '0') where.push(`NOT ${pinned}`);
   return { where, params };
 }
 

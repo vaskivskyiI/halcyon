@@ -752,3 +752,22 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   stay manual); unsaved sent copies are queued again; an SMTP "sending failed" warning is re-checked every 10 min and
   cleared when the server answers. The problems panel shows these as warnings with the next try until they succeed.
 - AI card on phones: suggested-event and reply buttons never wider than the card (title shortened / replies wrap).
+
+### Calmer interface, command palette, pinned conversations, notes (migration 39)
+- Sidebar (MailView `FolderNav`): core views (All inboxes, Needs reply, Action needed, Flagged, Snoozed, Outbox &
+  drafts); Important and Waiting for reply under "More" (shown while open; also "New category" / "New label" when
+  none exist — their sections are hidden while empty). No "New folder" rows: account header menu (right-click or "…"):
+  New folder, Analyse older mail, settings. AI categories and archives start folded (stored per device).
+- List rows: line 1 sender + state icons (reply needed, action, draft, note, invitation, attachment, flag) + date;
+  line 2 subject — preview (AI summary when shown); a third line only for topic / categories / labels / phishing /
+  shared space / not on server.
+- Pinned conversations: `pinned_threads` (user, thread_key = thread id or "m:<id>"); GET/POST
+  /api/messages/:id/pin (by message, so shared-space mail is pinned in its space); list `pinned` / `hasNote` flags,
+  `?pinned=1|0`; in inbox views (newest first, no search) a "Pinned" group above the list.
+- Notes: `thread_notes`; GET/PUT /api/messages/:id/note; reader shows a note box (autosaved), header chips Pin /
+  Note / Unsubscribe (when List-Unsubscribe).
+- Reader AI card: category, priority, important / not important and "mark as needs reply" in one "⋯" menu; the
+  contact profile moved into "Recent with", which is a one-line toggle.
+- Command palette (`components/CommandPalette.jsx`): Ctrl/⌘+K or the ⌘ button in the rail — actions, views, folders,
+  spaces, settings, mail and people found for the text, "Search mail for …", "Ask the assistant …" (via
+  sessionStorage halcyon.ask). Events: `halcyon:palette`, `halcyon:search` (MailView), `halcyon:new-event` (Calendar).

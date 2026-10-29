@@ -459,4 +459,10 @@ export const migrations = [
   ALTER TABLE pending_ops ADD COLUMN next_retry_at INTEGER;
   ALTER TABLE outbox ADD COLUMN auto_retries INTEGER DEFAULT 0;
   `,
+  // 39: conversations pinned to the top of the list, and private notes on conversations (thread_key: the thread id,
+  // or "m:<message id>" for a message without one).
+  `
+  CREATE TABLE pinned_threads (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_key TEXT NOT NULL, pinned_at INTEGER, PRIMARY KEY (user_id, thread_key));
+  CREATE TABLE thread_notes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_key TEXT NOT NULL, note TEXT, updated_at INTEGER, PRIMARY KEY (user_id, thread_key));
+  `,
 ];

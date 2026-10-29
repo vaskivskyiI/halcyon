@@ -69,7 +69,9 @@ export default function CalendarView() {
   const newEvent = (start, allDay = false, end = null) => {
     const s = start || (() => { const d = new Date(); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0); return d.getTime(); })();
     setEditing({ start: s, end: end || (allDay ? s + 864e5 : s + (settings.calendar.defaultDurationMin || 30) * 60e3), allDay, reminders: [settings.calendar.defaultReminderMin ?? 15] });
-  };
+  };  // "New event" from the command palette (Ctrl+K).
+  useEffect(() => { const h = () => newEvent(); window.addEventListener('halcyon:new-event', h); return () => window.removeEventListener('halcyon:new-event', h); });
+
 
   // Time blocked in another space has no details here; everything else opens.
   const openEvent = (ev) => (ev.blocked ? toast(`${ev.title} — the details are only shown in that space`) : setEditing(ev));
