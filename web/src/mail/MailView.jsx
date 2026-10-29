@@ -48,8 +48,9 @@ function viewQuery(view) {
   if (view.startsWith('tp~')) return { view: 'topic', topic: decodeURIComponent(view.slice(3)) };
   if (view.startsWith('my~')) return { view: 'mycat', customId: view.slice(3) };
   if (view.startsWith('ct~')) return { view: 'category', category: decodeURIComponent(view.slice(3)) };
-  if (view.startsWith('f')) return { view: 'folder', folderId: view.slice(1) };
-  if (view.startsWith('l')) return { view: 'label', labelId: view.slice(1) };
+  // f<id> / l<id> only: "flagged" also starts with an f (it was read as folder "lagged" and showed nothing).
+  if (/^f\d+$/.test(view)) return { view: 'folder', folderId: view.slice(1) };
+  if (/^l\d+$/.test(view)) return { view: 'label', labelId: view.slice(1) };
   return { view };
 }
 
@@ -57,9 +58,19 @@ export default function MailView({ route }) {
   const view = route[1] || 'unified';
   const openId = route[2] ? Number(route[2]) : null;
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+    const esc = (e) => { if (e.key === 'Escape') setSidebarOpen(false); };
+    window.addEventListener('keydown', esc);
+    // The Android app asks this first when the back button is pressed (true: handled, the page stays).
+    window.halcyonBack = () => { setSidebarOpen(false); return true; };
+    return () => { window.removeEventListener('keydown', esc); delete window.halcyonBack; };
+  }, [sidebarOpen]);
   return (
     <div className={`main ${openId ? 'mail-reading' : 'mail-list-only'}`}>
       <FolderNav view={view} open={sidebarOpen} onNavigate={() => setSidebarOpen(false)} />
+      {/* On a phone the folder list slides over the mail: tapping beside it closes it. */}
+      {sidebarOpen && <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} />}
       {view === 'scheduled' ? <OutboxList onMenu={() => setSidebarOpen(true)} /> : <MessageList key={view} view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
       {view !== 'scheduled' && <Reader id={openId} view={view} />}
     </div>
@@ -325,7 +336,7 @@ function MessageList({ view, openId, onMenu }) {
     const acc = folders.accounts.find((a) => a.folders.some((f) => `f${f.id}` === view));
     if (acc) store.set({ focusAccountId: acc.accountId });
   }, [view, folders]);
-  const isInboxView = view === 'unified' || (view.startsWith('f') && folders.accounts.some((a) => a.folders.some((f) => `f${f.id}` === view && f.specialUse === '\\Inbox')));
+  const isInboxView = view === 'unified' || (/^f\d+$/.test(view) && folders.accounts.some((a) => a.folders.some((f) => `f${f.id}` === view && f.specialUse === '\\Inbox')));
   // The list is mounted per view (key): the tab chosen last time in this view is kept; until folders are known, wait.
   const effectiveTab = tab || (isInboxView && settings.mail.focusedInbox ? 'focused' : 'all');
   const cacheKey = `${view}|${effectiveTab}|${threaded}|${sort.key}|${sort.dir}|${store.get().space || ''}`;

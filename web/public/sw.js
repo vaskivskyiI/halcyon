@@ -43,11 +43,12 @@ async function store(cache, key, res) {
   if (++puts % 100 === 0) { const keys = await cache.keys(); if (keys.length > 5000) for (const k of keys.slice(0, keys.length - 4000)) await cache.delete(k); }
 }
 
-async function fromCopy(cache, key) {
+// offline: the server could not be reached (the app says so); otherwise the copy only stands in for a slow answer.
+async function fromCopy(cache, key, offline = true) {
   const hit = await cache.match(key);
   if (!hit) return null;
   const headers = new Headers(hit.headers);
-  headers.set('x-halcyon-offline', '1');
+  headers.set(offline ? 'x-halcyon-offline' : 'x-halcyon-stale', '1');
   return new Response(await hit.blob(), { status: hit.status, headers });
 }
 
@@ -59,7 +60,9 @@ async function tell(type) {
 async function networkFirst(e, req, key, cacheName, fallback) {
   const cache = await caches.open(cacheName);
   const net = fetch(req).then(async (res) => { await store(cache, key, res); return res; });
-  const timer = new Promise((r) => setTimeout(() => r('wait'), navigator.onLine === false ? 0 : WAIT));
+  // navigator.onLine is not trusted here: in Android's WebView it can say offline while the network works, and then
+  // every answer came from the copy. Without a network the request itself fails at once.
+  const timer = new Promise((r) => setTimeout(() => r('wait'), WAIT));
   let first;
   try { first = await Promise.race([net, timer]); } catch {
     return (await fromCopy(cache, key)) || fallback();
@@ -69,7 +72,7 @@ async function networkFirst(e, req, key, cacheName, fallback) {
     if (first.status >= 502 && first.status <= 504) return (await fromCopy(cache, key)) || first;
     return first;
   }
-  const copy = await fromCopy(cache, key);
+  const copy = await fromCopy(cache, key, false);
   if (!copy) return net.catch(() => fallback());
   e.waitUntil(net.then(() => tell('halcyon:fresh')).catch(() => {}));
   return copy;

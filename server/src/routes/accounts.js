@@ -8,7 +8,7 @@ import { syncManager } from '../mail/sync.js';
 import { encrypt, randomToken } from '../util/crypto.js';
 import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient, providerServices } from '../mail/oauth.js';
 import { notify } from '../util/events.js';
-import { syncDav, davStatus } from '../scheduler.js';
+import { syncDav, davStatus, DAV_QUIET } from '../scheduler.js';
 import { getSettings } from '../settings.js';
 import { sharedOf } from '../shared.js';
 import { autoReplyOf, autoReplyActive } from '../mail/extras.js';
@@ -139,7 +139,11 @@ export default async function accountRoutes(app) {
     }
     for (const a of userAccounts(userId)) {
       const d = davStatus.get(a.id);
-      if (d?.error && (a.caldav_url || a.carddav_url)) out.push({ key: `dav:${a.id}`, level: 'error', accountId: a.id, title: `${a.email}: calendars / contacts are not synced`, text: d.error, at: d.at, actions: ['retry-dav'] });
+      // A passing failure is tried again quickly a few times before it is shown (scheduler.js DAV_RETRY).
+      if (d?.error && (a.caldav_url || a.carddav_url) && !(d.retry && d.retry <= DAV_QUIET && !d.asked)) {
+        const again = d.retryAt && d.retryAt > t ? ` — trying again at ${new Date(d.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '';
+        out.push({ key: `dav:${a.id}`, level: again ? 'warn' : 'error', accountId: a.id, title: `${a.email}: calendars / contacts are not synced`, text: d.error + again, at: d.at, actions: ['retry-dav'] });
+      }
     }
     for (const c of all('SELECT id, name, source, sync_error FROM calendars WHERE user_id = ? AND sync_error IS NOT NULL', userId)) {
       out.push({ key: `cal:${c.id}`, level: c.source === 'caldav' ? 'error' : 'warn', calendarId: c.id,
@@ -196,7 +200,7 @@ export default async function accountRoutes(app) {
     }, mail ? {} : { mail: 0, sync_enabled: 0 });
     if (mail) syncManager.start(a.id);
     let dav = null;
-    if (a.caldav_url || a.carddav_url) dav = mail ? (syncDav(a), null) : await Promise.race([syncDav(a), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+    if (a.caldav_url || a.carddav_url) dav = mail ? (syncDav(a), null) : await Promise.race([syncDav(a, { asked: true }), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
     return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };
   });
 
@@ -213,7 +217,7 @@ export default async function accountRoutes(app) {
       if (!/^https?:\/\//.test(url)) return httpError(reply, 400, `Enter the ${service === 'calendar' ? 'CalDAV' : 'CardDAV'} address`);
       update('accounts', a.id, accountFields({ [service === 'calendar' ? 'caldavUrl' : 'carddavUrl']: url, davUser: b.davUser, davPassword: b.davPassword, tls: b.tls }), ACCOUNT_COLS);
       const fresh = userAccount(req.user.id, a.id);
-      const dav = await Promise.race([syncDav(fresh), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+      const dav = await Promise.race([syncDav(fresh, { asked: true }), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
       return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };
     }
     if (service === 'mail') {
@@ -276,7 +280,7 @@ export default async function accountRoutes(app) {
     let dav = null;
     const davChanged = (fresh.caldav_url || fresh.carddav_url) && (fresh.caldav_url !== a.caldav_url || fresh.carddav_url !== a.carddav_url
       || fresh.dav_user !== a.dav_user || !!req.body?.davPassword || !davStatus.has(a.id) || !!davStatus.get(a.id)?.error);
-    if (davChanged) dav = await Promise.race([syncDav(fresh), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+    if (davChanged) dav = await Promise.race([syncDav(fresh, { asked: true }), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
     return { ...serializeAccount(fresh), dav };
   });
 
@@ -300,7 +304,7 @@ export default async function accountRoutes(app) {
     const a = userAccount(req.user.id, req.params.id);
     if (!a) return httpError(reply, 404, 'Not found');
     // ?dav=1: calendars and contacts only, waited for (the problems panel's "Try again").
-    if (req.query.dav === '1') return { ok: true, dav: await syncDav(a) };
+    if (req.query.dav === '1') return { ok: true, dav: await syncDav(a, { asked: true }) };
     await syncManager.restart(a.id);
     syncDav(a);
     return { ok: true };

@@ -13,9 +13,12 @@ import { smtpTransport } from './connection.js';
 import { logger } from '../util/log.js';
 
 const log = logger('retry');
-/** Pauses before the 1st, 2nd, … automatic retry: 15 min, 30 min, 1 h, 2 h, 4 h, 8 h, 16 h, 24 h. */
-export const RETRY_STEPS = [15, 30, 60, 120, 240, 480, 960, 1440].map((m) => m * 60e3);
-export const SEND_RETRIES = 6;
+/**
+ * Pauses before the 1st, 2nd, … automatic retry: quick at first (most problems are a moment's outage — a restart, a
+ * proxy without its server), then longer: 30 s, 1, 2, 5, 10, 20, 30 min, 1, 2, 4, 8, 16, 24 h.
+ */
+export const RETRY_STEPS = [0.5, 1, 2, 5, 10, 20, 30, 60, 120, 240, 480, 960, 1440].map((m) => m * 60e3);
+export const SEND_RETRIES = 10;
 /** Errors from before the mail server was reached (nothing was transmitted). */
 export const UNREACHED = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|getaddrinfo|Greeting never received|Connection timeout|connect ETIMEDOUT/i;
 

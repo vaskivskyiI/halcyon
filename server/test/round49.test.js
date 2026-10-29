@@ -54,3 +54,24 @@ test('a task made from an email can repeat (from its due date)', async () => {
   const [once] = await api('POST', `/api/tasks/from-message/${id}`, { items: [{ title: 'No date', notes: '', rrule: 'FREQ=MONTHLY' }] });
   assert.equal(once.rrule, null, 'no due date: nothing to repeat from');
 });
+
+test('a passing DAV failure is quiet during the first quick retries, then shown with the next try', async () => {
+  const { davStatus, DAV_QUIET, DAV_RETRY } = await import('../src/scheduler.js');
+  db.prepare("UPDATE accounts SET carddav_url = 'https://dav.example/' WHERE id = ?").run(acc);
+  const problems = async () => (await api('GET', '/api/status/problems')).problems?.filter((p) => p.key === `dav:${acc}`) ?? [];
+  davStatus.set(acc, { at: Date.now(), error: 'Contacts (CardDAV): 502 Bad Gateway', retry: 1, retryAt: Date.now() + DAV_RETRY[0] });
+  assert.deepEqual(await problems(), [], 'not reported while quick retries run');
+  davStatus.set(acc, { at: Date.now(), error: 'Contacts (CardDAV): 502 Bad Gateway', retry: DAV_QUIET + 1, retryAt: Date.now() + 60e3 });
+  const [p] = await problems();
+  assert.equal(p.level, 'warn');
+  assert.match(p.text, /trying again at/);
+  davStatus.set(acc, { at: Date.now(), error: 'Contacts (CardDAV): the server refused the username or password' });
+  assert.equal((await problems())[0].level, 'error', 'a lasting problem is shown at once');
+  davStatus.delete(acc);
+});
+
+test('automatic retries start quickly and then wait longer and longer', async () => {
+  const { RETRY_STEPS } = await import('../src/mail/retry.js');
+  assert.ok(RETRY_STEPS[0] <= 60e3 && RETRY_STEPS[1] <= 2 * 60e3, 'the first tries come within a minute or two');
+  for (let i = 1; i < RETRY_STEPS.length; i++) assert.ok(RETRY_STEPS[i] > RETRY_STEPS[i - 1]);
+});

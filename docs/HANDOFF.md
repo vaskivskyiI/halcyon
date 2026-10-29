@@ -822,3 +822,19 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Migration safety: the Android branch first shipped its FCM table as migration 38; after merging, 38 is automatic
   retries and FCM is 40 (`CREATE TABLE IF NOT EXISTS`). db/index.js adds 38's columns when they are missing, so a
   database that ran the branch before the merge starts normally (round50). round49: Flagged folder, repeating tasks.
+
+### Phone fixes, quick retries, Flagged view (no migration)
+- Flagged view (all accounts) showed nothing: MailView `viewQuery` read every view starting with "f" as folder
+  `f<id>` ("flagged" → folder "lagged"); now only `f\d+` / `l\d+`.
+- Phone: the folder drawer has a backdrop (tap beside it closes it), Escape closes it, and the Android app's back
+  button asks `window.halcyonBack()` first (MailView sets it while the drawer is open).
+- Settings cards (`.item-card`) and section headings wrap below 600 px: the buttons go under the text (they squeezed
+  account status into a column a few words wide).
+- sw.js: `navigator.onLine` is not trusted (Android's WebView may say offline while online — every answer then came
+  from the copy and the app always said "Offline — saved copy"); a copy that stands in for a slow answer is marked
+  `x-halcyon-stale` (no offline banner), only a failed request or 502-504 marks `x-halcyon-offline`.
+- Retries start fast: mail/retry.js RETRY_STEPS 30 s, 1, 2, 5, 10, 20, 30 min, 1 … 24 h (autoRetry every 20 s;
+  sends 10 retries); a failed send is tried again after 10 s, 30 s, 1 min, 2 min. DAV sync (scheduler.js) that fails
+  for a passing reason (502-504, connection) is tried again after 5 s, 15 s, 30 s, 1, 2, 5 min before the 10-minute
+  cycle; background syncs stay out of the problems panel for the first DAV_QUIET (3) tries, then show as a warning
+  with the next try's time. Syncs the user waits for (`syncDav(a, { asked: true })`: saving, "Try again") report at once.

@@ -70,6 +70,7 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px
 .avatar.lg { width: 72px; height: 72px; font-size: 24px; }
 
 /* Sidebar */
+.sidebar-scrim { display: none; }
 .sidebar { width: 250px; flex: none; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .sidebar-head { padding: 12px; display: flex; gap: 8px; }
 .sidebar-scroll { flex: 1; overflow: auto; padding: 4px 8px 16px; }
@@ -282,6 +283,7 @@ table.simple th, table.simple td { text-align: left; padding: 6px 8px; border-bo
   .app { padding-bottom: 56px; }
   .sidebar { position: fixed; z-index: 45; top: 0; bottom: 56px; left: 0; transform: translateX(-100%); transition: .2s; box-shadow: var(--shadow); }
   .sidebar.open { transform: none; }
+  .sidebar-scrim { display: block; position: fixed; z-index: 44; top: 0; left: 0; right: 0; bottom: 56px; background: rgba(0, 0, 0, .3); }
   .list-pane { width: 100%; border: 0; }
   .mail-reading .list-pane { display: none; }
   .mail-list-only .reader { display: none; }
@@ -542,3 +544,11 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 .palette-item.sel { background: var(--accent-soft); }
 /* Phones: the bottom bar keeps what is used often (theme: Settings → Appearance) */
 @media (max-width: 767px) { .rail .desk-only { display: none; } }
+/* Phones: in settings cards the text gets the full width and the buttons go below it (they squeezed the text into a
+   column a few words wide); a heading's button goes under the heading. */
+@media (max-width: 600px) {
+  .item-card { flex-wrap: wrap; row-gap: 8px; }
+  .item-card > .grow { flex: 1 1 calc(100% - 40px); }
+  .settings-section > .row { flex-wrap: wrap; }
+  .settings-section > .row > .grow { flex-basis: 100%; }
+}

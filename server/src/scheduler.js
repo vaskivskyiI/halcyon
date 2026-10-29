@@ -23,17 +23,26 @@ import { autoRetry } from './mail/retry.js';
 
 const log = logger('scheduler');
 const davBusy = new Map();
-/** The last calendar / contacts sync of each account: { at, calendars, books, error } (shown in the problems panel). */
+/** The last calendar / contacts sync of each account: { at, calendars, books, error, retry, retryAt } (problems panel). */
 export const davStatus = new Map();
+/**
+ * A sync that failed for a passing reason (the server or its proxy restarting: 502-504, no connection) is tried again
+ * soon, with growing pauses, before the 10-minute cycle takes over; the first quick retries are not reported.
+ */
+export const DAV_RETRY = [5, 15, 30, 60, 120, 300].map((s) => s * 1000);
+export const DAV_QUIET = 3;
+const davRetries = new Map();
+const passing = (error) => /\b50[234]\b|bad gateway|service unavailable|gateway time-?out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed|could not be reached|cannot find (homeUrl|principalUrl|calendarHome|addressBookHome)/i.test(error);
 
 /**
  * Calendars and contacts of an account from its CalDAV / CardDAV server. Returns { calendars, books, error }: how many
  * were found (none found is reported too — a wrong address often answers with an empty list, not an error).
  */
-export function syncDav(account) {
+export function syncDav(account, { asked = false } = {}) {
   if (davBusy.has(account.id)) return davBusy.get(account.id);
   const run = (async () => {
-    const out = { at: Date.now(), calendars: null, books: null, error: null };
+    // asked: the user is waiting for it (saved the account, pressed retry) — a problem is shown at once.
+    const out = { at: Date.now(), calendars: null, books: null, error: null, asked };
     try {
       if (account.caldav_url) {
         try { const r = await syncCalDav(account); out.calendars = r?.calendars ?? 0; out.taskLists = r?.taskLists ?? 0; } catch (e) { out.error = `Calendars (CalDAV): ${davReason(e)}`; }
@@ -43,15 +52,19 @@ export function syncDav(account) {
       }
       if (!out.error && out.calendars === 0) out.error = 'Calendars (CalDAV): the server lists no calendars at this address — check the URL (e.g. https://cloud.example.com/remote.php/dav) and the DAV username';
       if (!out.error && out.books === 0) out.error = 'Contacts (CardDAV): the server lists no address books at this address — check the URL and the DAV username';
-      if (out.error) {
-        log.warn(`DAV sync ${account.email}: ${out.error}`);
-        notify(account.user_id, 'dav:error', { accountId: account.id, error: out.error });
-      }
+      if (out.error) log.warn(`DAV sync ${account.email}: ${out.error}`);
+      if (out.error && (asked || !(passing(out.error) && (davRetries.get(account.id) || 0) < DAV_QUIET))) notify(account.user_id, 'dav:error', { accountId: account.id, error: out.error });
       if (out.calendars || out.books) dropStarters(account.user_id);
       notify(account.user_id, 'calendar:changed', {});
       notify(account.user_id, 'contacts:changed', {});
       if (out.taskLists) notify(account.user_id, 'tasks:changed', {});
     } finally {
+      const n = davRetries.get(account.id) || 0;
+      if (out.error && passing(out.error) && n < DAV_RETRY.length) {
+        Object.assign(out, { retry: n + 1, retryAt: Date.now() + DAV_RETRY[n] });
+        davRetries.set(account.id, n + 1);
+        setTimeout(() => { const a = get('SELECT * FROM accounts WHERE id = ?', account.id); if (a) syncDav(a, { asked }); }, DAV_RETRY[n]).unref();
+      } else if (!out.error) davRetries.delete(account.id);
       davStatus.set(account.id, out);
       davBusy.delete(account.id);
     }
@@ -158,7 +171,7 @@ export function startScheduler() {
   setInterval(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
   // Failed server changes, unreachable sends, unsaved sent copies, SMTP warnings: tried again by themselves (mail/retry.js).
-  setInterval(() => autoRetry().catch((e) => log.error(e)), 5 * 60e3).unref();
+  setInterval(() => autoRetry().catch((e) => log.error(e)), 20e3).unref();
   // Clean up old reminder markers.
   setInterval(() => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000), 3600e3).unref();
 }

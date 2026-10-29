@@ -287,7 +287,7 @@ export async function processOutbox() {
         const permanent = e.responseCode >= 500 && e.responseCode < 600;
         const attempts = permanent ? 5 : row.attempts + 1;
         run("UPDATE outbox SET status = ?, attempts = ?, error = ?, send_at = ? WHERE id = ?",
-          attempts >= 5 ? 'failed' : 'queued', attempts, e.message, now() + attempts * 60e3, row.id);
+          attempts >= 5 ? 'failed' : 'queued', attempts, e.message, now() + [10, 30, 60, 120, 120][Math.min(attempts, 5) - 1] * 1000, row.id);
         notify(row.user_id, 'mail:sendError', { outboxId: row.id, error: e.message });
         notify(row.user_id, 'outbox:changed', {});
         continue;

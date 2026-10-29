@@ -97,8 +97,14 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         setUpWebView()
 
-        // Back = back in the web app's history; at its start the app goes to the background (and stays signed in).
-        onBackPressedDispatcher.addCallback(this) { if (web.canGoBack()) web.goBack() else moveTaskToBack(true) }
+        // Back = what the page closes first (an open menu: window.halcyonBack), else back in the web app's history; at
+        // its start the app goes to the background (and stays signed in).
+        onBackPressedDispatcher.addCallback(this) {
+            web.evaluateJavascript("(window.halcyonBack && window.halcyonBack()) === true") { handled ->
+                if (handled == "true") return@evaluateJavascript
+                if (web.canGoBack()) web.goBack() else moveTaskToBack(true)
+            }
+        }
 
         val target = targetOf(intent)
         if (target != null || savedInstanceState == null || web.restoreState(savedInstanceState) == null) load(target)
