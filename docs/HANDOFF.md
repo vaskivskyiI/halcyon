@@ -910,3 +910,9 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - DAV rate limits (scheduler.js): 429 / RESOURCE_EXHAUSTED pauses that service of the account for 15 min … 6 h
   (`davHold`, per account + cal/card; shown as a warning with the next try, a sync the user asks for still runs). Google
   is asked at most every 30 minutes unless something waits to be saved (`davLast`).
+- Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
+  list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return
+  each item's effective `space` ('' = shared). list_tasks now honours a token's space too; list_events returns nothing
+  for a space without calendars (listRange reads an empty list as "all"). `#/new` carries `hspace`, and for events the
+  occurrence's own start (ref stays seriesId || id): Inkwell keeps one note per occurrence and its lookup rows carry
+  `date`, so "Open in Inkwell" shows for an event only when a note has this occurrence's date (`sameOccurrence`).

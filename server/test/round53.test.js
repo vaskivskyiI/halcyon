@@ -29,8 +29,8 @@ const api = async (method, url, body) => {
 
 // A fake Inkwell: answers /api/links/lookup like the real one (url relative when INKWELL_PUBLIC_URL is not set).
 const PAGES = [
-  { ref: '42', id: 'p1', title: 'Kick-off notes', icon: '🗓️', kind: 'page', updatedAt: 1700000000000, snippet: 'Agenda', url: '/#/n/p1' },
-  { ref: '43', id: 'p2', title: 'Follow-up', icon: null, kind: 'page', updatedAt: 1700000001000, snippet: '', url: 'https://notes.example.org/#/n/p2' },
+  { ref: '42', id: 'p1', title: 'Kick-off notes', icon: '🗓️', kind: 'page', updatedAt: 1700000000000, snippet: 'Agenda', url: '/#/n/p1', date: 'nonsense' },
+  { ref: '43', id: 'p2', title: 'Follow-up', icon: null, kind: 'page', updatedAt: 1700000001000, snippet: '', date: '2026-11-01', url: 'https://notes.example.org/#/n/p2' },
   { ref: '43', id: 'p3', title: 'Sneaky', icon: null, kind: 'page', updatedAt: 1, snippet: '', url: 'javascript:alert(1)' },
   { ref: '99', id: 'p4', title: 'Not asked for', url: '/#/n/p4' },
 ];
@@ -88,7 +88,8 @@ test('links: refs batched in one request with the token; urls absolute and http(
   assert.deepEqual(r.links.map((l) => [l.ref, l.id, l.url]), [
     ['42', 'p1', `${inkBase}/#/n/p1`], ['43', 'p2', 'https://notes.example.org/#/n/p2'], ['43', 'p3', `${inkBase}/#/n/p3`],
   ]);
-  assert.deepEqual(r.links[0], { ref: '42', id: 'p1', title: 'Kick-off notes', icon: '🗓️', kind: 'page', updatedAt: 1700000000000, snippet: 'Agenda', url: `${inkBase}/#/n/p1` });
+  assert.deepEqual(r.links[0], { ref: '42', id: 'p1', title: 'Kick-off notes', icon: '🗓️', kind: 'page', updatedAt: 1700000000000, snippet: 'Agenda', date: null, url: `${inkBase}/#/n/p1` });
+  assert.equal(r.links[1].date, '2026-11-01', 'the date of the linked occurrence comes along');
   assert.deepEqual(await api('GET', '/api/integrations/inkwell/links?kind=task&ref=7'), { url: inkBase, links: [] }, 'set up, nothing linked: the url still comes (for "New note")');
   assert.equal((await call('GET', '/api/integrations/inkwell/links?kind=contact&ref=1')).status, 400);
 });
@@ -146,4 +147,65 @@ test('"New note in Inkwell" opens Inkwell\'s #/new with the item, URL-encoded', 
   const mail = new URLSearchParams(inkwellNewUrl('https://n.example', 'email', { ref: 7, title: 'a+b?', from: 'Ana <ana@x.si>', date: 0, due: null }).split('?')[1]);
   assert.deepEqual(Object.fromEntries(mail), { kind: 'email', ref: '7', title: 'a+b?', from: 'Ana <ana@x.si>', date: '1970-01-01T00:00:00.000Z' });
   assert.equal(inkwellNewUrl('https://n.example', 'task', { ref: 3, title: '', due: undefined }), 'https://n.example/#/new?kind=task&ref=3');
+});
+
+test('the deep link carries the space; a note belongs to an occurrence by its date', async () => {
+  const { inkwellNewUrl, sameOccurrence } = await import('../src/util/inkwell.js');
+  const q = (space) => new URLSearchParams(inkwellNewUrl('https://n.example', 'event', { ref: 5, start: 0, space }).split('?')[1]);
+  assert.equal(q('Work & play').get('hspace'), 'Work & play');
+  assert.equal(q('').has('hspace'), false, 'shared items have none');
+  const day = new Date(2026, 10, 3, 23, 30).getTime(); // local time, whatever the zone of the test machine
+  assert.equal(sameOccurrence('2026-11-03', day), true);
+  assert.equal(sameOccurrence('2026-11-04', day), false);
+  assert.equal(sameOccurrence(null, day), false);
+  assert.equal(sameOccurrence('2026-11-03', Date.UTC(2026, 10, 3), true), true, 'all-day events are stored at midnight UTC');
+});
+
+test('MCP spaces: list_spaces, the space argument, every item\'s space; a token\'s own space wins', async () => {
+  const { createToken } = await import('../src/mcp/server.js');
+  const uid = db.prepare('SELECT id FROM users').get().id;
+  const insert = (sql, ...p) => db.prepare(sql).run(...p).lastInsertRowid;
+  const account = (space) => insert('INSERT INTO accounts (user_id, email, space, sync_enabled, created_at) VALUES (?, ?, ?, 0, ?)', uid, `${space || 'shared'}@example.org`, space, Date.now());
+  const work = account('Work'), priv = account('Private');
+  const calendar = (space) => insert("INSERT INTO calendars (user_id, name, source, space, enabled) VALUES (?, ?, 'local', ?, 1)", uid, `cal ${space}`, space);
+  const taskList = (space) => insert("INSERT INTO task_lists (user_id, name, source, space, created_at) VALUES (?, ?, 'local', ?, ?)", uid, `list ${space}`, space, Date.now());
+  const soon = Date.now() + 36e5;
+  const event = (cal, title) => insert('INSERT INTO events (calendar_id, uid, title, start, end) VALUES (?, ?, ?, ?, ?)', cal, title, title, soon, soon + 36e5);
+  event(calendar('Work'), 'Standup'); event(calendar('Private'), 'Dentist');
+  const task = (list, title) => insert('INSERT INTO tasks (user_id, list_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', uid, list, title, Date.now(), Date.now());
+  task(taskList('Work'), 'Report'); task(taskList('Private'), 'Groceries'); task(null, 'No list');
+  for (const [acc, subject] of [[work, 'Budget plan'], [priv, 'Budget party']]) {
+    const f = insert("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'INBOX', 'INBOX', '\\Inbox')", acc);
+    const m = insert("INSERT INTO messages (user_id, account_id, folder_id, uid, message_id, thread_id, subject, from_addr, from_name, to_json, date, is_read, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, 'a@x.si', 'A', '[]', ?, 0, ?)", uid, acc, f, `${subject}@x`, subject, subject, Date.now(), Date.now());
+    insert('INSERT INTO ai_insights (message_id, needs_reply, priority, summary, created_at) VALUES (?, 1, 80, ?, ?)', m, subject, Date.now());
+    insert('INSERT INTO messages_fts (rowid, subject) VALUES (?, ?)', m, subject);
+  }
+  const rpc = async (token, name, args = {}) => {
+    const r = await fetch(`${base}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
+    const { result } = await r.json();
+    assert.ok(!result.isError, result.content[0].text);
+    return JSON.parse(result.content[0].text);
+  };
+  const titles = (list, key = 'title') => list.map((x) => `${x[key]}|${x.space}`).sort();
+  const all = createToken(uid, { name: 'All' }).token, fixed = createToken(uid, { name: 'Work only', space: 'Work' }).token;
+
+  assert.deepEqual(await rpc(all, 'list_spaces'), { spaces: ['Private', 'Work'] });
+  assert.deepEqual(await rpc(fixed, 'list_spaces'), { spaces: ['Work'] });
+
+  const to = new Date(soon + 864e5).toISOString();
+  assert.deepEqual(titles(await rpc(all, 'list_events', { to })), ['Dentist|Private', 'Standup|Work']);
+  assert.deepEqual(titles(await rpc(all, 'list_events', { to, space: 'Private' })), ['Dentist|Private']);
+  assert.deepEqual(titles(await rpc(fixed, 'list_events', { to, space: 'Private' })), ['Standup|Work'], 'a token never sees more than it may');
+  assert.deepEqual(await rpc(all, 'list_events', { to, space: 'Nowhere' }), [], 'a space without calendars is empty, not everything');
+
+  assert.deepEqual(titles(await rpc(all, 'list_tasks')), ['Groceries|Private', 'No list|', 'Report|Work']);
+  assert.deepEqual(titles(await rpc(all, 'list_tasks', { space: 'Work' })), ['No list|', 'Report|Work']);
+  assert.deepEqual(titles(await rpc(fixed, 'list_tasks', { space: 'Private' })), ['No list|', 'Report|Work']);
+
+  assert.deepEqual(titles(await rpc(all, 'list_open_items'), 'subject'), ['Budget party|Private', 'Budget plan|Work']);
+  assert.deepEqual(titles(await rpc(all, 'list_open_items', { space: 'Private' }), 'subject'), ['Budget party|Private']);
+  assert.deepEqual(titles(await rpc(fixed, 'list_open_items', { space: 'Private' }), 'subject'), ['Budget plan|Work']);
+
+  assert.deepEqual(titles(await rpc(all, 'search_mail', { query: 'budget', space: 'Work' }), 'subject'), ['Budget plan|Work']);
+  assert.deepEqual(titles(await rpc(fixed, 'search_mail', { query: 'budget', space: 'Private' }), 'subject'), ['Budget plan|Work']);
 });

@@ -89,6 +89,6 @@ export async function inkwellLookup(userId, kind, refs, { signal } = {}) {
   if (!Array.isArray(data)) throw new Error('Inkwell sent an unexpected answer');
   return data.filter((x) => x && x.id != null && ids.includes(String(x.ref))).map((x) => ({
     ref: String(x.ref), id: String(x.id), title: String(x.title || '').slice(0, 300), icon: x.icon ? String(x.icon).slice(0, 16) : null,
-    kind: x.kind ? String(x.kind) : null, updatedAt: Number(x.updatedAt) || null, snippet: x.snippet ? String(x.snippet).slice(0, 200) : '', url: noteUrl(c.url, x),
+    kind: x.kind ? String(x.kind) : null, updatedAt: Number(x.updatedAt) || null, snippet: x.snippet ? String(x.snippet).slice(0, 200) : '', date: /^\d{4}-\d{2}-\d{2}$/.test(x.date) ? x.date : null, url: noteUrl(c.url, x),
   }));
 }

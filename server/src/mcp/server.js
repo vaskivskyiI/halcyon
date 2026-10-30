@@ -8,7 +8,7 @@ import { get, all, run, json, now, fold } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from '../routes/util.js';
 import { getSettings } from '../settings.js';
-import { scope, inIds } from '../spaces.js';
+import { scope, inIds, cleanSpace, listSpaces, spaceMap } from '../spaces.js';
 import { hybridSearch } from '../search.js';
 import { openReplySql, openActionSql } from '../ai/open-items.js';
 import { briefLive, dailyBrief } from '../ai/tasks.js';
@@ -90,14 +90,26 @@ function ownMessage(ctx, id) {
   return m;
 }
 
+// The `space` argument of a tool: narrows a token without a space of its own. A token's own space always wins.
+const inSpace = (ctx, a) => {
+  const space = cleanSpace(a.space);
+  return ctx.space || !space ? ctx : { ...ctx, space, sc: scope(ctx.uid, space) };
+};
+
 const READ_TOOLS = {
+  list_spaces: {
+    description: 'The user\'s spaces (e.g. Work, Private). Items without a space are shared: they belong to every space.',
+    input: {},
+    run: async (ctx) => ({ spaces: ctx.space ? [ctx.space] : listSpaces(ctx.uid) }),
+  },
   search_mail: {
     description: `Search the mail. Supports words and operators: from:, to:, subject:, has:attachment, is:unread, is:needsreply, is:action, is:replied, before:YYYY-MM-DD, after:YYYY-MM-DD, in:sent. Returns messages with Halcyon's AI summary. ${UNTRUSTED}`,
-    input: { query: { type: 'string', description: 'Search text and operators' }, limit: { type: 'integer', description: 'Max results (1-25, default 10)' } },
+    input: { query: { type: 'string', description: 'Search text and operators' }, limit: { type: 'integer', description: 'Max results (1-25, default 10)' }, space: { type: 'string', description: 'Only this space (a name from list_spaces); empty: all spaces' } },
     required: ['query'],
     run: async (ctx, a) => {
-      const ids = await hybridSearch(ctx.uid, String(a.query || ''), { limit: clamp(a.limit, 1, 25, 10), sc: ctx.sc });
-      return rowsByIds(ctx.uid, ids.slice(0, clamp(a.limit, 1, 25, 10))).map((r) => msgOut(r, insightOf(r)));
+      const ids = await hybridSearch(ctx.uid, String(a.query || ''), { limit: clamp(a.limit, 1, 25, 10), sc: inSpace(ctx, a).sc });
+      const spaces = spaceMap(ctx.uid).accounts;
+      return rowsByIds(ctx.uid, ids.slice(0, clamp(a.limit, 1, 25, 10))).map((r) => ({ ...msgOut(r, insightOf(r)), space: spaces.get(r.account_id) ?? '' }));
     },
   },
   get_message: {
@@ -123,14 +135,15 @@ const READ_TOOLS = {
   },
   list_open_items: {
     description: 'What is waiting for the user: emails that need a reply and/or an action (as Halcyon determined them, including the user\'s own corrections), newest first.',
-    input: { kind: { type: 'string', enum: ['reply', 'action', 'both'], description: 'Default both' }, limit: { type: 'integer', description: '1-50, default 25' } },
+    input: { kind: { type: 'string', enum: ['reply', 'action', 'both'], description: 'Default both' }, limit: { type: 'integer', description: '1-50, default 25' }, space: { type: 'string', description: 'Only this space (a name from list_spaces); empty: all spaces' } },
     run: async (ctx, a) => {
       const kind = ['reply', 'action'].includes(a.kind) ? a.kind : 'both';
+      const { sc } = inSpace(ctx, a), spaces = spaceMap(ctx.uid).accounts;
       const cond = kind === 'reply' ? openReplySql(ctx.uid) : kind === 'action' ? openActionSql(ctx.uid) : `(${openReplySql(ctx.uid)} OR ${openActionSql(ctx.uid)})`;
       const rows = all(`SELECT m.*, i.summary, i.category, i.priority, i.needs_reply, i.needs_reply_user, i.needs_action, i.action_summary, i.dismissed_at
         FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id
-        WHERE m.user_id = ? AND f.special_use = '\\Inbox' AND ${inIds('m.account_id', ctx.sc?.accountIds)} AND ${cond} ORDER BY m.date DESC LIMIT ?`, ctx.uid, clamp(a.limit, 1, 50, 25));
-      return rows.map((r) => msgOut(r, r));
+        WHERE m.user_id = ? AND f.special_use = '\\Inbox' AND ${inIds('m.account_id', sc?.accountIds)} AND ${cond} ORDER BY m.date DESC LIMIT ?`, ctx.uid, clamp(a.limit, 1, 50, 25));
+      return rows.map((r) => ({ ...msgOut(r, r), space: spaces.get(r.account_id) ?? '' }));
     },
   },
   get_brief: {
@@ -145,14 +158,18 @@ const READ_TOOLS = {
   },
   list_events: {
     description: 'Calendar events between two dates (recurring events expanded).',
-    input: { from: { type: 'string', description: 'ISO date/time, default now' }, to: { type: 'string', description: 'ISO date/time, default 7 days later' } },
+    input: { from: { type: 'string', description: 'ISO date/time, default now' }, to: { type: 'string', description: 'ISO date/time, default 7 days later' }, space: { type: 'string', description: 'Only this space (a name from list_spaces); empty: all spaces' } },
     run: async (ctx, a) => {
       const from = Date.parse(a.from) || Date.now(), to = Date.parse(a.to) || from + 7 * 864e5;
       if (to - from > 366 * 864e5) throw new Error('At most one year at a time');
       const tz = getSettings(ctx.uid).calendar.timezone;
-      return listRange(ctx.uid, from, to, ctx.sc?.calendarIds || null).map((e) => ({
+      const { sc } = inSpace(ctx, a), spaces = spaceMap(ctx.uid).calendars;
+      // listRange reads an empty list as "every calendar".
+      if (sc && !sc.calendarIds.length) return [];
+      return listRange(ctx.uid, from, to, sc?.calendarIds || null).map((e) => ({
         id: e.id, title: e.title, start: iso(e.start), end: iso(e.end), local_start: e.allDay || e.all_day ? null : localStamp(e.start, tz), all_day: !!(e.allDay ?? e.all_day),
         location: e.location || null, calendar: e.calendarName || e.calendar_name || null, attendees: (e.attendees || json(e.attendees_json, []) || []).map((x) => x.name || x.email).slice(0, 20),
+        space: spaces.get(e.calendarId) ?? '',
       }));
     },
   },
@@ -173,9 +190,13 @@ const READ_TOOLS = {
   },
   list_tasks: {
     description: 'The user\'s tasks (open ones, or also done ones), with due dates and the email they came from.',
-    input: { include_done: { type: 'boolean' } },
-    run: async (ctx, a) => all(`SELECT * FROM tasks WHERE user_id = ? ${a.include_done ? '' : 'AND done = 0'} ORDER BY done, due IS NULL, due, id DESC LIMIT 100`, ctx.uid)
-      .map((t) => ({ id: t.id, title: t.title, notes: t.notes || null, due: iso(t.due), done: !!t.done, important: !!t.priority, from_message_id: t.source_message_id })),
+    input: { include_done: { type: 'boolean' }, space: { type: 'string', description: 'Only this space (a name from list_spaces); empty: all spaces' } },
+    run: async (ctx, a) => {
+      const { sc } = inSpace(ctx, a), spaces = spaceMap(ctx.uid).taskLists;
+      // A task added here without a list (create_task) is in no space: shared.
+      return all(`SELECT * FROM tasks WHERE user_id = ? AND (list_id IS NULL OR ${inIds('list_id', sc?.taskListIds)}) ${a.include_done ? '' : 'AND done = 0'} ORDER BY done, due IS NULL, due, id DESC LIMIT 100`, ctx.uid)
+        .map((t) => ({ id: t.id, title: t.title, notes: t.notes || null, due: iso(t.due), done: !!t.done, important: !!t.priority, from_message_id: t.source_message_id, space: spaces.get(t.list_id) ?? '' }));
+    },
   },
 };
 

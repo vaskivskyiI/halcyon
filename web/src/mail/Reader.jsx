@@ -378,7 +378,7 @@ export default function Reader({ id, view }) {
 
         {!isDraftMsg(latest) && <RecentWith messageId={latest.id} view={view} />}
         {!isDraftMsg(latest) && <InkwellNotes kind="email" refs={msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)}
-          item={{ ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date }} />}
+          item={{ ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date, space: store.get().accounts?.find((a) => a.id === inkMsg.accountId)?.space }} />}
 
         {msgs.map((m, i) => {
           if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;
