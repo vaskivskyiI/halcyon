@@ -43,7 +43,7 @@ export function ListField({ lists, value, onChange, auto = true }) {
   return (
     <select className="input" style={{ width: 210 }} value={value || ''} onChange={(e) => onChange(Number(e.target.value) || null)} title="Task list">
       {auto && <option value="">{`Default list (${writable.find((l) => l.isDefault)?.name || writable[0]?.name || 'Tasks'})`}</option>}
-      {writable.map((l) => <option key={l.id} value={l.id}>{l.name}{l.source === 'caldav' ? ' (synced)' : ''}</option>)}
+      {writable.map((l) => <option key={l.id} value={l.id}>{l.name}{l.ownerName ? ` · ${l.ownerName}` : ''}{l.source === 'caldav' ? ' (synced)' : ''}</option>)}
     </select>);
 }
 

@@ -22,6 +22,17 @@ export function mergedOf(userId) {
   const { showShared, hiddenShared } = getSettings(userId).ui;
   return showShared ? sharedOf(userId).filter((s) => !hiddenShared.map(Number).includes(s.id)) : [];
 }
+/**
+ * A list of one's own with the same list of each shared space shown with it (not while working inside a space). The
+ * spaces' items say whose they are (owner, ownerName), so the web app sends changes to them as that space.
+ */
+export function withShared(req, own, ofSpace, order = null) {
+  if (req.person) return own;
+  const rest = mergedOf(req.user.id).flatMap((sp) => ofSpace(sp.id, sp).map((x) => ({ ...x, owner: sp.id, ownerName: sp.name })));
+  if (!rest.length) return own;
+  const out = [...own, ...rest];
+  return order ? out.sort(order) : out;
+}
 export const membersOf = (sharedId) => all(`SELECT u.id, u.name, u.email, m.role FROM shared_members m JOIN users u ON u.id = m.user_id
   WHERE m.shared_id = ? ORDER BY m.role = 'owner' DESC, u.name`, sharedId);
 

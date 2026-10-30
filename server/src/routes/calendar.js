@@ -7,6 +7,7 @@ import { importIcsInto, syncCalendarSource } from '../calendar/caldav.js';
 import { encrypt } from '../util/crypto.js';
 import { respondToInvitation, sendInvitations } from '../calendar/invites.js';
 import { notify } from '../util/events.js';
+import { withShared } from '../shared.js';
 import { syncDav } from '../scheduler.js';
 import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 import { linkEvent, unlinkEvent } from '../calendar/linked.js';
@@ -26,9 +27,12 @@ export default async function calendarRoutes(app) {
   app.get('/api/calendars', async (req) => {
     const every = req.query.all === '1';
     const sc = every || req.query.allSpaces === '1' ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
-    return all(`SELECT c.*, a.email, s.name AS sourceName, s.url AS sourceUrl${every ? ', (SELECT COUNT(*) FROM events e WHERE e.calendar_id = c.id AND e.deleted = 0 AND e.recurrence_id IS NULL) AS events' : ''}
+    const list = (uid, ids, m) => all(`SELECT c.*, a.email, s.name AS sourceName, s.url AS sourceUrl${every ? ', (SELECT COUNT(*) FROM events e WHERE e.calendar_id = c.id AND e.deleted = 0 AND e.recurrence_id IS NULL) AS events' : ''}
       FROM calendars c LEFT JOIN accounts a ON a.id = c.account_id LEFT JOIN calendar_sources s ON s.id = c.source_id
-      WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} ${every ? '' : 'AND COALESCE(c.hidden, 0) = 0'} ORDER BY c.is_default DESC, c.name`, req.user.id).map((c) => calOut(c, spaces));
+      WHERE c.user_id = ? AND ${inIds('c.id', ids)} ${every ? '' : 'AND COALESCE(c.hidden, 0) = 0'} ORDER BY c.is_default DESC, c.name`, uid).map((c) => calOut(c, m));
+    const own = list(req.user.id, sc?.calendarIds, spaces);
+    // Settings manage one's own; a space's calendars there are managed inside the space.
+    return every || req.query.allSpaces === '1' ? own : withShared(req, own, (uid, sp) => list(uid, null, spaceMap(uid)).map((c) => ({ ...c, isDefault: false, space: c.space || sp.name })));
   });
 
   app.post('/api/calendars', async (req, reply) => {
@@ -195,9 +199,9 @@ export default async function calendarRoutes(app) {
     let ids = req.query.calendars ? String(req.query.calendars).split(',').map(Number) : null;
     if (sc) ids = (ids || sc.calendarIds).filter((id) => sc.calendarIds.includes(id));
     const list = ids && !ids.length ? [] : repo.listRange(req.user.id, from, to, ids);
-    if (!all) return [...list, ...blockedElsewhere(req, from, to, sc)].sort((a, b) => a.start - b.start);
+    if (!all) return withShared(req, [...list, ...blockedElsewhere(req, from, to, sc)], (uid) => repo.listRange(uid, from, to, null)).sort((a, b) => a.start - b.start);
     const spaces = spaceMap(req.user.id);
-    return list.map((e) => ({ ...e, space: spaces.calendars.get(e.calendarId) || '' }));
+    return withShared(req, list.map((e) => ({ ...e, space: spaces.calendars.get(e.calendarId) || '' })), (uid, sp) => repo.listRange(uid, from, to, null).map((e) => ({ ...e, space: sp.name })));
   });
 
   // ---- an event from a read-only / information / shared calendar added to one's own calendar (calendar/linked.js)
@@ -235,7 +239,8 @@ export default async function calendarRoutes(app) {
   app.get('/api/events/search', async (req) => {
     const q = `%${fold(req.query.q || '')}%`;
     const sc = scope(req.user.id, reqSpace(req));
-    return all(`SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND ${inIds('c.id', sc?.calendarIds)} AND e.deleted = 0 AND (fold(e.title) LIKE ? OR fold(e.location) LIKE ? OR fold(e.description) LIKE ?) ORDER BY e.start DESC LIMIT 50`, req.user.id, q, q, q).map(repo.serializeEvent);
+    const find = (uid, ids) => all(`SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND ${inIds('c.id', ids)} AND e.deleted = 0 AND (fold(e.title) LIKE ? OR fold(e.location) LIKE ? OR fold(e.description) LIKE ?) ORDER BY e.start DESC LIMIT 50`, uid, q, q, q).map(repo.serializeEvent);
+    return withShared(req, find(req.user.id, sc?.calendarIds), (uid) => find(uid, null));
   });
 
   app.get('/api/events/:id', async (req, reply) => {

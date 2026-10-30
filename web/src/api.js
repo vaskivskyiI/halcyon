@@ -16,7 +16,7 @@ export class ApiError extends Error {
 // Lists then contain mail of shared spaces, marked with `owner`. Whatever is done with such a message, its
 // conversation, its account, folder, draft or outbox entry is sent "as" that space (x-halcyon-as; the server checks
 // membership every time). Owners are learned from the responses.
-const owners = { msg: new Map(), thread: new Map(), account: new Map(), folder: new Map(), draft: new Map(), outbox: new Map() };
+const owners = { msg: new Map(), thread: new Map(), account: new Map(), folder: new Map(), draft: new Map(), outbox: new Map(), event: new Map(), task: new Map(), contact: new Map(), calendar: new Map(), list: new Map(), book: new Map() };
 const noteMsg = (m, owner) => { if (!m || m.id == null) return; owners.msg.set(m.id, owner); if (m.threadId) owners.thread.set(m.threadId, owner); };
 function learn(method, url, data, sent) {
   if (!data || typeof data !== 'object') return;
@@ -28,6 +28,14 @@ function learn(method, url, data, sent) {
   if (url.startsWith('/api/accounts') && Array.isArray(data)) data.forEach((a) => owners.account.set(a.id, own(a)));
   if (url.startsWith('/api/drafts') && method === 'POST' && data.id) owners.draft.set(data.id, sent);
   if (url === '/api/send' && data.id) owners.outbox.set(data.id, sent);
+  // Calendars, tasks and contacts of a shared space shown with one's own: changes to them go to that space.
+  const kind = [[/^\/api\/events(\/\d+)?(\?|\/search|$)/, 'event'], [/^\/api\/tasks(\/\d+|\/from-message\/\d+)?(\?|$)/, 'task'], [/^\/api\/contacts(\/\d+|\/autocomplete)?(\?|$)/, 'contact'],
+    [/^\/api\/calendars(\?|$)/, 'calendar'], [/^\/api\/task-lists(\?|$)/, 'list'], [/^\/api\/address-books(\?|$)/, 'book']].find(([re]) => re.test(url))?.[1];
+  if (kind) for (const x of Array.isArray(data) ? data : [data]) {
+    if (x?.id != null) owners[kind].set(x.id, own(x));
+    if (x?.seriesId != null) owners[kind].set(x.seriesId, own(x));
+  }
+  if (data.related) { (data.related.tasks || []).forEach((t) => owners.task.set(t.id, sent ?? null)); (data.related.events || []).forEach((e) => owners.event.set(e.id, sent ?? null)); }
 }
 const idOf = (re, url) => { const m = url.match(re); return m ? m[1] : null; };
 /** The shared space a request is about (null: one's own mail). */
@@ -39,12 +47,22 @@ function ownerFor(url, body) {
   if ((id = idOf(/^\/api\/drafts\/(\d+)/, url))) return owners.draft.get(Number(id)) ?? null;
   if ((id = idOf(/^\/api\/outbox\/(\d+)/, url))) return owners.outbox.get(Number(id)) ?? null;
   if ((id = idOf(/^\/api\/accounts\/(\d+)/, url))) return owners.account.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/events\/(\d+)/, url))) return owners.event.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/tasks\/(\d+)/, url))) return owners.task.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/contacts\/(\d+)/, url))) return owners.contact.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/calendars\/(\d+)/, url))) return owners.calendar.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/task-lists\/(\d+)/, url))) return owners.list.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/address-books\/(\d+)/, url))) return owners.book.get(Number(id)) ?? null;
+  if ((id = idOf(/^\/api\/tasks\?(?:.*&)?listId=(\d+)/, url))) return owners.list.get(Number(id)) ?? null;
   if (body && typeof body === 'object') {
     const first = (Array.isArray(body.ids) ? body.ids[0] : null) ?? (Array.isArray(body.items) ? body.items[0]?.id : null) ?? body.messageId ?? body.inReplyToId;
     if (first != null && owners.msg.has(Number(first))) return owners.msg.get(Number(first));
     if (body.threadId && owners.thread.has(body.threadId)) return owners.thread.get(body.threadId);
     if (body.accountId != null && owners.account.has(Number(body.accountId))) return owners.account.get(Number(body.accountId));
     if (body.id != null && /^\/api\/drafts/.test(url)) return owners.draft.get(Number(body.id)) ?? null;
+    if (body.calendarId != null && url.startsWith('/api/events')) return owners.calendar.get(Number(body.calendarId)) ?? null;
+    if (body.listId != null && url.startsWith('/api/tasks')) return owners.list.get(Number(body.listId)) ?? null;
+    if (body.addressBookId != null && url.startsWith('/api/contacts')) return owners.book.get(Number(body.addressBookId)) ?? null;
   }
   return null;
 }
@@ -94,6 +112,8 @@ async function request(method, url, body) {
     // A shared space's message opened by link before any list showed it: ask again as that space.
     const id = r.status === 404 && !as && data?.owner && idOf(/^\/api\/messages\/(\d+)$/, url.split('?')[0]);
     if (id) { owners.msg.set(Number(id), data.owner); return request(method, url, body); }
+    const contact = r.status === 404 && !as && data?.owner && idOf(/^\/api\/contacts\/(\d+)$/, url);
+    if (contact) { owners.contact.set(Number(contact), data.owner); return request(method, url, body); }
     throw new ApiError(data?.error || r.statusText, r.status, data?.code);
   }
   learn(method, url, data, as);

@@ -46,7 +46,7 @@ export default function Sharing() {
               <button className="btn sm primary" onClick={() => enterShared(s.id)}><LogIn size={14} /> Open</button>
               {owner && <button className="icon-btn" title="Delete the shared space (only when empty)" onClick={() => confirm(`Delete “${s.name}”?`) && call(() => api.del(`/api/shared/${s.id}`), 'Deleted')}><Trash2 size={15} /></button>}
             </div>
-            <Switch label="Show in My mail" hint="Its mail appears in your inbox, needs-reply and action lists, search and folders, marked with the space's name; replies go out from the shared account. It can still be opened on its own."
+            <Switch label="Show in My mail" hint="Its mail, calendars, tasks and contacts appear next to your own, marked with the space's name; replies go out from the shared account. It can still be opened on its own."
               checked={inMyMail(store.get().settings, s.id)} onChange={(v) => setSharedShown(s.id, v)} />
             <div className="small">
               <b>Members</b>

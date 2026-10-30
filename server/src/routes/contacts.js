@@ -12,6 +12,7 @@ import { mergeContacts, scanContacts, openSuggestions, decide } from '../contact
 import { queueMemory } from '../ai/queue.js';
 import { syncDav } from '../scheduler.js';
 import { targetsForMessage } from '../targets.js';
+import { withShared, mergedOf } from '../shared.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
@@ -20,10 +21,12 @@ export default async function contactRoutes(app) {
   app.get('/api/address-books', async (req) => {
     const every = req.query.all === '1';
     const sc = every ? null : scope(req.user.id, reqSpace(req)), spaces = spaceMap(req.user.id);
-    return all(`SELECT b.id, b.name, b.source, b.account_id AS accountId, b.readonly, b.is_default AS isDefault, b.space AS ownSpace, COALESCE(b.hidden, 0) AS hidden, a.email,
+    const books = (uid, ids, m) => all(`SELECT b.id, b.name, b.source, b.account_id AS accountId, b.readonly, b.is_default AS isDefault, b.space AS ownSpace, COALESCE(b.hidden, 0) AS hidden, a.email,
         (SELECT COUNT(*) FROM contacts c WHERE c.address_book_id = b.id AND c.deleted = 0) AS contacts
-      FROM address_books b LEFT JOIN accounts a ON a.id = b.account_id WHERE b.user_id = ? AND ${inIds('b.id', sc?.bookIds)} ${every ? '' : 'AND COALESCE(b.hidden, 0) = 0'} ORDER BY b.name`, req.user.id)
-      .map((b) => ({ ...b, readonly: !!b.readonly, isDefault: !!b.isDefault, hidden: !!b.hidden, origin: originOf(b), space: spaces.books.get(b.id) ?? '' }));
+      FROM address_books b LEFT JOIN accounts a ON a.id = b.account_id WHERE b.user_id = ? AND ${inIds('b.id', ids)} ${every ? '' : 'AND COALESCE(b.hidden, 0) = 0'} ORDER BY b.name`, uid)
+      .map((b) => ({ ...b, readonly: !!b.readonly, isDefault: !!b.isDefault, hidden: !!b.hidden, origin: originOf(b), space: m.books.get(b.id) ?? '' }));
+    const own = books(req.user.id, sc?.bookIds, spaces);
+    return every ? own : withShared(req, own, (uid, sp) => books(uid, null, spaceMap(uid)).map((b) => ({ ...b, isDefault: false, space: b.space || sp.name })));
   });
 
   // Contacts of a local address book moved into another one (e.g. the synced book of an account, so they go to its
@@ -116,18 +119,28 @@ export default async function contactRoutes(app) {
   app.get('/api/contacts', async (req) => {
     const { q, group, filter } = req.query;
     const sc = scope(req.user.id, reqSpace(req));
-    const where = ['c.user_id = ?', 'c.deleted = 0', inIds('c.address_book_id', sc?.bookIds), 'c.address_book_id NOT IN (SELECT id FROM address_books WHERE hidden = 1)'], params = [req.user.id];
+    const where = ['c.deleted = 0', 'c.address_book_id NOT IN (SELECT id FROM address_books WHERE hidden = 1)'], params = [];
     if (q) { where.push('(fold(c.display_name) LIKE ? OR fold(c.emails_json) LIKE ? OR fold(c.org) LIKE ? OR c.phones_json LIKE ?)'); params.push(...Array(4).fill(`%${fold(q)}%`)); }
     if (group) { where.push('EXISTS (SELECT 1 FROM json_each(c.groups_json) j WHERE j.value = ?)'); params.push(group); }
     if (filter === 'favorites') where.push('c.favorite = 1');
     if (filter === 'collected') where.push('c.auto_collected = 1');
     if (filter === 'saved') where.push('c.auto_collected = 0');
-    return all(`SELECT c.* FROM contacts c WHERE ${where.join(' AND ')} ORDER BY c.favorite DESC, lower(c.display_name) LIMIT 5000`, ...params).map(serializeContact);
+    const contacts = (uid, ids) => all(`SELECT c.* FROM contacts c WHERE c.user_id = ? AND ${inIds('c.address_book_id', ids)} AND ${where.join(' AND ')} ORDER BY c.favorite DESC, lower(c.display_name) LIMIT 5000`, uid, ...params).map(serializeContact);
+    return withShared(req, contacts(req.user.id, sc?.bookIds), (uid) => contacts(uid, null),
+      (a, b) => b.favorite - a.favorite || String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, { sensitivity: 'base' }));
   });
 
-  app.get('/api/contacts/autocomplete', async (req) => autocomplete(req.user.id, String(req.query.q || ''), 8, scope(req.user.id, reqSpace(req))));
+  app.get('/api/contacts/autocomplete', async (req) => {
+    const q = String(req.query.q || '');
+    return withShared(req, autocomplete(req.user.id, q, 8, scope(req.user.id, reqSpace(req))), (uid) => autocomplete(uid, q, 8)).slice(0, 8);
+  });
 
-  app.get('/api/contacts/groups', async (req) => all("SELECT j.value AS name, COUNT(*) AS count FROM contacts c, json_each(c.groups_json) j WHERE c.user_id = ? AND c.deleted = 0 GROUP BY j.value ORDER BY j.value", req.user.id));
+  app.get('/api/contacts/groups', async (req) => {
+    const groups = (uid) => all("SELECT j.value AS name, COUNT(*) AS count FROM contacts c, json_each(c.groups_json) j WHERE c.user_id = ? AND c.deleted = 0 GROUP BY j.value ORDER BY j.value", uid);
+    const by = new Map();
+    for (const g of withShared(req, groups(req.user.id), groups)) by.set(g.name, { name: g.name, count: (by.get(g.name)?.count || 0) + g.count });
+    return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+  });
 
   app.get('/api/contacts/export.vcf', async (req, reply) => {
     const list = all('SELECT * FROM contacts WHERE user_id = ? AND deleted = 0 AND auto_collected = ?', req.user.id, req.query.collected === '1' ? 1 : 0).map(serializeContact);
@@ -147,7 +160,11 @@ export default async function contactRoutes(app) {
 
   app.get('/api/contacts/:id', async (req, reply) => {
     const c = get('SELECT * FROM contacts WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
-    if (!c) return httpError(reply, 404, 'Not found');
+    if (!c) {
+      // Opened by link before the list said whose it is: the web app asks again as that space.
+      const sp = !req.person && mergedOf(req.user.id).find((x) => get('SELECT 1 AS x FROM contacts WHERE id = ? AND user_id = ?', req.params.id, x.id));
+      return reply.code(404).send({ error: 'Not found', ...(sp ? { owner: sp.id } : {}) });
+    }
     const sc = scope(req.user.id, reqSpace(req));
     const emails = json(c.emails_json, []).map((e) => e.value.toLowerCase());
     const recent = emails.length ? all(`SELECT * FROM messages WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (from_addr IN (${emails.map(() => '?').join(',')}) OR ${emails.map(() => 'to_json LIKE ?').join(' OR ')}) ORDER BY date DESC LIMIT 15`,

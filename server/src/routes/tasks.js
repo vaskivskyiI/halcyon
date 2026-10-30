@@ -2,6 +2,7 @@ import { get, all, run, now, json } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { notify as notifyRaw } from '../util/events.js';
+import { withShared } from '../shared.js';
 import { getSettings } from '../settings.js';
 import { parseDue, mentionsTime } from '../util/dates.js';
 import { aiParseTask } from '../ai/tasks.js';
@@ -58,10 +59,12 @@ export default async function taskRoutes(app) {
     ensureTaskLists(req.user.id);
     const every = req.query.all === '1';
     const sc = every ? null : scope(req.user.id, reqSpace(req)), m = spaceMap(req.user.id);
-    return all(`SELECT l.*, a.email, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id) AS total
+    const lists = (uid, ids, map) => all(`SELECT l.*, a.email, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS open, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id) AS total
       FROM task_lists l LEFT JOIN accounts a ON a.id = l.account_id
-      WHERE l.user_id = ? AND ${inIds('l.id', sc?.taskListIds)} ${every ? '' : 'AND COALESCE(l.hidden, 0) = 0'}
-      ORDER BY l.is_default DESC, l.name`, req.user.id).map((l) => listOut(l, m));
+      WHERE l.user_id = ? AND ${inIds('l.id', ids)} ${every ? '' : 'AND COALESCE(l.hidden, 0) = 0'}
+      ORDER BY l.is_default DESC, l.name`, uid).map((l) => listOut(l, map));
+    const own = lists(req.user.id, sc?.taskListIds, m);
+    return every ? own : withShared(req, own, (uid, sp) => { ensureTaskLists(uid); return lists(uid, null, spaceMap(uid)).map((l) => ({ ...l, isDefault: false, space: l.space || sp.name })); });
   });
   app.post('/api/task-lists', async (req, reply) => {
     const name = String(req.body?.name || '').trim().slice(0, 80);
@@ -137,9 +140,13 @@ export default async function taskRoutes(app) {
     const sc = scope(req.user.id, reqSpace(req));
     const showDone = req.query.done === '1';
     const listId = Number(req.query.listId) || null;
-    return all(`SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t JOIN task_lists l ON l.id = t.list_id
-      WHERE t.user_id = ? AND COALESCE(l.hidden, 0) = 0 AND ${inIds('t.list_id', sc?.taskListIds)} ${listId ? 'AND t.list_id = ?' : ''} ${showDone ? '' : 'AND (t.done = 0 OR t.completed_at > ?)'}
-      ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, t.id DESC`, req.user.id, ...(listId ? [listId] : []), ...(showDone ? [] : [now() - 864e5])).map(out);
+    const tasks = (uid, ids) => all(`SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t JOIN task_lists l ON l.id = t.list_id
+      WHERE t.user_id = ? AND COALESCE(l.hidden, 0) = 0 AND ${inIds('t.list_id', ids)} ${listId ? 'AND t.list_id = ?' : ''} ${showDone ? '' : 'AND (t.done = 0 OR t.completed_at > ?)'}
+      ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, t.id DESC`, uid, ...(listId ? [listId] : []), ...(showDone ? [] : [now() - 864e5])).map(out);
+    const own = tasks(req.user.id, sc?.taskListIds);
+    if (listId) return own; // one list: asked of its owner
+    return withShared(req, own, (uid) => { ensureTaskLists(uid); return tasks(uid, null); },
+      (a, b) => a.done - b.done || (a.due == null) - (b.due == null) || (a.due || 0) - (b.due || 0) || b.priority - a.priority || b.id - a.id);
   });
 
   // Preview while typing: what the rules understand ("tomorrow at 10", "v petek") — instant, no AI.

@@ -652,7 +652,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
         </select>
         <select className="input" style={{ width: 130 }} value={ev.busy ? '1' : '0'} onChange={(e) => set('busy', e.target.value === '1')}><option value="1">Busy</option><option value="0">Free</option></select>
         <select className="input" style={{ width: 200 }} value={cal?.id || ''} onChange={(e) => set('calendarId', Number(e.target.value))} disabled={isExisting && readonly}>
-          {calendars.filter((c) => !c.readonly || c.id === cal?.id).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {calendars.filter((c) => (!c.readonly || c.id === cal?.id) && (!initial?.id || (c.owner ?? null) === (cal?.owner ?? null))).map((c) => <option key={c.id} value={c.id}>{c.name}{c.ownerName ? ` · ${c.ownerName}` : ''}</option>)}
         </select>
       </div>
       <textarea className="input" rows={4} placeholder="Description" value={ev.description || ''} onChange={(e) => set('description', e.target.value)} disabled={readonly} />

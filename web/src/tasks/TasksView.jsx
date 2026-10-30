@@ -66,6 +66,8 @@ export default function TasksView() {
   const remove = async (t) => { if (!confirm(`Delete task “${t.title}”?`)) return; await api.del(`/api/tasks/${t.id}`).catch(toastError); load(); };
   const toggleOpen = (id) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
+  // A task stays with its owner: one's own lists, or those of its shared space.
+  const movable = (t) => lists.filter((l) => !l.readonly && l.id !== t.listId && (l.owner ?? null) === (t.owner ?? null));
   const taskMenu = (e, t) => openMenu(e, [
     { section: 'Due' },
     ...dueOptions().map(([label, at]) => ({ label, icon: CalendarClock, hint: new Date(at).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }), onClick: () => patch(t, { due: at }) })),
@@ -74,8 +76,8 @@ export default function TasksView() {
     t.due && { label: 'Remove due date', icon: CalendarX, onClick: () => patch(t, { due: null }) },
     'sep',
     { label: 'Edit…', icon: Pencil, onClick: () => setEditing(t) },
-    ...(lists.filter((l) => !l.readonly && l.id !== t.listId).length ? [{ section: 'Move to list' },
-      ...lists.filter((l) => !l.readonly && l.id !== t.listId).map((l) => ({ label: l.name, icon: FolderInput, hint: l.source === 'caldav' ? 'synced' : undefined, onClick: () => patch(t, { listId: l.id }) })), 'sep'] : []),
+    ...(movable(t).length ? [{ section: 'Move to list' },
+      ...movable(t).map((l) => ({ label: l.name, icon: FolderInput, hint: l.source === 'caldav' ? 'synced' : undefined, onClick: () => patch(t, { listId: l.id }) })), 'sep'] : []),
     { label: t.priority ? 'Not important' : 'Mark important', icon: Flag, onClick: () => patch(t, { priority: t.priority ? 0 : 1 }) },
     t.sourceMessageId && { label: 'Open the email', icon: Mail, onClick: () => jump(`#/mail/unified/${t.sourceMessageId}`) },
     // From one's own tasks into a shared space (only from one's own mail; it then disappears from here).
@@ -126,7 +128,7 @@ export default function TasksView() {
           {lists.map((l) => (
             <button key={l.id} className={`chip clickable ${shown === l.id ? 'on' : ''}`} onClick={() => setListId(l.id)} onContextMenu={(e) => listMenu(e, l)}
               title={`${l.name} — ${l.origin || (l.source === 'caldav' ? 'synced' : 'kept in Halcyon only')}${l.space ? ` · space ${l.space}` : ''}${l.syncError ? `\n${l.syncError}` : ''}`}>
-              <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.source === 'caldav' && <Cloud size={11} className="faint" />}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}
+              <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.ownerName && <span className="faint"> · {l.ownerName}</span>}{l.source === 'caldav' && <Cloud size={11} className="faint" />}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}
               {l.open > 0 && <span className="faint"> {l.open}</span>}
             </button>))}
           {shownList && <button className="icon-btn" title="List options" onClick={(e) => listMenu(e, shownList)}><MoreHorizontal size={15} /></button>}
@@ -166,7 +168,7 @@ export default function TasksView() {
                     <div className="row small faint" style={{ gap: 10 }}>
                       {t.due && <span className="clickable" style={{ color: !t.done && t.due < now ? 'var(--danger)' : undefined }} title="Change due date" onClick={(e) => taskMenu(e, t)}><Calendar size={11} /> {fmtDue(t.due, t.dueAllDay)}</span>}
                       {t.rrule && <span title={t.rrule}><Repeat size={11} /> {repeatLabel(t.rrule)}</span>}
-                      {showList && <span className="clickable" onClick={() => setListId(t.listId)} title="Show this list"><ListTodo size={11} /> {t.list}</span>}
+                      {showList && <span className="clickable" onClick={() => setListId(t.listId)} title="Show this list"><ListTodo size={11} /> {t.list}{t.ownerName ? ` · ${t.ownerName}` : ''}</span>}
                       {t.sourceMessageId && <a href="#" onClick={(e) => { e.preventDefault(); navigate(`#/mail/unified/${t.sourceMessageId}`); }}><Mail size={11} /> from email</a>}
                     </div>
                   </div>
