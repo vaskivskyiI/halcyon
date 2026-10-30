@@ -98,7 +98,7 @@ async function request(method, url, body) {
   }
   learn(method, url, data, as);
   // Mail changed from here: counts in the sidebar refresh even when the event socket is not connected (e.g. behind a proxy).
-  if (method !== 'GET' && /^\/api\/(messages|folders|send|outbox|drafts|ai\/approvals)/.test(url)) window.dispatchEvent(new CustomEvent('halcyon:mutated', { detail: { url } }));
+  if (method !== 'GET' && /^\/api\/(messages|folders|send|outbox|drafts|ai\/approvals|tasks|events)/.test(url)) window.dispatchEvent(new CustomEvent('halcyon:mutated', { detail: { url } }));
   return data;
 }
 

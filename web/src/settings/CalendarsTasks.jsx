@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Calendar as CalendarIcon, ListTodo, Users, Eye, EyeOff, Pencil, Star, Trash2, FolderInput, Cloud, HardDrive, Link2, Lock } from 'lucide-react';
-import { api } from '../api.js';
+import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, Spinner } from '../components/common.jsx';
 
@@ -18,7 +18,7 @@ export default function CalendarsTasks() {
   const [moving, setMoving] = useState(null);
   const load = () => Promise.all(Object.values(KINDS).map((k) => api.get(`${k.url}?all=1`)))
     .then(([calendar, taskList, addressBook]) => setData({ calendar, taskList, addressBook })).catch(toastError);
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); return onEvent((e) => { if (['calendar:changed', 'tasks:changed', 'contacts:changed'].includes(e.type)) load(); }); }, []);
   if (!data) return <div className="settings-section"><Spinner /></div>;
 
   const act = async (fn, msg) => { try { const r = await fn(); if (msg) toast(typeof msg === 'function' ? msg(r) : msg); await load(); } catch (e) { toastError(e); } };

@@ -922,6 +922,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   the minimum priority) never enters Action needed by itself. `actionKind` says 'open' or 'suggested'; the AI card asks,
   the view `suggested` lists them, POST `/api/messages/:id/action-suggestion` { accept: true | false | null } sets
   `action_user`, which survives re-analysis. Serialized `needsAction` means open, `actionSuggested` means undecided.
+- Reader live updates: tasks:changed, calendar:changed, mail:changed, mail:new and halcyon:poll run `load(images, true)`
+  (quiet: keeps what is unfolded and translations, ignores failures). Settings → calendars and lists follows too.
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return

@@ -51,9 +51,13 @@ export default function Reader({ id, view }) {
   const quickSteps = store.use((s) => s.quickSteps);
   const conv = settings.ui.conversationView;
 
-  const load = useCallback(async (images = allowImages) => {
+  // quiet: a live update of what is open, nothing the reader did. What is unfolded stays, a new message opens, a failed
+  // request changes nothing.
+  const openId = useRef(id);
+  openId.current = id;
+  const load = useCallback(async (images = allowImages, quiet = false) => {
     if (!id) { setThread(null); return; }
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       const m = await api.get(`/api/messages/${id}${images ? '?images=1' : ''}`);
       let data = { messages: [m], summary: null };
@@ -62,14 +66,16 @@ export default function Reader({ id, view }) {
         if (t.messages.length) data = t;
       }
       const muted = m.threadId ? (await api.get(`/api/threads/${encodeURIComponent(m.threadId)}/muted`).catch(() => ({}))).muted : false;
+      if (quiet && openId.current !== id) return;
       const t = { ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m, muted };
-      setThread(t);
+      setThread(quiet ? (cur) => ({ ...t, translations: cur?.translations }) : t);
       store.set({ focusAccountId: m.accountId }); // new mail defaults to the account of the message being read
       const last = data.messages[data.messages.length - 1];
       const ex = new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]);
-      setExpanded(ex);
+      setExpanded(quiet ? (cur) => new Set([...cur, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]) : ex);
       if (!images) { threadCache.delete(id); threadCache.set(id, { thread: t, expanded: ex }); if (threadCache.size > 40) threadCache.delete(threadCache.keys().next().value); }
     } catch (e) {
+      if (quiet && e.status !== 404) return;
       setThread(null);
       threadCache.delete(id);
       // Gone (moved or deleted, here or by another mail app): say so and refresh the list instead of an error.
@@ -140,6 +146,17 @@ export default function Reader({ id, view }) {
     // A reply was just delivered: show it in the conversation.
     if (e.type === 'mail:sent') load();
   }), [thread]);
+  // Whatever changes around the open message shows at once: a task or event made from it, flags, labels, new replies.
+  const liveTimer = useRef();
+  useEffect(() => {
+    const later = () => { clearTimeout(liveTimer.current); liveTimer.current = setTimeout(() => load(allowImages, true), 250); };
+    const off = onEvent((e) => { if (['tasks:changed', 'calendar:changed', 'mail:changed', 'mail:new'].includes(e.type) || (e.type === 'folder:synced' && e.payload?.newCount)) later(); });
+    // Also without the live connection (a proxy that drops it).
+    const mutated = (e) => { if (/^\/api\/(tasks|events)/.test(e.detail?.url || '')) later(); };
+    window.addEventListener('halcyon:mutated', mutated);
+    window.addEventListener('halcyon:poll', later);
+    return () => { off(); clearTimeout(liveTimer.current); window.removeEventListener('halcyon:mutated', mutated); window.removeEventListener('halcyon:poll', later); };
+  }, [load]);
   useEffect(() => { const h = () => load(); window.addEventListener('halcyon:sent', h); return () => window.removeEventListener('halcyon:sent', h); }, [thread]);
   // The open conversation is refreshed when fresh data comes (after the saved copy was shown, back online, …).
   useEffect(() => { const h = () => id && load(); window.addEventListener('halcyon:reload-open', h); return () => window.removeEventListener('halcyon:reload-open', h); }, [id, load]);
