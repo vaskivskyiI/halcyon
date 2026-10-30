@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, Plus, Upload, Download, Trash2, Pencil, FolderOpen, Sparkles } from 'lucide-react';
+import { Archive, Plus, Upload, Download, Trash2, Pencil, FolderOpen, Sparkles, Combine } from 'lucide-react';
 import AnalyzeOld from '../components/AnalyzeOld.jsx';
 import { api, onEvent } from '../api.js';
 import { loadFolders, loadAccounts } from '../data.js';
 import { toast, toastError, fmtSize, navigate } from '../util.js';
-import { Spinner } from '../components/common.jsx';
+import { Spinner, useMenu } from '../components/common.jsx';
 
 const ACCEPT = '.pst,.ost,.mbox,.mbx,.eml,.zip';
 const STATUS = { queued: 'Waiting', running: 'Working', done: 'Done', failed: 'Failed' };
@@ -17,6 +17,7 @@ export default function Archives() {
   const [data, setData] = useState(null);
   const [upload, setUpload] = useState(null);
   const [analyze, setAnalyze] = useState(null);
+  const [openMenu, menuNode] = useMenu();
   const file = useRef();
   const target = useRef(null);
   const load = () => api.get('/api/archives').then(setData).catch(toastError);
@@ -107,6 +108,10 @@ export default function Archives() {
       toast('Uploaded — importing in the background…'); load();
     } catch (e) { if (e.cancelled) toast(e.message); else toastError(e); } finally { window.removeEventListener('beforeunload', leave); stop.current = null; setUpload(null); }
   };
+  const merge = async (from, into) => {
+    if (!confirm(`Move everything from “${from.name}” into “${into.name}”?\n\nFolders keep their names. Emails “${into.name}” already has are not added twice. “${from.name}” disappears when it is empty.`)) return;
+    try { await api.post(`/api/archives/${into.id}/merge`, { fromId: from.id }); toast('Merging in the background…'); load(); } catch (e) { toastError(e); }
+  };
   const rename = async (a) => { const n = prompt('Name', a.name); if (n && n !== a.name) { try { await api.patch(`/api/accounts/${a.id}`, { name: n }); refresh(); } catch (e) { toastError(e); } } };
   const remove = async (a) => {
     const typed = prompt(`Delete the archive “${a.name}” and the ${a.messages} emails in it from Halcyon? This cannot be undone — export it first if you may need it.\n\nType the archive's name to delete it:`);
@@ -147,6 +152,7 @@ export default function Archives() {
             <button className="btn sm" disabled={!a.messages} title="All folders as .eml files in a ZIP — open it in Explorer and drag the emails into Outlook or another mail program, or import it back here" onClick={() => window.open(api.url(`/api/archives/export?archiveId=${a.id}`))}><Download size={14} /> Export (.eml in ZIP)</button>
             {a.folders[0] && <button className="btn sm ghost" onClick={() => navigate(`#/mail/f${a.folders.find((f) => f.total)?.id || a.folders[0].id}`)}><FolderOpen size={14} /> Open</button>}
             <button className="btn sm ghost" onClick={() => rename(a)}><Pencil size={14} /> Rename</button>
+            {data.archives.length > 1 && <button className="btn sm ghost" title="Move all of this archive into another one" onClick={(e) => openMenu(e, [{ section: 'Merge into' }, ...data.archives.filter((x) => x.id !== a.id).map((x) => ({ label: x.name, onClick: () => merge(a, x) }))])}><Combine size={14} /> Merge into…</button>}
             <span className="grow" />
             <button className="btn sm ghost danger" onClick={() => remove(a)}><Trash2 size={14} /> Delete</button>
           </div>
@@ -163,7 +169,7 @@ export default function Archives() {
           return (
             <div key={j.id} className="row small" style={{ gap: 8, padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
               {['queued', 'running'].includes(j.status) && <Spinner size={12} />}
-              <span className="grow">{j.type === 'import' ? `Import of ${j.fileName}` : 'Mail moved'} → {name}
+              <span className="grow">{j.type === 'import' ? `Import of ${j.fileName}` : j.type === 'merge' ? 'Archives merged' : 'Mail moved'} → {name}
                 <span className="faint"> · {STATUS[j.status] || j.status}{j.done || j.total ? ` · ${j.done}${j.total ? ` of ${j.total}` : ''}` : ''}{j.skipped ? ` · ${j.skipped} skipped (already there or not mail)` : ''}{j.failed ? ` · ${j.failed} could not be read` : ''}</span>
                 {j.error && <div className="faint" style={{ color: 'var(--danger)' }}>{j.error}</div>}</span>
               <span className="faint">{new Date(j.createdAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
@@ -171,6 +177,7 @@ export default function Archives() {
         })}
       </>}
       {running.length === 0 && <div className="small faint">Outlook data files: .pst archives and .ost cache files (Outlook 2003 and later). Mail, with its folders, read state and attachments, is imported; calendar items and contacts in them are skipped. Large files are uploaded in pieces (no proxy setting needed) and continue where they stopped if the connection drops; in the desktop app (This PC) files are read where they are.</div>}
+    {menuNode}
     </div>
   );
 }

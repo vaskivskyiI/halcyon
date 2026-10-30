@@ -49,12 +49,12 @@ function messageIdOf(raw) {
 }
 
 /**
- * Adds one email to an archive folder. Already there (same Message-ID in that folder) → skipped. Returns the new id,
- * or null when skipped.
+ * Adds one email to an archive folder. Already there (same Message-ID in that folder; `anywhere`: in the whole archive,
+ * so a second export of the same mailbox adds only what is new) → skipped. Returns the new id, or null when skipped.
  */
-export async function addToArchive(account, folder, raw, { flags = [], date = null } = {}) {
+export async function addToArchive(account, folder, raw, { flags = [], date = null, anywhere = false } = {}) {
   const msgid = messageIdOf(raw);
-  if (get('SELECT 1 AS x FROM messages WHERE folder_id = ? AND message_id = ?', folder.id, msgid)) return null;
+  if (get(`SELECT 1 AS x FROM messages WHERE ${anywhere ? 'account_id' : 'folder_id'} = ? AND message_id = ?`, anywhere ? account.id : folder.id, msgid)) return null;
   run('UPDATE folders SET last_uid = COALESCE(last_uid, 0) + 1 WHERE id = ?', folder.id);
   const uid = get('SELECT last_uid FROM folders WHERE id = ?', folder.id).last_uid;
   const { id } = await ingestMessage({ account, folder, uid, flags, raw, internalDate: date });
@@ -79,17 +79,28 @@ function carryOver(fromId, toId) {
 /**
  * Moves emails into an archive folder: each is copied, the copy read back and compared with the original, and only
  * then the original leaves its mailbox — to the mailbox's Trash (recoverable there; removed when Trash is emptied),
- * or, from another archive, removed there. `keep`: copy only. Returns { moved, failed: [{ id, error }] }.
+ * or, from another archive, removed there. `keep`: copy only. `merge`: an email the archive already has anywhere is not
+ * copied again (what was known of it goes along). Returns { moved, skipped, failed: [{ id, error }] }.
  */
-export async function intoArchive(userId, ids, folder, { keep = false, onProgress } = {}) {
+export async function intoArchive(userId, ids, folder, { keep = false, merge = false, onProgress } = {}) {
   const account = get("SELECT * FROM accounts WHERE id = ? AND user_id = ? AND kind = 'archive'", folder.account_id, userId);
   if (!account) throw new Error('Not an archive');
   const done = [], fromArchive = [], failed = [];
-  let n = 0;
+  let n = 0, skipped = 0;
   for (const id of ids) {
     const m = get('SELECT m.*, a.kind FROM messages m JOIN accounts a ON a.id = m.account_id WHERE m.id = ? AND m.user_id = ?', id, userId);
     if (!m || m.folder_id === folder.id) continue;
     try {
+      const same = merge && m.message_id && get('SELECT id FROM messages WHERE account_id = ? AND message_id = ? LIMIT 1', account.id, m.message_id);
+      if (same) {
+        if (!get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', same.id)) carryOver(m.id, same.id);
+        run('UPDATE tasks SET source_message_id = ? WHERE source_message_id = ?', same.id, m.id);
+        run('UPDATE events SET source_message_id = ? WHERE source_message_id = ?', same.id, m.id);
+        fromArchive.push(m.id);
+        skipped++;
+        if (++n % 25 === 0) { onProgress?.(n); await new Promise((r) => setImmediate(r)); }
+        continue;
+      }
       const raw = readRaw(m);
       if (!raw) throw new Error('the original is not stored on this computer');
       const flags = [m.is_read && '\\Seen', m.is_flagged && '\\Flagged', m.is_answered && '\\Answered'].filter(Boolean);
@@ -117,7 +128,7 @@ export async function intoArchive(userId, ids, folder, { keep = false, onProgres
   }
   notify(userId, 'mail:changed', { ids });
   notify(userId, 'folders:changed', {});
-  return { moved: done.length + fromArchive.length, failed };
+  return { moved: done.length + fromArchive.length - skipped, skipped, failed };
 }
 
 // ---- jobs (imports and moves run in the background, one at a time, with progress)
@@ -167,7 +178,7 @@ async function runJob(j) {
       const add = async (folderPath, raw, opts = {}) => {
         try {
           if (!raw) { if (opts.error) throw opts.error; stats.skipped++; }
-          else if (await addToArchive(account, archiveFolder(account.id, folderPath), raw, opts)) stats.done++;
+          else if (await addToArchive(account, archiveFolder(account.id, folderPath), raw, { ...opts, anywhere: true })) stats.done++;
           else stats.skipped++;
         } catch (e) { stats.failed++; log.warn(`import ${j.file_name}: ${e.message}`); }
         if (Date.now() - last > 1500) { last = Date.now(); set({ done: stats.done, skipped: stats.skipped, failed: stats.failed, total: stats.total }); await new Promise((r) => setImmediate(r)); }
@@ -189,6 +200,27 @@ async function runJob(j) {
         if (r.failed.length) set({ error: `${r.failed.length} not moved: ${r.failed[0].error}` });
       }
       set({ status: 'done', done, failed, finished_at: now() });
+    } else if (j.type === 'merge') {
+      // Everything goes over folder by folder, each new copy checked. The other archive disappears only when empty, so
+      // a merge that fails part way loses nothing and can simply be run again.
+      const src = archiveOf(j.user_id, p.fromId);
+      if (!src) throw new Error('The other archive no longer exists');
+      set({ total: get('SELECT COUNT(*) AS n FROM messages WHERE account_id = ?', src.id).n });
+      let done = 0, skipped = 0, failed = 0;
+      for (const f of all('SELECT * FROM folders WHERE account_id = ? ORDER BY path', src.id)) {
+        const ids = all('SELECT id FROM messages WHERE folder_id = ? ORDER BY id', f.id).map((m) => m.id);
+        if (!ids.length) continue;
+        const r = await intoArchive(j.user_id, ids, archiveFolder(account.id, f.path), { merge: true, onProgress: (n) => set({ done: done + skipped + n }) });
+        done += r.moved; skipped += r.skipped; failed += r.failed.length;
+        if (r.failed.length) set({ error: `${r.failed.length} not moved, still in “${src.name}”: ${r.failed[0].error}` });
+        set({ done: done + skipped, skipped, failed });
+      }
+      if (!get('SELECT 1 AS x FROM messages WHERE account_id = ? LIMIT 1', src.id)) {
+        run('UPDATE facts SET owner = ? WHERE user_id = ? AND owner = ?', `a:${account.id}`, j.user_id, `a:${src.id}`);
+        run('DELETE FROM memory WHERE user_id = ? AND owner = ?', j.user_id, `a:${src.id}`);
+        run('DELETE FROM accounts WHERE id = ?', src.id);
+      }
+      set({ status: 'done', done: done + skipped, skipped, failed, finished_at: now() });
     }
   } catch (e) {
     log.warn(`job ${j.id}: ${e.message}`);

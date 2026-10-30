@@ -187,3 +187,43 @@ test('a file that is not an Outlook data file fails with a readable reason (no b
   assert.match(job.error, /not an Outlook data file/);
   assert.doesNotMatch(job.error, /[\u0000-\u0008]/);
 });
+
+test('a second export adds only what the archive lacks, in any folder; two archives become one and nothing is lost', async () => {
+  const one = (await api('POST', '/api/archives', { name: 'From Outlook' })).id, two = (await api('POST', '/api/archives', { name: 'From Gmail' })).id;
+  const shared = eml({ id: 'both@x', subject: 'In both' }), only = eml({ id: 'only@x', subject: 'Only here' });
+  await api('POST', `/api/archives/${one}/import?filename=a.eml&folder=Outlook`, shared);
+  await waitJobs();
+  const mbox = (...l) => Buffer.concat(l.flatMap((m) => [Buffer.from('From x@x.example Mon Jan  1 10:00:00 2018\n'), m, Buffer.from('\n')]));
+  await api('POST', `/api/archives/${one}/import?filename=b.mbox&folder=Gmail`, mbox(shared, only));
+  await waitJobs();
+  const count = (id) => db.prepare('SELECT COUNT(*) AS n FROM messages WHERE account_id = ?').get(id).n;
+  assert.equal(count(one), 2, 'the shared email is not imported again into the other folder');
+  await api('POST', `/api/archives/${two}/import?filename=c.mbox&folder=Old`, mbox(shared, eml({ id: 'three@x', subject: 'Third' })));
+  await waitJobs();
+  const m3 = db.prepare("SELECT id FROM messages WHERE account_id = ? AND message_id = 'three@x'").get(two).id;
+  const task = db.prepare("INSERT INTO tasks (user_id, title, source_message_id, created_at, updated_at) VALUES (?, 'T', ?, 0, 0)").run(uid, db.prepare("SELECT id FROM messages WHERE account_id = ? AND message_id = 'both@x'").get(two).id).lastInsertRowid;
+  await assert.rejects(api('POST', `/api/archives/${one}/merge`, { fromId: one }), /404/);
+  await api('POST', `/api/archives/${one}/merge`, { fromId: two });
+  const jobs = await waitJobs();
+  assert.deepEqual([jobs[0].type, jobs[0].status, jobs[0].skipped, jobs[0].failed], ['merge', 'done', 1, 0]);
+  assert.equal(count(one), 3);
+  assert.equal(db.prepare('SELECT 1 AS x FROM accounts WHERE id = ?').get(two), undefined, 'the empty archive is gone');
+  assert.equal(db.prepare('SELECT 1 AS x FROM messages WHERE id = ?').get(m3), undefined);
+  const third = db.prepare("SELECT m.*, f.path FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.account_id = ? AND m.message_id = 'three@x'").get(one);
+  assert.equal(third.path, 'Old', 'folders keep their names');
+  assert.ok(store.readRaw(third).toString().includes('Third'), 'the original is readable');
+  const back = db.prepare('SELECT source_message_id AS s FROM tasks WHERE id = ?').get(task).s;
+  assert.equal(db.prepare('SELECT message_id FROM messages WHERE id = ?').get(back).message_id, 'both@x', 'a task made from a duplicate follows the kept copy');
+});
+
+test('a copy that fails stays in the other archive, which then is not removed', async () => {
+  const a = (await api('POST', '/api/archives', { name: 'Keep' })).id, b = (await api('POST', '/api/archives', { name: 'Broken' })).id;
+  await api('POST', `/api/archives/${b}/import?filename=a.eml`, eml({ id: 'gone@x', subject: 'Gone' }));
+  await waitJobs();
+  db.prepare("UPDATE messages SET raw_path = '/nowhere/x' WHERE account_id = ?").run(b);
+  await api('POST', `/api/archives/${a}/merge`, { fromId: b });
+  const [j] = await waitJobs();
+  assert.equal(j.failed, 1);
+  assert.ok(db.prepare('SELECT 1 AS x FROM accounts WHERE id = ?').get(b));
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages WHERE account_id = ?').get(b).n, 1);
+});

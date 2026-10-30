@@ -128,6 +128,15 @@ export default async function archiveRoutes(app) {
     return queueJob(req.user.id, a.id, 'move', { params: { ids: list, folderId, before: Number(b.before) || null, folderPath: b.folderPath ? String(b.folderPath).slice(0, 200) : null, keep: !!b.keep } });
   });
 
+  // Another archive into this one: its folders keep their names, what this one already has is not added twice, and the
+  // other archive goes when empty.
+  app.post('/api/archives/:id/merge', async (req, reply) => {
+    const a = archiveOf(req.user.id, req.params.id), from = archiveOf(req.user.id, req.body?.fromId);
+    if (!a || !from || a.id === from.id) return httpError(reply, 404, 'Archive not found');
+    if (get("SELECT 1 AS x FROM archive_jobs WHERE account_id IN (?, ?) AND status IN ('queued', 'running')", a.id, from.id)) return httpError(reply, 409, 'An import or move into one of these archives is still running');
+    return queueJob(req.user.id, a.id, 'merge', { params: { fromId: from.id } });
+  });
+
   // A folder (any, not only an archive's) or a whole archive as a ZIP of .eml files, its folders kept: opens in
   // Windows Explorer, the emails can be dragged into Outlook, Thunderbird or another program, or imported back here.
   app.get('/api/archives/export', async (req, reply) => {
