@@ -918,3 +918,7 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   `date`, so "Open in Inkwell" shows for an event only when a note has this occurrence's date (`sameOccurrence`).
 - Event deep links also carry `day` (YYYY-MM-DD, `occurrenceDay`: the browser's zone, the UTC day for all-day events).
   Inkwell uses it for the note's title, same-day matching and the `date` of its lookup rows, so both sides agree.
+- To-do sync with Inkwell: MCP propose tool `complete_task` { id, done = true } (routes/tasks.js `setTaskDone`: same effect
+  as the tick, with repeating tasks and CalDAV push; space and read-only lists respected). The answer is the task's real
+  state: a repeating task stays open on its next date (`done: false`, `next_due`, `completed_id`). `list_tasks` takes
+  `ids` (at most 200): exactly those tasks, done or not, past the 100 limit of the plain list.

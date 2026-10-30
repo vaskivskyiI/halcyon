@@ -34,6 +34,21 @@ const isDav = (listId) => !!get("SELECT 1 FROM task_lists WHERE id = ? AND sourc
 /** A list of the user that tasks can be written to, or null. */
 const writableList = (userId, id) => (id ? get('SELECT * FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0', Number(id), userId) : null);
 
+/**
+ * Ticking or unticking a task from outside the app (MCP), as the tick in Tasks does. Returns the task as it is now:
+ * a repeating task stays open on its next date, the completed occurrence being a new task (`completedId`).
+ */
+export function setTaskDone(userId, id, done) {
+  const t = one(id);
+  if (!t || t.user_id !== userId) return null;
+  if (t.list_readonly) throw new Error('This task list is read-only');
+  run('UPDATE tasks SET done = ?, completed_at = ?, dirty = ?, updated_at = ? WHERE id = ?', done ? 1 : 0, done ? (t.completed_at || now()) : null, isDav(t.list_id) ? 1 : t.dirty || 0, now(), t.id);
+  const completedId = done && !t.done && t.rrule ? completeOccurrence(one(t.id), getSettings(userId).calendar.timezone) : null;
+  notify(userId, 'tasks:changed', {});
+  pushList(t.list_id);
+  return { ...one(t.id), completedId };
+}
+
 export default async function taskRoutes(app) {
   app.addHook('preHandler', requireUser);
 

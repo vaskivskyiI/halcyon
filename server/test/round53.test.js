@@ -214,3 +214,49 @@ test('MCP spaces: list_spaces, the space argument, every item\'s space; a token\
   assert.deepEqual(titles(await rpc(all, 'search_mail', { query: 'budget', space: 'Work' }), 'subject'), ['Budget plan|Work']);
   assert.deepEqual(titles(await rpc(fixed, 'search_mail', { query: 'budget', space: 'Private' }), 'subject'), ['Budget plan|Work']);
 });
+
+test('MCP complete_task ticks like the app; list_tasks with ids returns exactly those', async () => {
+  const { createToken } = await import('../src/mcp/server.js');
+  const uid = db.prepare('SELECT id FROM users').get().id;
+  const insert = (sql, ...p) => db.prepare(sql).run(...p).lastInsertRowid;
+  const list = (space, readonly = 0) => insert("INSERT INTO task_lists (user_id, name, source, space, readonly, created_at) VALUES (?, ?, 'local', ?, ?, ?)", uid, `ticks ${space} ${readonly}`, space, readonly, Date.now());
+  const home = list('Home'), office = list('Office'), locked = list('Home', 1);
+  const task = (l, title, extra = {}) => insert('INSERT INTO tasks (user_id, list_id, title, due, rrule, done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', uid, l, title, extra.due ?? null, extra.rrule ?? null, extra.done ?? 0, Date.now(), Date.now());
+  const once = task(home, 'Once'), other = task(office, 'Other'), ro = task(locked, 'Read-only');
+  const due = Date.now() + 864e5, weekly = task(home, 'Weekly', { due, rrule: 'FREQ=WEEKLY' });
+  const rpc = async (token, name, args = {}) => {
+    const r = await fetch(`${base}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
+    const { result, error } = await r.json();
+    if (error) return { failed: error.message };
+    return result.isError ? { failed: result.content[0].text } : JSON.parse(result.content[0].text);
+  };
+  const propose = createToken(uid, { name: 'Ticks', access: 'propose' }).token, spaced = createToken(uid, { name: 'Home', access: 'propose', space: 'Home' }).token, read = createToken(uid, { name: 'Read' }).token;
+  const row = (id) => db.prepare('SELECT done, completed_at, due FROM tasks WHERE id = ?').get(id);
+
+  assert.match((await rpc(read, 'complete_task', { id: once })).failed, /Unknown tool/);
+  assert.deepEqual(await rpc(propose, 'complete_task', { id: once }), { id: once, done: true });
+  assert.ok(row(once).done && row(once).completed_at);
+  assert.deepEqual(await rpc(propose, 'complete_task', { id: once, done: false }), { id: once, done: false });
+  assert.deepEqual([row(once).done, row(once).completed_at], [0, null]);
+
+  assert.match((await rpc(propose, 'complete_task', { id: 999999 })).failed, /No task 999999/);
+  assert.match((await rpc(propose, 'complete_task', { id: ro })).failed, /read-only/);
+  assert.match((await rpc(spaced, 'complete_task', { id: other })).failed, /No task/, 'a token stays in its space');
+  assert.equal(row(other).done, 0);
+
+  const r = await rpc(propose, 'complete_task', { id: weekly });
+  assert.equal(r.done, false, 'a repeating task stays open, on its next date');
+  assert.ok(r.next_due && Date.parse(r.next_due) > due);
+  assert.deepEqual([row(r.completed_id).done, row(r.completed_id).due], [1, due]);
+
+  // More than the 100 of a plain list: done ones are not hidden when asked for by id.
+  for (let i = 0; i < 105; i++) task(home, `Filler ${i}`);
+  await rpc(propose, 'complete_task', { id: once });
+  const plain = await rpc(propose, 'list_tasks', { include_done: true });
+  assert.equal(plain.length, 100);
+  assert.ok(!plain.some((t) => t.id === once), 'the limit can hide it');
+  const got = await rpc(propose, 'list_tasks', { ids: [once, other, 999999] });
+  assert.deepEqual(got.map((t) => [t.id, t.done]).sort(), [[once, true], [other, false]].sort());
+  assert.deepEqual((await rpc(spaced, 'list_tasks', { ids: [once, other] })).map((t) => t.id), [once], 'ids stay inside the token\'s space');
+  assert.deepEqual(await rpc(propose, 'list_tasks', { ids: [] }), [], 'no ids, no tasks');
+});

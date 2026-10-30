@@ -17,6 +17,7 @@ import { listRange } from '../calendar/repo.js';
 import { contactProfile } from '../ai/profiles.js';
 import { saveDraft } from '../mail/send.js';
 import { notify } from '../util/events.js';
+import { setTaskDone } from '../routes/tasks.js';
 import { pendingApprovalCount } from '../rules.js';
 import { logger } from '../util/log.js';
 import { textToHtml } from '../util/text.js';
@@ -189,12 +190,13 @@ const READ_TOOLS = {
     },
   },
   list_tasks: {
-    description: 'The user\'s tasks (open ones, or also done ones), with due dates and the email they came from.',
-    input: { include_done: { type: 'boolean' }, space: { type: 'string', description: 'Only this space (a name from list_spaces); empty: all spaces' } },
+    description: 'The user\'s tasks (open ones, or also done ones; at most 100), with due dates and the email they came from. With ids: exactly those tasks, done or not.',
+    input: { include_done: { type: 'boolean' }, ids: { type: 'array', items: { type: 'integer' }, description: 'Only these tasks (at most 200)' }, space: { type: 'string', description: 'Only this space (a name from list_spaces); empty: all spaces' } },
     run: async (ctx, a) => {
       const { sc } = inSpace(ctx, a), spaces = spaceMap(ctx.uid).taskLists;
+      const ids = Array.isArray(a.ids) ? a.ids.map(Number).filter(Number.isInteger).slice(0, 200) : null;
       // A task added here without a list (create_task) is in no space: shared.
-      return all(`SELECT * FROM tasks WHERE user_id = ? AND (list_id IS NULL OR ${inIds('list_id', sc?.taskListIds)}) ${a.include_done ? '' : 'AND done = 0'} ORDER BY done, due IS NULL, due, id DESC LIMIT 100`, ctx.uid)
+      return all(`SELECT * FROM tasks WHERE user_id = ? AND (list_id IS NULL OR ${inIds('list_id', sc?.taskListIds)}) ${ids ? `AND ${inIds('id', ids)}` : a.include_done ? '' : 'AND done = 0'} ORDER BY done, due IS NULL, due, id DESC LIMIT ${ids ? 200 : 100}`, ctx.uid)
         .map((t) => ({ id: t.id, title: t.title, notes: t.notes || null, due: iso(t.due), done: !!t.done, important: !!t.priority, from_message_id: t.source_message_id, space: spaces.get(t.list_id) ?? '' }));
     },
   },
@@ -237,6 +239,17 @@ const PROPOSE_TOOLS = {
         ctx.uid, String(a.title).trim().slice(0, 300), String(a.notes || `Added by ${ctx.token.name}`).slice(0, 4000), Number.isFinite(due) ? due : null, 'Tasks', a.message_id || null, now(), now());
       notify(ctx.uid, 'tasks:changed', {});
       return { task_id: Number(r.lastInsertRowid) };
+    },
+  },
+  complete_task: {
+    description: 'Mark one of the user\'s tasks done (or open again), as ticking it in Halcyon does. A repeating task moves on to its next date and stays open: the answer then says done: false, with next_due and completed_id (the completed occurrence).',
+    input: { id: { type: 'integer', description: 'Task id (from list_tasks)' }, done: { type: 'boolean', description: 'Default true' } },
+    required: ['id'],
+    run: async (ctx, a) => {
+      const t = get(`SELECT id FROM tasks WHERE id = ? AND user_id = ? AND (list_id IS NULL OR ${inIds('list_id', ctx.sc?.taskListIds)})`, Number(a.id), ctx.uid);
+      const out = t && setTaskDone(ctx.uid, t.id, a.done !== false);
+      if (!out) throw new Error(`No task ${a.id} here`);
+      return { id: out.id, done: !!out.done, ...(out.completedId ? { next_due: iso(out.due), completed_id: out.completedId } : {}) };
     },
   },
   propose_mail_action: {
