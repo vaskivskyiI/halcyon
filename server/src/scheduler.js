@@ -36,6 +36,18 @@ const davRetries = new Map();
 const passing = (error) => /\b50[234]\b|bad gateway|service unavailable|gateway time-?out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed|could not be reached|cannot find (homeUrl|principalUrl|calendarHome|addressBookHome)/i.test(error);
 
 /**
+ * A server that says "too many requests" (Google's quota: 429 RESOURCE_EXHAUSTED) is left alone for a growing pause —
+ * asking every 10 minutes keeps the quota used up. Per account and service; what is already here stays. Google is also
+ * asked at most every 30 minutes unless something waits to be saved. A sync the user asks for always runs.
+ */
+export const DAV_HOLD = [15, 30, 60, 120, 240, 360].map((m) => m * 60e3);
+export const DAV_GOOGLE_GAP = 30 * 60e3;
+export const davHold = new Map();
+export const davLast = new Map();
+export const rateLimited = (e) => /\b429\b|too many requests|resource.{0,3}exhausted|rate.?limit/i.test(String(e?.message || e));
+const isGoogle = (url) => /\/\/([^/]*\.)?google(apis|usercontent)?\.com/i.test(String(url));
+
+/**
  * Calendars and contacts of an account from its CalDAV / CardDAV server. Returns { calendars, books, error }: how many
  * were found (none found is reported too — a wrong address often answers with an empty list, not an error).
  */
@@ -44,17 +56,37 @@ export function syncDav(account, { asked = false } = {}) {
   const run = (async () => {
     // asked: the user is waiting for it (saved the account, pressed retry) — a problem is shown at once.
     const out = { at: Date.now(), calendars: null, books: null, error: null, asked };
+    const fail = (text) => { out.error = [out.error, text].filter(Boolean).join(' · '); };
+    const step = async (kind, label, url, waiting, fn) => {
+      const key = `${account.id}:${kind}`, hold = davHold.get(key);
+      if (!asked && hold?.until > Date.now()) { fail(hold.error); out.limited = true; out.retryAt = Math.max(out.retryAt || 0, hold.until); return undefined; }
+      if (!asked && !waiting && isGoogle(url) && Date.now() - (davLast.get(key) || 0) < DAV_GOOGLE_GAP) return undefined;
+      try {
+        const r = await fn();
+        davHold.delete(key); davLast.set(key, Date.now());
+        return r;
+      } catch (e) {
+        if (!rateLimited(e)) { fail(`${label}: ${davReason(e)}`); return undefined; }
+        const n = hold?.n || 0, until = Date.now() + DAV_HOLD[Math.min(n, DAV_HOLD.length - 1)];
+        const error = `${label}: the server allows only so many requests and asks to wait. What is here stays`;
+        davHold.set(key, { until, n: n + 1, error });
+        fail(error); out.limited = true; out.retryAt = Math.max(out.retryAt || 0, until);
+        return undefined;
+      }
+    };
     try {
       if (account.caldav_url) {
-        try { const r = await syncCalDav(account); out.calendars = r?.calendars ?? 0; out.taskLists = r?.taskLists ?? 0; } catch (e) { out.error = `Calendars (CalDAV): ${davReason(e)}`; }
+        const r = await step('cal', 'Calendars (CalDAV)', account.caldav_url, !!get('SELECT 1 AS x FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.account_id = ? AND e.dirty = 1 LIMIT 1', account.id), () => syncCalDav(account).then((x) => x || {}));
+        if (r) { out.calendars = r.calendars ?? 0; out.taskLists = r.taskLists ?? 0; }
       }
       if (account.carddav_url) {
-        try { out.books = (await syncCardDav(account))?.books ?? 0; } catch (e) { out.error = [out.error, `Contacts (CardDAV): ${davReason(e)}`].filter(Boolean).join(' · '); }
+        const r = await step('card', 'Contacts (CardDAV)', account.carddav_url, !!get('SELECT 1 AS x FROM contacts c JOIN address_books b ON b.id = c.address_book_id WHERE b.account_id = ? AND c.dirty = 1 LIMIT 1', account.id), () => syncCardDav(account).then((x) => x || {}));
+        if (r) out.books = r.books ?? 0;
       }
       if (!out.error && out.calendars === 0) out.error = 'Calendars (CalDAV): the server lists no calendars at this address — check the URL (e.g. https://cloud.example.com/remote.php/dav) and the DAV username';
       if (!out.error && out.books === 0) out.error = 'Contacts (CardDAV): the server lists no address books at this address — check the URL and the DAV username';
       if (out.error) log.warn(`DAV sync ${account.email}: ${out.error}`);
-      if (out.error && (asked || !(passing(out.error) && (davRetries.get(account.id) || 0) < DAV_QUIET))) notify(account.user_id, 'dav:error', { accountId: account.id, error: out.error });
+      if (out.error && !out.limited && (asked || !(passing(out.error) && (davRetries.get(account.id) || 0) < DAV_QUIET))) notify(account.user_id, 'dav:error', { accountId: account.id, error: out.error });
       if (out.calendars || out.books) dropStarters(account.user_id);
       notify(account.user_id, 'calendar:changed', {});
       notify(account.user_id, 'contacts:changed', {});

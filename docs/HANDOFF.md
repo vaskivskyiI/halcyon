@@ -907,3 +907,6 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   fix was written one day early there, and came back so.
 - `useDaySpan` (CalendarView): press and drag over days in month view or the all-day row of week / day view opens a new
   all-day event over them. Mouse only, like the time selection.
+- DAV rate limits (scheduler.js): 429 / RESOURCE_EXHAUSTED pauses that service of the account for 15 min … 6 h
+  (`davHold`, per account + cal/card; shown as a warning with the next try, a sync the user asks for still runs). Google
+  is asked at most every 30 minutes unless something waits to be saved (`davLast`).
