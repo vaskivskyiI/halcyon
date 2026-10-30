@@ -922,3 +922,4 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   as the tick, with repeating tasks and CalDAV push; space and read-only lists respected). The answer is the task's real
   state: a repeating task stays open on its next date (`done: false`, `next_due`, `completed_id`). `list_tasks` takes
   `ids` (at most 200): exactly those tasks, done or not, past the 100 limit of the plain list.
+  Each task from `list_tasks` also says `repeats`: Inkwell reads a moved due date of a repeating task as ticked.

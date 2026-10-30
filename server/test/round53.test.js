@@ -248,6 +248,8 @@ test('MCP complete_task ticks like the app; list_tasks with ids returns exactly 
   assert.equal(r.done, false, 'a repeating task stays open, on its next date');
   assert.ok(r.next_due && Date.parse(r.next_due) > due);
   assert.deepEqual([row(r.completed_id).done, row(r.completed_id).due], [1, due]);
+  assert.deepEqual((await rpc(propose, 'list_tasks', { ids: [weekly, r.completed_id, other] })).map((t) => [t.id, t.repeats]).sort((a, b) => a[0] - b[0]),
+    [[other, false], [weekly, true], [r.completed_id, false]].sort((a, b) => a[0] - b[0]), 'the completed occurrence does not repeat');
 
   // More than the 100 of a plain list: done ones are not hidden when asked for by id.
   for (let i = 0; i < 105; i++) task(home, `Filler ${i}`);

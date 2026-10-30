@@ -197,7 +197,7 @@ const READ_TOOLS = {
       const ids = Array.isArray(a.ids) ? a.ids.map(Number).filter(Number.isInteger).slice(0, 200) : null;
       // A task added here without a list (create_task) is in no space: shared.
       return all(`SELECT * FROM tasks WHERE user_id = ? AND (list_id IS NULL OR ${inIds('list_id', sc?.taskListIds)}) ${ids ? `AND ${inIds('id', ids)}` : a.include_done ? '' : 'AND done = 0'} ORDER BY done, due IS NULL, due, id DESC LIMIT ${ids ? 200 : 100}`, ctx.uid)
-        .map((t) => ({ id: t.id, title: t.title, notes: t.notes || null, due: iso(t.due), done: !!t.done, important: !!t.priority, from_message_id: t.source_message_id, space: spaces.get(t.list_id) ?? '' }));
+        .map((t) => ({ id: t.id, title: t.title, notes: t.notes || null, due: iso(t.due), done: !!t.done, important: !!t.priority, from_message_id: t.source_message_id, repeats: !!t.rrule, space: spaces.get(t.list_id) ?? '' }));
     },
   },
 };
