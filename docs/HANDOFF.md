@@ -916,3 +916,5 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   for a space without calendars (listRange reads an empty list as "all"). `#/new` carries `hspace`, and for events the
   occurrence's own start (ref stays seriesId || id): Inkwell keeps one note per occurrence and its lookup rows carry
   `date`, so "Open in Inkwell" shows for an event only when a note has this occurrence's date (`sameOccurrence`).
+- Event deep links also carry `day` (YYYY-MM-DD, `occurrenceDay`: the browser's zone, the UTC day for all-day events).
+  Inkwell uses it for the note's title, same-day matching and the `date` of its lookup rows, so both sides agree.

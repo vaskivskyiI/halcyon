@@ -139,9 +139,9 @@ test('Inkwell behind a private CA: refused until its CA is added or checking is 
 });
 
 test('"New note in Inkwell" opens Inkwell\'s #/new with the item, URL-encoded', async () => {
-  const { inkwellNewUrl } = await import('../src/util/inkwell.js');
+  const { inkwellNewUrl, occurrenceDay } = await import('../src/util/inkwell.js');
   const ev = inkwellNewUrl('https://notes.example.org', 'event', { ref: 42, title: 'Kick-off & plan', start: Date.UTC(2026, 10, 1, 9), end: Date.UTC(2026, 10, 1, 10), location: 'Room 4', attendees: ['Ana Novak', 'bob@x.si'] });
-  assert.equal(ev, 'https://notes.example.org/#/new?kind=event&ref=42&title=Kick-off%20%26%20plan&start=2026-11-01T09%3A00%3A00.000Z&end=2026-11-01T10%3A00%3A00.000Z&location=Room%204&attendees=Ana%20Novak%2C%20bob%40x.si');
+  assert.equal(ev, 'https://notes.example.org/#/new?kind=event&ref=42&title=Kick-off%20%26%20plan&start=2026-11-01T09%3A00%3A00.000Z&end=2026-11-01T10%3A00%3A00.000Z&location=Room%204&attendees=Ana%20Novak%2C%20bob%40x.si&day=' + occurrenceDay(Date.UTC(2026, 10, 1, 9)));
   const q = new URLSearchParams(ev.split('#/new?')[1]);
   assert.deepEqual([q.get('title'), q.get('attendees')], ['Kick-off & plan', 'Ana Novak, bob@x.si']);
   const mail = new URLSearchParams(inkwellNewUrl('https://n.example', 'email', { ref: 7, title: 'a+b?', from: 'Ana <ana@x.si>', date: 0, due: null }).split('?')[1]);
@@ -150,7 +150,7 @@ test('"New note in Inkwell" opens Inkwell\'s #/new with the item, URL-encoded', 
 });
 
 test('the deep link carries the space; a note belongs to an occurrence by its date', async () => {
-  const { inkwellNewUrl, sameOccurrence } = await import('../src/util/inkwell.js');
+  const { inkwellNewUrl, sameOccurrence, occurrenceDay } = await import('../src/util/inkwell.js');
   const q = (space) => new URLSearchParams(inkwellNewUrl('https://n.example', 'event', { ref: 5, start: 0, space }).split('?')[1]);
   assert.equal(q('Work & play').get('hspace'), 'Work & play');
   assert.equal(q('').has('hspace'), false, 'shared items have none');
@@ -158,6 +158,11 @@ test('the deep link carries the space; a note belongs to an occurrence by its da
   assert.equal(sameOccurrence('2026-11-03', day), true);
   assert.equal(sameOccurrence('2026-11-04', day), false);
   assert.equal(sameOccurrence(null, day), false);
+  assert.equal(occurrenceDay(day), '2026-11-03');
+  const dayOf = (kind, item) => new URLSearchParams(inkwellNewUrl('https://n.example', kind, { ref: 5, ...item }).split('?')[1]).get('day');
+  assert.equal(dayOf('event', { start: day }), '2026-11-03', 'the same day Halcyon compares with');
+  assert.equal(dayOf('event', { start: Date.UTC(2026, 10, 3), allDay: true }), '2026-11-03');
+  assert.equal(dayOf('task', { due: day }), null, 'events only');
   assert.equal(sameOccurrence('2026-11-03', Date.UTC(2026, 10, 3), true), true, 'all-day events are stored at midnight UTC');
 });
 
