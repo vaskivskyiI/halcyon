@@ -488,24 +488,29 @@ const CATEGORIES = ['personal', 'work', 'finance', 'shopping', 'travel', 'newsle
 const SETTLED = { done: 'Done', skipped: 'Not doing it', wrong: 'Not an action', replied: 'Answered' };
 const shortDate = (t) => new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' });
 
+const actionRows = (actions) => actions.flatMap(({ m, ins }) => {
+  const items = (ins.actionItems || []).filter((x) => String(x.text || '').trim());
+  const whole = ins.dismissed ? { resolution: ins.resolution, at: ins.resolvedAt, by: ins.resolvedBy } : null;
+  if (!items.length) return [{ m, ins, text: ins.actionSummary || 'see the email', state: whole, single: true }];
+  return items.map((x) => ({ m, ins, text: x.text, due: x.due, state: ins.actionState?.[x.text.trim().toLowerCase()] || whole }));
+});
+
 /**
  * Every action requested in the conversation (one email can ask for several things, several emails can ask), each
  * settled on its own: done, or not doing it. An email leaves Action needed and the brief when all its items are settled.
  */
 function ActionList({ actions, needsReply, onDone, onItem }) {
+  const [show, setShow] = useState(false); // settled ones are folded
   if (!actions?.length) return null;
-  const rows = actions.flatMap(({ m, ins }) => {
-    const items = (ins.actionItems || []).filter((x) => String(x.text || '').trim());
-    const whole = ins.dismissed ? { resolution: ins.resolution, at: ins.resolvedAt, by: ins.resolvedBy } : null;
-    if (!items.length) return [{ m, ins, text: ins.actionSummary || 'see the email', state: whole, single: true }];
-    return items.map((x) => ({ m, ins, text: x.text, due: x.due, state: ins.actionState?.[x.text.trim().toLowerCase()] || whole }));
-  });
+  const rows = actionRows(actions);
   const open = rows.filter((r) => !r.state).length;
   const many = actions.length > 1;
+  if (!open && !show) return <button className="fold-row" title="Show the settled actions" onClick={() => setShow(true)}><Check size={13} /> {rows.length > 1 ? `${rows.length} actions settled` : 'Action settled'} <ChevronRight size={13} /></button>;
   return (
     <div className={`notice action-needed action-list ${open ? '' : 'done'}`} style={{ margin: '8px 0 0' }}>
       <div className="row" style={{ gap: 6 }}><ClipboardCheck size={15} />
-        <b className="grow">{open ? `Action needed${needsReply ? '' : ' (no reply needed)'}` : 'Actions settled'}{rows.length > 1 ? ` · ${open} of ${rows.length} open` : ''}</b></div>
+        <b className="grow">{open ? `Action needed${needsReply ? '' : ' (no reply needed)'}` : 'Actions settled'}{open && rows.length > 1 ? ` · ${open} of ${rows.length} open` : ''}</b>
+        {!open && <button className="icon-btn" style={{ width: 22, height: 22 }} title="Fold" onClick={() => setShow(false)}><ChevronDown size={14} /></button>}</div>
       {actions.map(({ m, ins }) => {
         const mine = rows.filter((r) => r.m.id === m.id);
         const left = mine.filter((r) => !r.state);
@@ -536,6 +541,9 @@ function ActionList({ actions, needsReply, onDone, onItem }) {
 function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, onItem, actions, related, onTask, suggested, onSuggestion }) {
   const [openMenu, menuNode] = useMenu();
   const [suggesting, setSuggesting] = useState(false);
+  // Folded stays folded from email to email, on this device; the line that remains still says what is open.
+  const [folded, setFolded] = useState(() => { try { return localStorage.getItem('halcyon:aiCardFolded') === '1'; } catch { return false; } });
+  const fold = () => { const next = !folded; setFolded(next); try { localStorage.setItem('halcyon:aiCardFolded', next ? '1' : '0'); } catch { /* only a convenience */ } };
   // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
   const suggest = async () => {
     setSuggesting(true);
@@ -549,10 +557,16 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
     return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
       <button className="btn sm ai" onClick={onAnalyze} disabled={aiWorking}>{aiWorking ? <Spinner size={13} /> : <Sparkles size={13} />} Analyze now</button></div></div>;
   }
+  const rows = actionRows(actions || []);
+  const openActions = rows.filter((r) => !r.state).length;
+  const settled = rows.length > 0 && !openActions;
+  const firstLine = String(summary || ins?.summary || '').split('\n').map((l) => l.replace(/^[-*\s]+/, '').replace(/\*\*/g, '').trim()).find(Boolean);
   return (
-    <div className="card ai-card">
-      <div className="title" style={{ flexWrap: 'wrap' }}><Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}
+    <div className={`card ai-card ${folded ? 'folded' : ''}`}>
+      <div className="title" style={{ flexWrap: 'wrap' }}><button className="fold-title" title={folded ? 'Show the summary' : 'Fold the summary'} onClick={fold}>{folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}</button>
         <span className="row" style={{ marginLeft: 'auto', gap: 4, flexWrap: 'wrap' }}>
+          {folded && openActions > 0 && <span className="chip ai"><ClipboardCheck size={11} /> {openActions} open</span>}
+          {folded && suggested?.length > 0 && <span className="chip"><ClipboardCheck size={11} /> possible action</span>}
           {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ins?.topic && <a className="chip topic" href={`#/mail/${topicView(ins.topic)}`} title={`Show all mail about “${ins.topic}”`}>#{ins.topic}</a>}
           {ins?.needsReply && <button className="chip ai" style={{ border: 0, cursor: 'pointer' }} title="Remove “needs reply”" onClick={() => onNeedsReply(false)}><CornerUpLeft size={11} /> Needs reply ✕</button>}
@@ -570,6 +584,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
         </span>
       </div>
       {menuNode}
+      {folded ? firstLine && <div className="truncate small muted" title={firstLine}>{firstLine}</div> : <>
       {why && <div className="why-box">
         <span className="small"><b>{{ important: 'Important', unimportant: 'Not important', category: `Category “${why.value}”` }[why.kind]}</b> — why? <span className="faint">Optional. With a reason the AI applies it to similar mail from anyone, instead of to everything from this sender — e.g. “only fake conferences: generic greeting, unknown organiser, fee to publish”. “Suggest” lets the AI guess it.</span></span>
         <textarea className="input" rows={why.text.length > 60 ? 3 : 2} style={{ resize: 'vertical', minHeight: 30, paddingTop: 5 }} autoFocus maxLength={500} value={why.text} placeholder="Your reason…" onChange={(e) => setWhy({ ...why, text: e.target.value })}
@@ -601,16 +616,34 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
               <button className="btn sm" onClick={() => onForward(c.id)}><Forward size={12} /> Forward to {requester?.name?.split(' ')[0] || requester?.address}</button>
             </div>)) : <div className="small faint">No matching email found — try search.</div>}
         </div>))}
-      <FollowUp ins={ins} related={related} onTask={onTask} onTasks={onTasks} onEvent={onEvent} latest={latest} />
-      {(ins?.needsReply || ins?.suggestedReplies?.length > 0) && (
+      <FollowUp ins={ins} related={related} onTask={onTask} onTasks={onTasks} onEvent={onEvent} latest={latest} listed={rows.length > 0} settled={settled} />
+      {ins?.needsReply && !ins.dismissed && (
         <div className="replies">
           {ins.draftReply && <button className="btn sm ai" onClick={() => onReply(null)}><Sparkles size={13} /> Use prepared draft</button>}
           {ins.suggestedReplies?.map((r, i) => <button key={i} className="btn sm" onClick={() => onReply(r)}>{r}</button>)}
           <button className="btn sm ghost" onClick={() => onReply('')}><Reply size={13} /> Write reply with AI</button>
         </div>
       )}
+      </>}
     </div>
   );
+}
+
+/** Tasks made from the mail: the open ones; those done fold into one line. */
+function TaskRows({ tasks, onTask, icon }) {
+  const [show, setShow] = useState(false);
+  const done = tasks.filter((t) => t.done);
+  const row = (t) => (
+    <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
+      <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
+      {icon}<span className="grow truncate"><b>Task{t.done ? ' (done)' : ''}:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
+      <a href="#/tasks" className="small">Tasks</a>
+    </div>);
+  return <>
+    {tasks.filter((t) => !t.done).map(row)}
+    {done.length > 0 && <button className="fold-row" title={show ? 'Fold' : 'Show the tasks that are done'} onClick={() => setShow(!show)}><Check size={13} /> {done.length === 1 ? 'Task done' : `${done.length} tasks done`} {show ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>}
+    {show && done.map(row)}
+  </>;
 }
 
 const when = (t, allDay) => new Date(t).toLocaleString([], allDay ? { weekday: 'short', day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -619,9 +652,10 @@ const when = (t, allDay) => new Date(t).toLocaleString([], allDay ? { weekday: '
  * Follow-up in one place: what was already made from this mail (tasks, events) first, then the AI's suggestions —
  * so a task that exists is seen right next to "Add to tasks", and suggested events already in the calendar show so.
  */
-function FollowUp({ ins, related, onTask, onTasks, onEvent, latest }) {
+function FollowUp({ ins, related, onTask, onTasks, onEvent, latest, listed, settled }) {
   const tasks = related?.tasks || [], events = related?.events || [];
-  const items = ins?.actionItems || [];
+  // Settled: nothing left to turn into a task. Listed in Action needed: not shown a second time.
+  const items = settled ? [] : ins?.actionItems || [];
   const added = (e) => events.some((x) => Math.abs(x.start - Date.parse(e.start)) < 60e3 || (x.title || '').toLowerCase() === String(e.title || '').toLowerCase());
   const suggested = (ins?.events || []).filter((e) => !added(e));
   const scheduling = latest && (suggested.length > 0 || MEETING_TALK.test(`${latest.subject || ''} ${ins?.summary || ''} ${ins?.actionSummary || ''}`));
@@ -629,12 +663,7 @@ function FollowUp({ ins, related, onTask, onTasks, onEvent, latest }) {
   return (
     <div className="follow-up">
       {scheduling && <Scheduling key={latest.id} latest={latest} suggested={suggested} />}
-      {tasks.map((t) => (
-        <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
-          <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
-          <CheckSquare size={14} /><span className="grow truncate"><b>Task{t.done ? ' (done)' : ''}:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
-          <a href="#/tasks" className="small">Tasks</a>
-        </div>))}
+      <TaskRows tasks={tasks} onTask={onTask} icon={<CheckSquare size={14} />} />
       {events.map((e) => (
         <div key={`e${e.id}`} className="related-item">
           <CalendarPlus size={14} /><span className="grow truncate"><b>In calendar:</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
@@ -642,8 +671,8 @@ function FollowUp({ ins, related, onTask, onTasks, onEvent, latest }) {
         </div>))}
       {items.length > 0 && (
         <div style={{ marginTop: tasks.length || events.length ? 6 : 0 }}>
-          <div className="small muted" style={{ fontWeight: 600 }}>{tasks.length ? 'Action items (a task already exists)' : 'Action items'}</div>
-          <ul>{items.map((a, i) => <li key={i}>{a.text}{a.due && <span className="faint"> · due {a.due}</span>}</li>)}</ul>
+          {!listed && <><div className="small muted" style={{ fontWeight: 600 }}>{tasks.length ? 'Action items (a task already exists)' : 'Action items'}</div>
+          <ul>{items.map((a, i) => <li key={i}>{a.text}{a.due && <span className="faint"> · due {a.due}</span>}</li>)}</ul></>}
           {tasks.length ? <button className="link-btn small" onClick={() => onTasks(items)}>Add another task</button>
             : <button className="btn sm" onClick={() => onTasks(items)}><CheckSquare size={13} /> Add to tasks</button>}
         </div>
@@ -714,12 +743,7 @@ function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
           <button className="btn sm primary" onClick={() => onDraft(d.id)}>Continue</button>
           <button className="icon-btn" title="Delete draft" onClick={() => onDeleteDraft(d.id)}><Trash2 size={14} /></button>
         </div>))}
-      {related.tasks.map((t) => (
-        <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
-          <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
-          <span className="grow truncate"><b>Task:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
-          <a href="#/tasks" className="small">Tasks</a>
-        </div>))}
+      <TaskRows tasks={related.tasks} onTask={onTask} />
       {related.events.map((e) => (
         <div key={`e${e.id}`} className="related-item">
           <CalendarPlus size={14} /><span className="grow truncate"><b>Event:</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
