@@ -599,3 +599,8 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 .fold-title { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .ai-card.folded { padding-top: 8px; padding-bottom: 8px; }
 .ai-card.folded .title { margin-bottom: 2px; }
+.recent-chip { flex: none; height: 20px; font-size: 11px; }
+.recent-with { padding: 6px 12px 10px; }
+a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display: inline-flex; align-items: center; }
+.msg-who { flex-wrap: wrap; row-gap: 2px; }
+.msg-who .who { min-width: 3em; }

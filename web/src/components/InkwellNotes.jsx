@@ -24,7 +24,8 @@ export async function inkwellLinks(kind, refs) {
  * Inkwell pages linked to this email / event / task, and a button for a new one (`item`: ref and details for it). Renders nothing while Inkwell is not
  * connected or does not answer, so the view stays as it is without it.
  */
-export default function InkwellNotes({ kind, refs, item, style }) {
+/** part: 'add' only the small button when there is no note yet, 'list' only the notes; both by default. */
+export default function InkwellNotes({ kind, refs, item, style, part }) {
   const [data, setData] = useState(null);
   const key = (refs || []).filter((r) => r != null).join(',');
   useEffect(() => {
@@ -38,6 +39,11 @@ export default function InkwellNotes({ kind, refs, item, style }) {
   const links = data.links.filter((l) => !seen.has(l.id) && seen.add(l.id));
   // An event has one note per occurrence: this one's may not exist yet although others do.
   const hasNote = kind === 'event' ? links.some((l) => sameOccurrence(l.date, item?.start, item?.allDay)) : links.length > 0;
+  if (!links.length) {
+    if (part === 'list' || item?.ref == null) return null;
+    return <a className="chip clickable inkwell-add" style={style} href={inkwellNewUrl(data.url, kind, item)} title="Makes a note in Inkwell, linked to this"><NotebookPen size={11} /> Inkwell note</a>;
+  }
+  if (part === 'add') return null;
   return (
     <div className="card inkwell-notes" style={style}>
       <div className="inkwell-head"><NotebookPen size={13} /><span className="grow">Notes{links.length ? <span className="muted"> · {links.length}</span> : ''}</span>

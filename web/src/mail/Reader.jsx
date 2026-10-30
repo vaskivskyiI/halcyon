@@ -328,6 +328,8 @@ export default function Reader({ id, view }) {
   ]);
 
   const files = threadFiles(msgs);
+  const inkwell = { kind: 'email', refs: msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id),
+    item: { ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date, space: store.get().accounts?.find((a) => a.id === inkMsg.accountId)?.space } };
   const showMessage = (mid) => {
     setShowAll(true);
     setExpanded((s) => new Set(s).add(mid));
@@ -362,6 +364,7 @@ export default function Reader({ id, view }) {
           <button className={`chip clickable ${pinned ? 'on' : ''}`} title={pinned ? 'Unpin' : 'Pin to the top of the inbox'} onClick={togglePin}><Pin size={11} /> {pinned ? 'Pinned' : 'Pin'}</button>
           <button className={`chip clickable ${noteOpen ? 'on' : ''}`} title="A private note on this conversation — only you see it" onClick={() => setNoteOpen(true)}><StickyNote size={11} /> Note</button>
           {files.length > 0 && (msgs.length > 1 || files.length > 1) && <button className={`chip clickable ${filesOpen ? 'on' : ''}`} title="All files in this conversation" onClick={() => setFilesOpen(!filesOpen)}><Paperclip size={11} /> Files · {files.length}</button>}
+          {!isDraftMsg(latest) && <InkwellNotes {...inkwell} part="add" />}
           {target.listUnsubscribe && <button className="chip clickable" title="Stop receiving these emails — Halcyon contacts the sender's unsubscribe address" onClick={unsubscribe}><BellOff size={11} /> Unsubscribe</button>}
           {ins?.category && <span className="chip" style={{ color: CATEGORY_COLORS[ins.category] }}>{ins.category}</span>}
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
@@ -412,9 +415,7 @@ export default function Reader({ id, view }) {
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
           }} />}
 
-        {!isDraftMsg(latest) && <RecentWith messageId={latest.id} view={view} />}
-        {!isDraftMsg(latest) && <InkwellNotes kind="email" refs={msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)}
-          item={{ ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date, space: store.get().accounts?.find((a) => a.id === inkMsg.accountId)?.space }} />}
+        {!isDraftMsg(latest) && <InkwellNotes {...inkwell} part="list" />}
 
         {msgs.map((m, i) => {
           if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;
@@ -426,7 +427,7 @@ export default function Reader({ id, view }) {
             let n = 0; while (i + n < msgs.length - 2 && !expanded.has(msgs[i + n].id)) n++;
             return <button key={`fold${m.id}`} className="thread-fold" onClick={() => setShowAll(true)}>{n} earlier message{n > 1 ? 's' : ''}</button>;
           }
-          return <MessageCard key={m.id} m={m} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const x = new Set(s); x.has(m.id) ? x.delete(m.id) : x.add(m.id); return x; })}
+          return <MessageCard key={m.id} m={m} view={view} recentOf={m.id === latest.id} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const x = new Set(s); x.has(m.id) ? x.delete(m.id) : x.add(m.id); return x; })}
             onReply={(mode) => reply(mode, m)} onShowImages={() => { setAllowImages(true); load(true); }} translation={thread.translations?.[m.id]} onInviteChanged={load}
             onExtractEvent={async () => { try { setEventDraft(await api.post('/api/ai/extract-event', { messageId: m.id })); } catch (e) { toastError(e); } }} />;
         })}
@@ -775,23 +776,28 @@ const isDraftMsg = (m) => /Drafts$/.test(m.folder?.specialUse || '');
 const isLeftoverDraft = (m) => m.isDraft && !isDraftMsg(m);
 
 /** Other recent conversations with this person: a reminder of what else is going on with them. */
-function RecentWith({ messageId, view }) {
+/** A chip next to the sender: how much else there is with this person; opened, what the AI knows of them and the conversations. */
+function useRecentWith(messageId) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setData(null); setOpen(false);
-    api.get(`/api/messages/${messageId}/recent-with?limit=6`).then(setData).catch(() => setData(null));
+    if (messageId) api.get(`/api/messages/${messageId}/recent-with?limit=6`).then(setData).catch(() => setData(null));
   }, [messageId]);
-  const list = data?.threads;
-  if (!list?.length && !data?.person?.address) return null;
-  const name = data.person.name || data.person.address;
-  // One line until opened: who it is and how much there is; opened, what the AI knows of them and the conversations.
+  return { data, open, setOpen };
+}
+
+function RecentChip({ data, open, setOpen }) {
+  if (!data?.person?.address) return null;
+  const n = data.threads?.length || 0;
+  return <button className={`chip clickable recent-chip ${open ? 'on' : ''}`} title={n ? `Other conversations with ${data.person.name || data.person.address}` : `About ${data.person.name || data.person.address}`} onClick={() => setOpen(!open)}><MailIcon size={11} /> {n ? `${n} other` : 'About'}</button>;
+}
+
+function RecentWith({ data, view }) {
   return (
-    <div className={`card recent-with ${open ? 'open' : ''}`}>
-      <button className="recent-head" onClick={() => setOpen(!open)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<MailIcon size={13} />
-        <span className="grow truncate"><b>{name}</b>{list?.length ? <span className="muted"> · {list.length} other conversation{list.length === 1 ? '' : 's'}</span> : ''}</span></button>
-      {open && data.person.address && <PersonProfile email={data.person.address} name={data.person.name} compact />}
-      {open && (list || []).map((t) => (
+    <div className="recent-with" onClick={(e) => e.stopPropagation()}>
+      {data.person.address && <PersonProfile email={data.person.address} name={data.person.name} compact />}
+      {(data.threads || []).map((t) => (
         <a key={t.id} className={`recent-row ${t.unread ? 'unread' : ''}`} href={`#/mail/${view}/${t.id}`} onClick={(e) => { e.preventDefault(); jump(`#/mail/${view}/${t.id}`); }}>
           <span className="row" style={{ gap: 6 }}><span className="grow truncate">{t.subject || '(no subject)'}</span>
             {t.count > 1 && <span className="chip">{t.count}</span>}<span className="small faint" style={{ flex: 'none' }}>{fmtFull(t.date)}</span></span>
@@ -830,17 +836,18 @@ function dragOut(m, a) {
   };
 }
 
-function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
+function MessageCard({ m, view, recentOf, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
+  const recent = useRecentWith(recentOf ? m.id : null);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`} data-msg={m.id}>
       <div className="msg-card-head" onClick={toggle}>
         <Avatar name={m.from.name} email={m.from.address} />
         <div className="grow" style={{ minWidth: 0 }}>
-          <div className="row">{m.onBehalfOf
+          <div className="row msg-who">{m.onBehalfOf
             ? <span className="who truncate" title={`${addrFull(m.onBehalfOf)} sent this on behalf of ${addrFull(m.from)}`}>{m.onBehalfOf.name || m.onBehalfOf.address} <span className="behalf">on behalf of</span> {m.from.name || m.from.address}</span>
             : <span className="who truncate">{m.from.name || m.from.address}</span>}
-            {expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
+            {expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span onClick={(e) => e.stopPropagation()}><RecentChip {...recent} /></span><span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
           {expanded ? <div className="addr-lines" onClick={(e) => e.stopPropagation()}>
             {m.onBehalfOf && <div className="small addr-line"><span className="addr-label">Sent by</span><span><b>{addrFull(m.onBehalfOf)}</b> on behalf of {addrFull(m.from)} — replies go to {addrFull((m.replyTo?.length ? m.replyTo : [m.from])[0])}</span></div>}
             <AddrLine label="To" list={m.to} empty="undisclosed recipients" />
@@ -860,6 +867,7 @@ function MessageCard({ m, expanded, toggle, onReply, onShowImages, translation, 
           <button className="icon-btn" title="Forward" onClick={() => onReply('forward')}><Forward size={16} /></button>
         </div>}
       </div>
+      {recent.open && <RecentWith data={recent.data} view={view} />}
       {expanded && <>
         {m.hasInvite && <Invitation messageId={m.id} onChanged={onInviteChanged} onExtract={onExtractEvent} />}
         {m.blockedRemote > 0 && <div className="notice"><ImageIcon size={15} /> Remote images were blocked to protect your privacy.<span className="grow" /><button className="btn sm" onClick={onShowImages}>Show images</button></div>}
