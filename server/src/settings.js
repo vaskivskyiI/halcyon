@@ -4,7 +4,7 @@ import { rezone } from './util/time.js';
 export const DEFAULT_SETTINGS = {
   // Per space ('' = all spaces): where new mail, events and contacts go — { accountId, calendarId, bookId }.
   defaults: {},
-  ui: { theme: 'system', density: 'comfortable', readingPane: 'right', conversationView: true, language: 'en', weekStart: 1, timeFormat: '24h', showShared: false },
+  ui: { theme: 'system', density: 'comfortable', readingPane: 'right', conversationView: true, language: 'en', weekStart: 1, timeFormat: '24h', showShared: false, hiddenShared: [] },
   mail: {
     undoSendSeconds: 10, loadRemoteImages: false, markReadAfterMs: 1500, focusedInbox: true,
     defaultAccountId: null, replyAllDefault: false, composeFormat: 'html', autoCollectContacts: true,

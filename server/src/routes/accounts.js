@@ -9,8 +9,7 @@ import { encrypt, randomToken } from '../util/crypto.js';
 import { PROVIDERS, oauthAvailable, authorizeUrl, exchangeCode, redirectUri, oauthClient, saveOAuthClient, providerServices } from '../mail/oauth.js';
 import { notify } from '../util/events.js';
 import { syncDav, davStatus, DAV_QUIET } from '../scheduler.js';
-import { getSettings } from '../settings.js';
-import { sharedOf } from '../shared.js';
+import { mergedOf } from '../shared.js';
 import { autoReplyOf, autoReplyActive } from '../mail/extras.js';
 import { invalidate } from '../ai/memory.js';
 import { purgeMemory } from '../mail/pipeline.js';
@@ -41,7 +40,7 @@ export default async function accountRoutes(app) {
 
   app.get('/api/accounts', { preHandler: requireUser }, async (req) => [
     ...userAccounts(req.user.id).map(serializeAccount),
-    ...(!req.person && getSettings(req.user.id).ui.showShared ? sharedOf(req.user.id).flatMap((sp) => userAccounts(sp.id).map((a) => ({ ...serializeAccount(a), owner: sp.id, ownerName: sp.name }))) : []),
+    ...(!req.person ? mergedOf(req.user.id).flatMap((sp) => userAccounts(sp.id).map((a) => ({ ...serializeAccount(a), owner: sp.id, ownerName: sp.name }))) : []),
   ]);
 
   app.get('/api/accounts/discover', { preHandler: requireUser }, async (req, reply) => {

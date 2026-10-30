@@ -6,7 +6,7 @@ import { pushIsOn } from './push.js';
 import { loadQuickSteps } from './mail/extras.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
-import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, loadInkwell, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setShowShared, applyMergedSpaces } from './data.js';
+import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, loadInkwell, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setSharedShown, inMyMail, applyMergedSpaces } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
 import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
@@ -85,7 +85,7 @@ function Shell() {
         // What notifies is decided on the server (Settings → Notifications); with push on this device the service
         // worker shows it, otherwise the open app does.
         case 'notify:show':
-          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !store.get().settings?.ui?.showShared ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag }); });
+          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !inMyMail(store.get().settings, e.payload.as) ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag }); });
           break;
         case 'reminder':
           toast(`Reminder: ${e.payload.title} at ${new Date(e.payload.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, { duration: 15000, action: e.payload.onlineMeeting ? { label: 'Join', onClick: () => window.open(e.payload.onlineMeeting, '_blank') } : undefined });
@@ -246,15 +246,16 @@ function SpaceSwitcher() {
   const space = store.use((s) => s.space);
   const shared = store.use((s) => s.shared) || [];
   const acting = store.use((s) => s.acting);
-  const showShared = store.use((s) => s.settings?.ui?.showShared);
+  const settings = store.use((s) => s.settings);
+  const merged = (s) => !acting && inMyMail(settings, s.id); // its unread mail is counted in My mail
   const [openMenu, menuNode] = useMenu();
   if (!spaces.length && !shared.length) return null;
   // Unread shared mail not visible right now (when it is shown in My mail, it is counted there).
-  const unread = shared.filter((s) => s.id !== acting?.id && !(showShared && !acting)).reduce((n, s) => n + (s.unread || 0), 0);
+  const unread = shared.filter((s) => s.id !== acting?.id && !merged(s)).reduce((n, s) => n + (s.unread || 0), 0);
   const items = [
     ...(shared.length ? [{ section: 'Mail' }, { label: `My mail${!acting ? ' ✓' : ''}`, onClick: () => acting && enterShared(null) },
-      ...shared.map((s) => ({ label: `${s.name} (shared)${acting?.id === s.id ? ' ✓' : ''}`, hint: s.unread && acting?.id !== s.id && !showShared ? `${s.unread} unread` : '', onClick: () => acting?.id !== s.id && enterShared(s.id) })),
-      !acting && { label: `${showShared ? '✓ ' : ''}Show shared mail in My mail`, onClick: () => setShowShared(!showShared) }, 'sep'] : []),
+      ...shared.map((s) => ({ label: `${s.name} (shared)${acting?.id === s.id ? ' ✓' : ''}`, hint: s.unread && acting?.id !== s.id && !merged(s) ? `${s.unread} unread` : '', onClick: () => acting?.id !== s.id && enterShared(s.id) })),
+      ...(!acting ? [{ section: 'Show in My mail' }, ...shared.map((s) => ({ label: `${merged(s) ? '✓ ' : ''}${s.name}`, onClick: () => setSharedShown(s.id, !merged(s)) }))] : []), 'sep'] : []),
     ...(spaces.length ? [{ section: 'Show' }, { label: `All spaces${!space ? ' ✓' : ''}`, onClick: () => setSpace('') },
       ...spaces.map((s) => ({ label: `${s}${space === s ? ' ✓' : ''}`, onClick: () => setSpace(s) })), 'sep'] : []),
     { label: 'Manage spaces…', icon: Settings, onClick: () => navigate('#/settings/spaces') },

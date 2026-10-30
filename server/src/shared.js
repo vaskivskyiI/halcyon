@@ -17,6 +17,11 @@ export const membership = (sharedId, userId) => get('SELECT role FROM shared_mem
 /** Shared spaces the user belongs to. */
 export const sharedOf = (userId) => all(`SELECT u.id, u.name, m.role FROM shared_members m JOIN users u ON u.id = m.shared_id
   WHERE m.user_id = ? AND u.kind = 'shared' ORDER BY u.name`, userId);
+/** The shared spaces shown with the person's own mail: ui.showShared, without those set aside in ui.hiddenShared. */
+export function mergedOf(userId) {
+  const { showShared, hiddenShared } = getSettings(userId).ui;
+  return showShared ? sharedOf(userId).filter((s) => !hiddenShared.map(Number).includes(s.id)) : [];
+}
 export const membersOf = (sharedId) => all(`SELECT u.id, u.name, u.email, m.role FROM shared_members m JOIN users u ON u.id = m.user_id
   WHERE m.shared_id = ? ORDER BY m.role = 'owner' DESC, u.name`, sharedId);
 

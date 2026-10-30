@@ -191,6 +191,13 @@ test('"show shared mail in My mail": lists, folders and counts include the space
   const cookieB = Object.entries(jar.b).map(([k, v]) => `${k}=${v}`).join('; ');
   assert.equal((await fetch(`${base}/api/messages/${bizMsg}?as=${sharedId}`, { headers: { cookie: cookieB } })).status, 200);
   assert.equal((await fetch(`${base}/api/messages/${bizMsg}`, { headers: { cookie: cookieB } })).status, 404, 'without it: not his own');
+  // One space set aside: its mail and accounts leave, its setting stays his own.
+  await ok('b', 'PATCH', '/api/settings', { ui: { hiddenShared: [sharedId] } });
+  assert.ok(!(await ok('b', 'GET', '/api/messages?view=unified&threads=0')).items.some((m) => m.id === bizMsg));
+  assert.ok(!(await ok('b', 'GET', '/api/accounts')).some((a) => a.owner === sharedId));
+  assert.ok(!(await ok('b', 'GET', '/api/folders')).accounts.some((a) => a.owner === sharedId));
+  await ok('b', 'PATCH', '/api/settings', { ui: { hiddenShared: [] } });
+  assert.ok((await ok('b', 'GET', '/api/messages?view=unified&threads=0')).items.some((m) => m.id === bizMsg));
   // Switched off: only his own again.
   await ok('b', 'PATCH', '/api/settings', { ui: { showShared: false } });
   assert.ok(!(await ok('b', 'GET', '/api/messages?view=unified&threads=0')).items.some((m) => m.id === bizMsg));

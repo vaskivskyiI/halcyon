@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Trash2, LogIn, Undo2, UserPlus } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
-import { loadShared, enterShared, loadAccounts, setShowShared } from '../data.js';
+import { loadShared, enterShared, loadAccounts, setSharedShown, inMyMail } from '../data.js';
 import { Switch } from '../components/common.jsx';
 import { toast, toastError } from '../util.js';
 
@@ -36,8 +36,6 @@ export default function Sharing() {
       <h2>Sharing</h2>
       <div className="muted">Share a mail account — e.g. your business address — with someone who has their own login on this server, together with a calendar, contacts and the tasks from that mail. It is synced and analysed by the AI once, for both of you; the AI there learns only from what is shared. Your other accounts, mail, calendars, contacts and assistant chats stay yours alone.</div>
 
-      {shared.length > 0 && <Switch label="Show shared mail in My mail" hint="The shared spaces' mail appears in your inbox, needs-reply and action lists, search and folders, marked with the space's name; replies go out from the shared account. Each space can still be opened on its own."
-        checked={!!store.get().settings?.ui?.showShared} onChange={(v) => setShowShared(v)} />}
       {shared.map((s) => {
         const owner = s.role === 'owner';
         const back = (body, what) => { if (confirm(`Move ${what} out of “${s.name}” into your own mail? The other members will no longer see it.`)) call(() => api.post(`/api/shared/${s.id}/move-out`, body), `${what} moved to your mail`); };
@@ -48,6 +46,8 @@ export default function Sharing() {
               <button className="btn sm primary" onClick={() => enterShared(s.id)}><LogIn size={14} /> Open</button>
               {owner && <button className="icon-btn" title="Delete the shared space (only when empty)" onClick={() => confirm(`Delete “${s.name}”?`) && call(() => api.del(`/api/shared/${s.id}`), 'Deleted')}><Trash2 size={15} /></button>}
             </div>
+            <Switch label="Show in My mail" hint="Its mail appears in your inbox, needs-reply and action lists, search and folders, marked with the space's name; replies go out from the shared account. It can still be opened on its own."
+              checked={inMyMail(store.get().settings, s.id)} onChange={(v) => setSharedShown(s.id, v)} />
             <div className="small">
               <b>Members</b>
               {s.members.map((m) => (

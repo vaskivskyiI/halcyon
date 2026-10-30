@@ -15,7 +15,7 @@ import { runRule } from '../rules.js';
 import { contactByEmail } from '../contacts/service.js';
 import { notify, bus } from '../util/events.js';
 import { scope, reqSpace, inIds } from '../spaces.js';
-import { sharedOf } from '../shared.js';
+import { sharedOf, mergedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
 import { saveUpload, readUpload } from '../mail/uploads.js';
@@ -184,7 +184,7 @@ export default async function mailRoutes(app) {
   }
   // Shared spaces shown with the person's own mail (their setting ui.showShared): their accounts and folders are added,
   // marked with the space; the counts of the smart views include them.
-  const mergedSpaces = (req) => (!req.person && getSettings(req.user.id).ui.showShared ? sharedOf(req.user.id) : []);
+  const mergedSpaces = (req) => (req.person ? [] : mergedOf(req.user.id));
   app.get('/api/folders', async (req) => {
     const own = folderList(req.user.id, scope(req.user.id, reqSpace(req)));
     for (const sp of mergedSpaces(req)) {

@@ -15,16 +15,21 @@ export async function loadShared() {
   return shared;
 }
 
-/** Shared mail shown with one's own (or not): saved, then everything is loaded again. */
-export async function setShowShared(on) {
-  await saveSettings({ ui: { showShared: !!on } });
+/** Whether this shared space's mail is shown with one's own. */
+export const inMyMail = (settings, id) => !!settings?.ui?.showShared && !(settings.ui.hiddenShared || []).includes(Number(id));
+
+/** One shared space shown with one's own mail, or not: saved, then everything is loaded again. */
+export async function setSharedShown(id, on) {
+  const { settings, shared } = store.get();
+  const hidden = settings.ui.showShared ? settings.ui.hiddenShared || [] : shared.map((s) => s.id);
+  await saveSettings({ ui: { showShared: true, hiddenShared: on ? hidden.filter((x) => x !== id) : [...new Set([...hidden, id])] } });
   location.reload();
 }
 
 /** Which shared spaces' events and mail count as one's own right now. */
 export function applyMergedSpaces() {
   const { settings, acting, shared } = store.get();
-  setMergedSpaces(settings?.ui?.showShared && !acting ? (shared || []).map((x) => x.id) : []);
+  setMergedSpaces(acting ? [] : (shared || []).filter((x) => inMyMail(settings, x.id)).map((x) => x.id));
 }
 
 /** Work in a shared space (id) or in one's own mail (null). The whole app reloads: every list, cache and setting

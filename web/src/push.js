@@ -3,7 +3,7 @@
 import { api } from './api.js';
 import { navigate } from './util.js';
 import { store } from './store.js';
-import { enterShared } from './data.js';
+import { enterShared, inMyMail } from './data.js';
 
 // In the native Android app (android/) the page runs in a WebView that has no Web Push: the app's bridge
 // (window.halcyonAndroid) gets a Firebase Cloud Messaging token instead, registered here with this session.
@@ -24,7 +24,7 @@ async function androidStart() {
     // Right after the start the signed-in state is still loading: which space is open is known only then.
     for (let i = 0; i < 50 && !store.get().settings; i++) await new Promise((r) => setTimeout(r, 200));
     const st = store.get();
-    if (as && Number(as) !== st.acting?.id && !st.settings?.ui?.showShared) return enterShared(Number(as));
+    if (as && Number(as) !== st.acting?.id && !inMyMail(st.settings, as)) return enterShared(Number(as));
     if (url) navigate(url);
   };
   android().ready?.();
