@@ -576,3 +576,19 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 /* Days being selected for a new multi-day event */
 .span-sel { background: var(--accent-soft) !important; }
 .allday-row { min-height: 26px; }
+/* Emails behind an assistant answer */
+.sources { margin-top: 6px; }
+.sources summary { cursor: pointer; width: fit-content; }
+.source { display: flex; align-items: center; gap: 6px; width: 100%; max-width: 100%; padding: 4px 6px; border: 0; border-radius: 6px; background: none; color: var(--text-2); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.source:hover { background: var(--panel-2); }
+.source.cited { color: var(--ai); }
+.source .grow { min-width: 0; }
+.bubble.assistant { display: block; flex: none; min-width: 0; width: 100%; } /* not the .assistant page layout: text and sources stack */
+/* All files of a conversation */
+.thread-files { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; padding: 8px 12px; }
+.thread-files .input { margin-bottom: 6px; }
+.thread-file { display: flex; align-items: center; gap: 8px; min-height: 30px; min-width: 0; }
+.thread-file .grow { min-width: 0; }
+.thread-file .meta { flex: 0 1 auto; max-width: 45%; color: var(--text-2); }
+.thread-file .size { flex: none; }
+@media (max-width: 600px) { .thread-file .meta { display: none; } }

@@ -910,6 +910,16 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - DAV rate limits (scheduler.js): 429 / RESOURCE_EXHAUSTED pauses that service of the account for 15 min … 6 h
   (`davHold`, per account + cal/card; shown as a warning with the next try, a sync the user asks for still runs). Google
   is asked at most every 30 minutes unless something waits to be saved (`davLast`).
+- Summaries follow what is settled (migration 46, round56): done / not doing / "no reply needed" and reopening call
+  `refreshSettled`, which queues job `settled` (rewrites `ai_insights.summary`; the AI's first text stays in
+  `summary_base`, restored when nothing is settled) and a forced `thread` job (prompt gets a SETTLED list). Re-analysis
+  queues `settled` again. Needs an AI provider; the summary stays as it was while none answers.
+- Removing "needs reply" also clears copies and older repeats (same sender and subject, which `supersededSql` only hid);
+  the reader always clears the whole conversation.
+- Action needed agrees with the AI card: action items without `needs_action` go to the second opinion like any action
+  and are dropped if it rejects them; only newsletter / promotion / social are left out, no priority limit ("Not
+  important" clears the action). `reanalyzeItems` re-checks recent mail once. Only Inbox mail is listed.
+- Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return
   each item's effective `space` ('' = shared). list_tasks now honours a token's space too; list_events returns nothing

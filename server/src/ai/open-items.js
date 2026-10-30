@@ -11,6 +11,9 @@ import { userAccounts } from '../accounts.js';
 /** Categories of mail that is rarely personal (newsletters, ads, social networks, automated notices). */
 export const NOISE_LIST = ['newsletter', 'promotion', 'social', 'notification'];
 export const NOISE = `(${NOISE_LIST.map((c) => `'${c}'`).join(', ')})`;
+/** An action passed the second opinion, so it counts in any mail but advertising; a notification can ask to pay or sign. */
+const AD_LIST = ['newsletter', 'promotion', 'social'];
+const ADS = `(${AD_LIST.map((c) => `'${c}'`).join(', ')})`;
 
 export function openSettings(userId) {
   const s = getSettings(userId).ai;
@@ -72,13 +75,9 @@ export function openActionSql(userId, i = 'i', m = 'm') {
   const { days, min } = openSettings(userId);
   const t = now();
   return `(${i}.dismissed_at IS NULL AND ${i}.needs_action = 1 AND (${i}.expires_at IS NULL OR ${i}.expires_at > ${t})
-    AND ${i}.priority >= ${actionMin(min)} AND COALESCE(${i}.category, '') NOT IN ${NOISE} AND ${m}.date >= ${t - days * 864e5}
+    AND COALESCE(${i}.category, '') NOT IN ${ADS} AND ${m}.date >= ${t - days * 864e5}
     AND NOT ${supersededSql('action', m)})`;
 }
-
-// Actions (pay, sign, register…) matter even when the AI rated the mail low; newsletters & co. are excluded by
-// category anyway. So they need only part of the minimum priority that replies need.
-const actionMin = (min) => Math.floor(min * 0.6);
 
 /** The user's own addresses (accounts and their aliases), lower-case. */
 export const ownAddresses = (userId) => new Set(userAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
@@ -129,7 +128,7 @@ export function openChecker(userId) {
     const relevant = (r.ai_priority ?? 0) >= min && !NOISE_LIST.includes(r.ai_category || '');
     const reply = live && !r.is_answered && ((r.ai_needs_reply_user === 1 && r.date >= t - 2 * days * 864e5)
       || (!!r.ai_needs_reply && r.ai_needs_reply_user == null && relevant && r.date >= t - days * 864e5 && !r.ai_superseded_reply));
-    const action = live && !!r.ai_needs_action && !r.ai_superseded_action && (r.ai_priority ?? 0) >= actionMin(min) && !NOISE_LIST.includes(r.ai_category || '') && r.date >= t - days * 864e5;
+    const action = live && !!r.ai_needs_action && !r.ai_superseded_action && !AD_LIST.includes(r.ai_category || '') && r.date >= t - days * 864e5;
     return { reply, action };
   };
 }

@@ -18,7 +18,7 @@ import { applyHabit } from './habits.js';
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
-import { openReplySql, openActionSql, NOISE as OPEN_NOISE, NOISE_LIST, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
+import { openSettings, openReplySql, openActionSql, NOISE as OPEN_NOISE, NOISE_LIST, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
 import { splitPlainQuote } from '../util/quotes.js';
 import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from './verify.js';
 import { logger } from '../util/log.js';
@@ -118,6 +118,8 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   // The user's own email that waits for an answer ("Waiting for a reply"; only for mail sent from here or elsewhere).
   if (d.expects_reply !== undefined) run('UPDATE ai_insights SET expects_reply = ? WHERE message_id = ?', d.expects_reply && !quiet ? 1 : 0, messageId);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
+  // A new summary knows nothing of what the user already settled.
+  if (settledLines(get('SELECT * FROM ai_insights WHERE message_id = ?', messageId)).length) enqueue(m.user_id, 'settled', messageId, 20, { force: true });
 }
 
 /**
@@ -303,12 +305,16 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     }
     if (!fromMe && isAutomated(m)) res.data.needs_reply = false; // nobody reads a reply
     if (res.data.needs_action && notATask(res.data.action_summary)) res.data.needs_action = false;
+    // Items listed but the flag forgotten: they count as an action, for the second opinion to judge like any other.
+    const listed = (Array.isArray(res.data.action_items) ? res.data.action_items : []).map((a) => String(a?.text ?? a ?? '').trim()).filter((a) => a && !notATask(a));
+    if (!fromMe && !res.data.needs_action && listed.length) { res.data.needs_action = true; res.data.action_summary = listed[0]; }
     // Second opinion before anything lands in "Needs reply" / "Action needed" (kept as it was if the check fails).
     if (!fromMe && !quiet && (res.data.needs_reply || res.data.needs_action)) {
       try { await verifyOpen(userId, m, res.data, { ctx, conversation, message, interactive, language: summaryLanguage(settings, uiLanguage) }); } catch (e) { log.warn(`verify ${m.id}: ${e.message}`); }
     }
     applyPreference(res.data, pref);
     if (!fromMe) applyHabit(userId, res.data, m, pref, contact);
+    if (!fromMe && !res.data.needs_action) res.data.action_items = []; // shown only with an action that counts
     res.data.topic = normalizeTopic(res.data.topic, topics);
     if (fromMe) { res.data.needs_reply = false; res.data.needs_action = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
     res.data.requested_items = checkRequests(m, res.data.requested_items);
@@ -356,16 +362,84 @@ export function reanalyzeOpen(version = 'verify:v1') {
   return n;
 }
 
-export async function summarizeThreadJob(userId, threadId) {
+/** What the user settled in one email (items done or dropped, no reply needed), as lines for the summaries. */
+function settledLines(ins) {
+  if (!ins) return [];
+  const state = json(ins.action_state_json, {}), whole = ins.dismissed_at ? ins.resolution : null;
+  const word = { done: 'done', skipped: 'the user decided not to do it', wrong: 'nothing for the user to do', replied: 'answered' };
+  const items = json(ins.action_items_json, []).map((x) => String(x.text || '').trim()).filter(Boolean);
+  const out = (items.length ? items : [String(ins.action_summary || '').trim()].filter(Boolean)).flatMap((t) => {
+    const r = state[t.toLowerCase()]?.resolution || whole;
+    return r ? [`"${t}": ${word[r] || 'done'}`] : [];
+  });
+  if (ins.needs_reply_user === 0) out.push('no reply is needed from the user');
+  else if (whole === 'replied') out.push('the user has replied');
+  else if (whole && !out.length) out.push('the user has dealt with this email');
+  return out;
+}
+
+const threadSettled = (unique) => unique.flatMap((m) => settledLines(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)).map((l) => `Email from ${m.from_name || m.from_addr}: ${l}`));
+
+/** Something was settled or reopened in these emails: their summaries follow, shortly after (several clicks, one update). */
+export function refreshSettled(userId, ids, threadIds = []) {
+  if (!getSettings(userId).ai.enabled) return;
+  const seen = new Set();
+  for (const id of ids) {
+    const r = get("SELECT m.message_id FROM ai_insights i JOIN messages m ON m.id = i.message_id WHERE i.message_id = ? AND m.user_id = ? AND COALESCE(i.summary, '') != ''", id, userId);
+    if (!r || seen.has(r.message_id || id)) continue; // the copies get the same summary
+    seen.add(r.message_id || id);
+    enqueue(userId, 'settled', id, 40, { delayMs: 1500, force: true });
+  }
+  for (const t of new Set(threadIds.filter(Boolean))) {
+    if (get('SELECT 1 AS x FROM thread_summaries WHERE user_id = ? AND thread_id = ?', userId, t)) enqueue(userId, 'thread', t, 40, { delayMs: 1500, force: true, options: { force: true } });
+  }
+}
+
+export async function settledSummaryJob(userId, ref) {
+  const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', Number(ref), userId);
+  const ins = m && get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
+  if (!ins?.summary) throw skip('no summary');
+  const copies = (m.message_id ? all('SELECT i.message_id AS id FROM ai_insights i JOIN messages x ON x.id = i.message_id WHERE x.user_id = ? AND x.message_id = ?', userId, m.message_id).map((r) => r.id) : [m.id]);
+  const save = (summary, base) => {
+    for (const id of copies) {
+      run('UPDATE ai_insights SET summary = ?, summary_base = ? WHERE message_id = ?', summary, base, id);
+      notifyAI(userId, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', id)) });
+    }
+  };
+  const lines = settledLines(ins), base = ins.summary_base ?? ins.summary;
+  if (!lines.length) { if (ins.summary_base != null) save(base, null); return; } // all reopened: as first written
+  const { ctx } = ctxFor(userId, m.account_id);
+  const res = await chat(userId, 'background', { ...P.settledSummaryPrompt({ ctx, summary: base, settled: lines }), temperature: 0.1, maxTokens: 300 });
+  // Settled further while the AI worked (a job that runs is not queued again): once more with the latest state.
+  if (settledLines(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)).join('\n') !== lines.join('\n')) return settledSummaryJob(userId, ref);
+  if (res.text.trim()) save(res.text.trim().slice(0, 1000), base);
+}
+
+/** Once: recent mail that lists action items without being an action (before they counted) is analysed again. */
+export function reanalyzeItems(version = 'items:v1') {
+  if (get('SELECT value FROM app_state WHERE key = ?', `reanalyze:${version}`)) return 0;
+  let n = 0;
+  for (const u of all('SELECT id FROM users')) {
+    const rows = all(`SELECT m.id FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND f.special_use = '\\Inbox'
+      AND i.needs_action = 0 AND i.dismissed_at IS NULL AND i.action_items_json NOT IN ('[]', '') AND i.model != 'user' AND m.date >= ? ORDER BY m.date DESC LIMIT 200`, u.id, now() - openSettings(u.id).days * 864e5);
+    for (const r of rows) { enqueue(u.id, 'analyze', r.id, 15, { force: true }); n++; }
+  }
+  run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', `reanalyze:${version}`, String(now()));
+  return n;
+}
+
+export async function summarizeThreadJob(userId, threadId, job) {
   const msgs = all('SELECT * FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY date', userId, threadId);
   const unique = [...new Map(msgs.map((m) => [m.message_id, m])).values()];
   if (unique.length < 2) throw skip('single message');
   const cached = get('SELECT * FROM thread_summaries WHERE user_id = ? AND thread_id = ?', userId, threadId);
-  if (cached && cached.message_count === unique.length) return cached;
+  if (cached && cached.message_count === unique.length && !json(job?.options_json, {})?.force) return cached;
   const { ctx, uiLanguage, settings } = ctxFor(userId, unique[unique.length - 1]?.account_id);
   const own = ownAddresses(userId);
   const parts = unique.filter((m) => !m.is_draft).slice(-12).map((m) => P.messageForPrompt(m, 2500, settings.calendar.timezone, own));
-  const res = await chat(userId, 'background', { ...P.threadSummaryPrompt({ ctx, messages: parts, language: summaryLanguage(settings, uiLanguage, 'thread') }), temperature: 0.2, maxTokens: 600 });
+  const settled = threadSettled(unique);
+  const res = await chat(userId, 'background', { ...P.threadSummaryPrompt({ ctx, messages: parts, language: summaryLanguage(settings, uiLanguage, 'thread'), settled }), temperature: 0.2, maxTokens: 600 });
+  if (threadSettled(unique).join('\n') !== settled.join('\n')) return summarizeThreadJob(userId, threadId, job);
   run('INSERT OR REPLACE INTO thread_summaries (user_id, thread_id, summary, message_count, model, updated_at) VALUES (?, ?, ?, ?, ?, ?)', userId, threadId, res.text.trim(), unique.length, res.model, now());
   notifyAI(userId, 'ai:thread', { threadId, summary: res.text.trim() });
   queueMemory(userId, 'thread', threadId);
@@ -504,6 +578,7 @@ export async function briefJob(userId, ref) {
 
 registerHandler('analyze', (userId, ref, job) => analyzeMessage(userId, ref, { quiet: !!json(job?.options_json, {})?.quiet }));
 registerHandler('thread', summarizeThreadJob);
+registerHandler('settled', settledSummaryJob);
 registerHandler('embed', memoryJob);
 registerHandler('memory', memoryJob);
 registerHandler('draft', draftJob);

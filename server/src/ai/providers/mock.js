@@ -50,6 +50,8 @@ export function mock() {
         return { text: JSON.stringify({ issues: subj ? [{ problem: `Already discussed in "${subj}"`, suggestion: 'Refer to it' }] : [] }), usage: { input: 1, output: 1 } };
       }
       if (!json && /describe who they are professionally/.test(system)) return { text: '- Works on the projects named in the sent mail\n- Writes in English', usage: { input: 1, output: 1 } };
+      // Summaries that follow what the user settled: tests check that the list reaches the prompt.
+      if (!json && /SETTLED lists what the user/.test(system)) return { text: `Updated. ${last.slice(last.lastIndexOf('SETTLED:') + 9).replace(/\n/g, ' ')}`, usage: { input: 1, output: 1 } };
       // The email itself (after the earlier conversation and the "Sender…/Recipients…" notes), so these are not
       // mistaken for content.
       const cur = last.slice(Math.max(0, last.lastIndexOf('THE EMAIL TO ANALYSE')));

@@ -14,6 +14,19 @@ const SUGGESTIONS = [
   'What tasks are overdue?',
 ];
 
+/** The emails behind an answer, folded so the answer stays the main thing; cited ones first. */
+function Sources({ list }) {
+  const cited = list.filter((s) => s.cited).length;
+  return (
+    <details className="sources">
+      <summary className="small faint">{list.length} source{list.length > 1 ? 's' : ''}{cited ? ` · ${cited} cited` : ''}</summary>
+      {[...list].sort((a, b) => !!b.cited - !!a.cited).map((s) => (
+        <button key={s.id} className={`source ${s.cited ? 'cited' : ''}`} title={s.cited ? 'Cited in the answer' : 'Given to the AI as context'} onClick={() => navigate(`#/mail/unified/${s.id}`)}>
+          <Mail size={12} /><span className="truncate grow">{s.from}: {s.subject}</span>{s.date && <span className="faint">{new Date(s.date).toLocaleDateString()}</span>}</button>))}
+    </details>
+  );
+}
+
 export default function AssistantView({ route }) {
   const chatId = route[1] === 'chat' && route[2] ? Number(route[2]) : null;
   const mode = route[1] === 'chat' ? 'chat' : 'brief';
@@ -198,9 +211,7 @@ function Chat({ chatId, onCreated }) {
           <div key={i} className={`bubble ${m.role}`}>
             {m.role === 'user' ? m.content : <>
               {m.pending && !m.content ? <span className="pulse muted"><Sparkles size={14} /> {m.status || 'Searching your mailbox…'}</span> : <Markdown text={m.content} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} />}
-              {m.sources?.length > 0 && <div className="row" style={{ flexWrap: 'wrap', marginTop: 6, gap: 4 }}><span className="small faint">Sources — open to check:</span>{m.sources.map((s) => (
-                <button key={s.id} className={`chip ${s.cited ? 'ai' : ''}`} style={{ border: 0, cursor: 'pointer' }} title={s.cited ? 'Cited in the answer' : 'Given to the AI as context'} onClick={() => navigate(`#/mail/unified/${s.id}`)}>
-                  <Mail size={11} /> #{s.id} {s.from}: {String(s.subject).slice(0, 40)}{s.date ? ` · ${new Date(s.date).toLocaleDateString()}` : ''}</button>))}</div>}
+              {m.sources?.length > 0 && <Sources list={m.sources} />}
             </>}
           </div>
         ))}

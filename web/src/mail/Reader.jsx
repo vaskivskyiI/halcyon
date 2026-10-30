@@ -39,6 +39,7 @@ export default function Reader({ id, view }) {
   const [eventDraft, setEventDraft] = useState(null);
   const [aiWorking, setAiWorking] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [openMenu, menuNode] = useMenu();
   const settings = store.use((s) => s.settings);
   const folders = store.use((s) => s.folders);
@@ -194,7 +195,7 @@ export default function Reader({ id, view }) {
   const sameAsk = (a, b) => a.from.address?.toLowerCase() === b.from.address?.toLowerCase()
     && ((a.insight.actionSummary && a.insight.actionSummary.toLowerCase() === b.insight.actionSummary?.toLowerCase())
       || ((a.insight.actionItems || []).length > 0 && (a.insight.actionItems || []).map((x) => x.text.toLowerCase()).sort().join('\n') === (b.insight.actionItems || []).map((x) => x.text.toLowerCase()).sort().join('\n')));
-  const asked = msgs.filter((m) => m.insight?.needsAction && !m.insight.expired && !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent');
+  const asked = msgs.filter((m) => m.insight?.needsAction && !m.insight.expired && !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent' && !['newsletter', 'promotion', 'social'].includes(m.insight.category));
   const actions = asked.filter((m, i) => !asked.slice(i + 1).some((n) => sameAsk(m, n))).map((m) => ({ m, ins: m.insight }));
   const settleItem = async (mid, text, resolution) => {
     try {
@@ -206,7 +207,7 @@ export default function Reader({ id, view }) {
   };
   const toggleTask = async (t) => { await api.patch(`/api/tasks/${t.id}`, { done: !t.done }).catch(toastError); load(); };
   const setNeedsReply = async (value) => {
-    try { await api.post('/api/messages/needs-reply', { ids: [latest.id], value }); toast(value ? 'Marked as needs reply' : 'Removed “needs reply”'); load(); } catch (e) { toastError(e); }
+    try { await api.post('/api/messages/needs-reply', { ids: [latest.id], value, threads: true }); window.dispatchEvent(new Event('halcyon:poll')); toast(value ? 'Marked as needs reply' : 'Removed “needs reply”'); load(); } catch (e) { toastError(e); }
   };
 
   const aiReply = async (intent) => {
@@ -300,6 +301,13 @@ export default function Reader({ id, view }) {
     ...extraMenuItems({ msg: latest, ids: [target.id], muted: thread.muted, onDone: () => load() }),
   ]);
 
+  const files = threadFiles(msgs);
+  const showMessage = (mid) => {
+    setShowAll(true);
+    setExpanded((s) => new Set(s).add(mid));
+    requestAnimationFrame(() => scroller.current?.querySelector(`[data-msg="${mid}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  };
+
   const moveMenu = (e) => openMenu(e, folders.accounts.flatMap((a) => [{ section: a.email }, ...a.folders.map((f) => ({ label: f.name, icon: Folder, onClick: () => act('move', { folderId: f.id }) }))]));
   const snoozeMenu = (e) => openMenu(e, [...snoozeOptions().map(([label, until]) => ({ label, hint: new Date(until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }), onClick: () => act('snooze', { until }) })),
     target.snoozedUntil && { label: 'Unsnooze', onClick: () => act('unsnooze') }]);
@@ -327,6 +335,7 @@ export default function Reader({ id, view }) {
           {target.folder && <span className="chip"><Folder size={11} /> {target.folder.name}</span>}
           <button className={`chip clickable ${pinned ? 'on' : ''}`} title={pinned ? 'Unpin' : 'Pin to the top of the inbox'} onClick={togglePin}><Pin size={11} /> {pinned ? 'Pinned' : 'Pin'}</button>
           <button className={`chip clickable ${noteOpen ? 'on' : ''}`} title="A private note on this conversation — only you see it" onClick={() => setNoteOpen(true)}><StickyNote size={11} /> Note</button>
+          {files.length > 0 && (msgs.length > 1 || files.length > 1) && <button className={`chip clickable ${filesOpen ? 'on' : ''}`} title="All files in this conversation" onClick={() => setFilesOpen(!filesOpen)}><Paperclip size={11} /> Files · {files.length}</button>}
           {target.listUnsubscribe && <button className="chip clickable" title="Stop receiving these emails — Halcyon contacts the sender's unsubscribe address" onClick={unsubscribe}><BellOff size={11} /> Unsubscribe</button>}
           {ins?.category && <span className="chip" style={{ color: CATEGORY_COLORS[ins.category] }}>{ins.category}</span>}
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
@@ -340,6 +349,7 @@ export default function Reader({ id, view }) {
             })])}><Tag size={11} /> ▾</button>}
         </div>
 
+        {filesOpen && <ThreadFiles files={files} onShow={showMessage} />}
         <ThreadNote threadKey={threadKey} messageId={noteMsg} open={noteOpen} onOpen={setNoteOpen} />
 
         {/* The user's own email that asked something and has no answer yet: nudge, or stop waiting. */}
@@ -402,6 +412,41 @@ export default function Reader({ id, view }) {
       {menuNode}
       {eventDraft && <EventEditor initial={eventDraft} onClose={() => setEventDraft(null)} onSaved={() => { setEventDraft(null); toast('Event added to calendar', { action: { label: 'Open', onClick: () => navigate('#/calendar') } }); }} />}
     </section>
+  );
+}
+
+/** The files of a conversation, newest first; one sent again (same name and size) is listed once, at its newest. */
+function threadFiles(msgs) {
+  const seen = new Map();
+  for (const m of [...msgs].reverse()) {
+    if (isDraftMsg(m)) continue;
+    for (const a of m.attachments || []) {
+      if (a.inline) continue;
+      const key = `${a.filename}|${a.size}`;
+      if (seen.has(key)) seen.get(key).times++;
+      else seen.set(key, { m, a, times: 1 });
+    }
+  }
+  return [...seen.values()];
+}
+
+function ThreadFiles({ files, onShow }) {
+  const [q, setQ] = useState('');
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const list = files.filter(({ m, a }) => { const s = `${a.filename} ${m.from.name || ''} ${m.from.address}`.toLowerCase(); return words.every((w) => s.includes(w)); });
+  return (
+    <div className="card thread-files">
+      {files.length > 5 && <input className="input" autoFocus placeholder="Find a file by name or sender" value={q} onChange={(e) => setQ(e.target.value)} />}
+      {list.map(({ m, a, times }) => (
+        <div key={`${m.id}:${a.index}`} className="thread-file">
+          <Paperclip size={14} />
+          <a className="grow truncate" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title={`Open ${a.filename}`} {...dragOut(m, a)}>{a.filename}</a>
+          <button className="link-btn small truncate meta" title="Show the email with this file" onClick={() => onShow(m.id)}>{m.from.name || m.from.address} · {new Date(m.date).toLocaleDateString()}{times > 1 ? ` · sent ${times} times` : ''}</button>
+          <span className="faint small size">{fmtSize(a.size || 0)}</span>
+          <button className="icon-btn" style={{ width: 24, height: 24 }} title="Download" onClick={() => window.open(api.url(`/api/messages/${m.id}/attachments/${a.index}`))}><Download size={14} /></button>
+        </div>))}
+      {!list.length && <div className="small faint">No file matches.</div>}
+    </div>
   );
 }
 

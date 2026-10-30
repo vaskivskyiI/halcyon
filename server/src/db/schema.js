@@ -513,4 +513,8 @@ export const migrations = [
     start = CAST(round(start / 86400000.0) AS INTEGER) * 86400000
     WHERE all_day = 1 AND (start % 86400000 != 0 OR end % 86400000 != 0);
   `,
+  // 46: the summary as the AI first wrote it, kept while `summary` says what the user settled (reopening brings it back).
+  `
+  ALTER TABLE ai_insights ADD COLUMN summary_base TEXT;
+  `,
 ];

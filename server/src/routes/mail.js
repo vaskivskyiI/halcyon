@@ -6,7 +6,7 @@ import { sanitizeEmailHtml, htmlToText } from '../mail/sanitize.js';
 import * as actions from '../mail/actions.js';
 import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft, draftFromMessage } from '../mail/send.js';
 import { queueOp, syncManager } from '../mail/sync.js';
-import { serializeInsight, scheduleBriefRefresh } from '../ai/tasks.js';
+import { serializeInsight, scheduleBriefRefresh, refreshSettled } from '../ai/tasks.js';
 import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits } from '../search.js';
 import { invitationFor } from '../calendar/invites.js';
 import { getSettings } from '../settings.js';
@@ -391,12 +391,14 @@ export default async function mailRoutes(app) {
     // The user's own verdict on the messages they chose — also taught to the AI for those senders (two "needs no
     // reply" in a row from a sender → not suggested again for them). Not for the rest of a conversation.
     for (const id of own) recordFeedback(req.user.id, get('SELECT * FROM messages WHERE id = ?', id), value ? 'reply' : 'noreply');
-    // In conversation view a row stands for its conversation: "no reply needed" clears every message in it
-    // (marking stays on the message itself).
-    if (!value && req.body?.threads && own.length) {
-      own = all(`SELECT DISTINCT i.message_id AS id FROM ai_insights i JOIN messages m ON m.id = i.message_id WHERE m.user_id = ? AND i.needs_reply = 1
-        AND m.thread_id IN (SELECT thread_id FROM messages WHERE id IN (${own.join(',')}))`, req.user.id).map((r) => r.id).concat(own);
-      own = [...new Set(own)];
+    // "No reply needed" also clears the other copies of the email and the older emails it repeats (they were only
+    // hidden by it and would take its place). In conversation view a row stands for its conversation: every message in
+    // it is cleared (marking stays on the message itself).
+    if (!value && own.length) {
+      own = [...new Set([...own, ...all(`SELECT DISTINCT i.message_id AS id FROM ai_insights i JOIN messages m ON m.id = i.message_id JOIN messages x ON x.id IN (${own.join(',')})
+        WHERE m.user_id = ? AND (i.needs_reply = 1 OR i.needs_reply_user = 1) AND ((COALESCE(x.message_id, '') != '' AND m.message_id = x.message_id)
+          OR (COALESCE(x.subject_key, '') != '' AND m.subject_key = x.subject_key AND lower(m.from_addr) = lower(x.from_addr) AND m.date <= x.date)
+          ${req.body?.threads ? 'OR m.thread_id = x.thread_id' : ''})`, req.user.id).map((r) => r.id)])];
     }
     for (const id of own) {
       if (get('SELECT 1 AS x FROM ai_insights WHERE message_id = ?', id)) run(`UPDATE ai_insights SET needs_reply = ?, needs_reply_user = ?, dismissed_at = CASE WHEN ? = 1 THEN NULL ELSE dismissed_at END,
@@ -404,6 +406,11 @@ export default async function mailRoutes(app) {
       else run("INSERT INTO ai_insights (message_id, priority, needs_reply, needs_reply_user, category, model, created_at) VALUES (?, 50, ?, ?, 'other', 'user', ?)", id, value, value, Date.now());
       const m = get('SELECT thread_id FROM messages WHERE id = ?', id);
       notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', id)) });
+    }
+    if (own.length) {
+      notify(req.user.id, 'mail:changed', { ids: own });
+      scheduleBriefRefresh(req.user.id);
+      refreshSettled(req.user.id, own, all(`SELECT DISTINCT thread_id AS t FROM messages WHERE id IN (${own.join(',')})`).map((r) => r.t));
     }
     return { ok: true, count: own.length };
   });
@@ -581,6 +588,7 @@ export default async function mailRoutes(app) {
     }
     notify(req.user.id, 'mail:changed', { ids: targets });
     scheduleBriefRefresh(req.user.id);
+    refreshSettled(req.user.id, targets, [m.thread_id]);
     return { ok: true, count: targets.length };
   });
 
@@ -617,6 +625,7 @@ export default async function mailRoutes(app) {
     for (const id of ids) notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', id)) });
     notify(req.user.id, 'mail:changed', { ids });
     scheduleBriefRefresh(req.user.id);
+    refreshSettled(req.user.id, ids, [m.thread_id]);
     return { insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) };
   });
 

@@ -10,7 +10,7 @@ import { syncCardDav } from './contacts/carddav.js';
 import { enqueue } from './ai/queue.js';
 import { backfillAnalysis, purgeMemory } from './mail/pipeline.js';
 import { listSpaces } from './spaces.js';
-import { expireInsights, reanalyzeOpen } from './ai/tasks.js';
+import { expireInsights, reanalyzeOpen, reanalyzeItems } from './ai/tasks.js';
 import { seedCorrespondents, scheduleProfiles } from './ai/profiles.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
@@ -192,7 +192,7 @@ export function startScheduler() {
   setTimeout(backfillAll, 15e3).unref();
   setTimeout(() => regroupConversations().catch((e) => log.error(e)), 20e3).unref();
   setTimeout(() => { try { markRepliedHistory(); } catch (e) { log.error(e); } }, 40e3).unref();
-  setTimeout(() => { try { reanalyzeOpen(); } catch (e) { log.error(e); } }, 50e3).unref();
+  setTimeout(() => { try { reanalyzeOpen(); reanalyzeItems(); } catch (e) { log.error(e); } }, 50e3).unref();
   setInterval(() => { try { db.pragma('optimize'); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(() => { try { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); } catch (e) { log.error(e); } }, 3600e3).unref();

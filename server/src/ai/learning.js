@@ -130,7 +130,7 @@ export function updateRule(userId, id, reason) {
 /** Immediate effect of a correction on the message's own insight. */
 export function correctInsight(messageId, kind, value) {
   if (kind === 'important') run('UPDATE ai_insights SET priority = MAX(priority, 85) WHERE message_id = ?', messageId);
-  if (kind === 'unimportant') run('UPDATE ai_insights SET priority = MIN(priority, 15), needs_reply = 0 WHERE message_id = ?', messageId);
+  if (kind === 'unimportant') run('UPDATE ai_insights SET priority = MIN(priority, 15), needs_reply = 0, needs_action = 0 WHERE message_id = ?', messageId);
   if (kind === 'category') run('UPDATE ai_insights SET category = ? WHERE message_id = ?', value, messageId);
 }
 

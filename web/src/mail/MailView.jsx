@@ -344,6 +344,7 @@ function MessageList({ view, openId, onMenu }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   // AI part of search: { status: 'loading' | 'done' | 'unavailable', items }
   const [aiResults, setAiResults] = useState(null);
+  const [searchTab, setSearchTab] = useState(null); // 'mail' | 'ai'; until chosen, AI only when nothing else matched
   const aiQuery = useRef('');
   const [selected, setSelected] = useState(new Set());
   const [openMenu, menuNode] = useMenu();
@@ -413,6 +414,8 @@ function MessageList({ view, openId, onMenu }) {
       api.get(`/api/messages?${params(null)}`).then((r) => setItems((cur) => keepOpen(r.items, cur))).catch(() => {});
     }
   }, [openId]);
+
+  useEffect(() => setSearchTab(null), [activeQuery]);
 
   const load = useCallback(async (append = false) => {
     setLoading(true);
@@ -669,6 +672,7 @@ function MessageList({ view, openId, onMenu }) {
   }, [view, folders]);
 
   const bulk = selected.size > 0;
+  const showAi = !!activeQuery && !!aiResults && (searchTab ? searchTab === 'ai' : !items.length && !loading && aiResults.items.length > 0);
   return (
     <section className="list-pane">
       <div className="list-head">
@@ -686,6 +690,10 @@ function MessageList({ view, openId, onMenu }) {
           {query && <button type="button" className="icon-btn" style={{ position: 'absolute', right: 2, top: 1 }} onClick={() => { setQuery(''); setActiveQuery(''); }}><X size={15} /></button>}
         </form>
         {(filtersOpen || activeQuery) && <SearchFilters query={query} onChange={(q) => { setQuery(q); setActiveQuery(q.trim()); }} />}
+        {activeQuery && aiResults && <div className="tabs">
+          <button className={`tab ${showAi ? '' : 'active'}`} onClick={() => setSearchTab('mail')}>Results<TabCount n={hasMore ? 0 : items.length} /></button>
+          <button className={`tab ${showAi ? 'active' : ''}`} title="Mail related by meaning, found by the AI" onClick={() => setSearchTab('ai')}><Sparkles size={13} /> AI{aiResults.status === 'loading' ? <> <Spinner size={11} /></> : <TabCount n={aiResults.items.length} />}</button>
+        </div>}
         {!activeQuery && <div className="tabs">
           {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${effectiveTab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused<TabCount n={tabCounts?.focused} /></button><button className={`tab ${effectiveTab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other<TabCount n={tabCounts?.other} /></button></>}
           <button className={`tab ${effectiveTab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All<TabCount n={tabCounts?.all} /></button>
@@ -719,24 +727,23 @@ function MessageList({ view, openId, onMenu }) {
         onTouchStart={(e) => { pullStart.current = listRef.current?.scrollTop === 0 ? e.touches[0].clientY : null; }}
         onTouchMove={(e) => { if (pullStart.current != null) setPull(Math.max(0, Math.min(110, (e.touches[0].clientY - pullStart.current) / 2))); }}
         onTouchEnd={() => { if (pull > 70) { window.dispatchEvent(new Event('halcyon:sync')); load(false); } pullStart.current = null; setPull(0); }}>
-        {pinned.length > 0 && <div className="list-group"><Pin size={12} /> Pinned · {pinned.length}</div>}
-        {pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
+        {!showAi && pinned.length > 0 && <div className="list-group"><Pin size={12} /> Pinned · {pinned.length}</div>}
+        {!showAi && pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
-        {pinned.length > 0 && items.length > 0 && <div className="list-group">Everything else</div>}
-        {items.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
+        {!showAi && pinned.length > 0 && items.length > 0 && <div className="list-group">Everything else</div>}
+        {!showAi && items.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}
-        {activeQuery && aiResults && <div className="ai-results">
-          <div className="nav-section" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Sparkles size={13} /> Related by meaning (AI)
-            {aiResults.status === 'loading' && <><Spinner size={12} /><span className="faint">searching…</span></>}</div>
+        {showAi && <div className="ai-results">
+          {aiResults.status === 'loading' && <div className="row small faint" style={{ padding: '8px 16px', gap: 6 }}><Spinner size={12} /> Searching by meaning…</div>}
           {aiResults.items.map((m) => <Row key={`ai${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={false}
             onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
           {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
           {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
         </div>}
-        {!items.length && !loading && !aiResults?.items.length && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
+        {!showAi && !items.length && !loading && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
         {loading && items.length === 0 && <div className="empty"><Spinner size={22} /></div>}
-        {hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
+        {!showAi && hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
       </div>
       {menuNode}
     </section>

@@ -101,11 +101,21 @@ ${openRequests}
   };
 }
 
-export function threadSummaryPrompt({ ctx, messages, language }) {
+export function threadSummaryPrompt({ ctx, messages, language, settled = [] }) {
   return {
     system: `You summarize email conversations. ${ctx}
-Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions made, open questions, and who is waiting on whom, with concrete details (dates, amounts, names). Each message is labelled with who wrote it to whom; "THE USER" is the mailbox owner — call them "you", and keep straight who asked whom and who promised what. Do not restate the subject; no preamble.`,
-    messages: [{ role: 'user', content: messages.map((m, i) => `### Message ${i + 1}\n${m}`).join('\n\n') }],
+Write a concise summary in ${language} as 2-5 bullet points ("- "): decisions made, open questions, and who is waiting on whom, with concrete details (dates, amounts, names). Each message is labelled with who wrote it to whom; "THE USER" is the mailbox owner — call them "you", and keep straight who asked whom and who promised what. Do not restate the subject; no preamble.${settled.length ? `
+SETTLED lists what the user has already dealt with. It outranks the emails: never present these things as open or still to do; say briefly that they are done or dropped.` : ''}`,
+    messages: [{ role: 'user', content: `${messages.map((m, i) => `### Message ${i + 1}\n${m}`).join('\n\n')}${settled.length ? `\n\nSETTLED:\n${settled.map((x) => `- ${x}`).join('\n')}` : ''}` }],
+  };
+}
+
+/** The summary of one email, brought up to date with what the user settled; no new facts, nothing else changes. */
+export function settledSummaryPrompt({ ctx, summary, settled }) {
+  return {
+    system: `You update the summary of an email. ${ctx}
+SETTLED lists what the user has already dealt with. Rewrite the summary so that it no longer presents these things as open or still to do: say briefly that they are done or dropped, or leave them out. Keep everything else, the language and about the same length. Add no new facts. Reply with the summary only.`,
+    messages: [{ role: 'user', content: `SUMMARY:\n${summary}\n\nSETTLED:\n${settled.map((x) => `- ${x}`).join('\n')}` }],
   };
 }
 
