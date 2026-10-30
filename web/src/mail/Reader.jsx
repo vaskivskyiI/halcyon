@@ -514,7 +514,7 @@ function ActionList({ actions, needsReply, onDone, onItem }) {
             {many && <div className="small faint">{m.from.name || m.from.address} · {shortDate(m.date)}</div>}
             {mine.map((r, i) => (
               <div key={i} className={`action-item ${r.state ? 'settled' : ''}`}>
-                <span className="grow"><span className="text">{r.text}</span>{r.due && <span className="faint"> · by {shortDate(Date.parse(r.due))}</span>}
+                <span className="grow"><span className="text">{r.text}</span>{r.due && <span className="faint"> · by {/\d:\d/.test(r.due) ? when(Date.parse(r.due.replace(' ', 'T'))) : shortDate(Date.parse(r.due))}</span>}
                   {r.state && <span className="faint"> — {SETTLED[r.state.resolution] || 'Done'}{r.state.by ? <> by <a href={`#/mail/unified/${r.state.by}`}>your email</a></> : ''}{r.state.at ? ` ${shortDate(r.state.at)}` : ''}</span>}</span>
                 {r.state
                   ? <button className="btn sm ghost" title="Put it back in Action needed" onClick={() => (r.single ? onDone(m.id, null, true) : onItem(m.id, r.text, null))}>{r.state.by ? 'Still open' : 'Undo'}</button>

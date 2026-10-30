@@ -56,13 +56,37 @@ export const summaryLanguage = (settings, uiLanguage, what = 'email') => {
 const replyLanguage = (settings) => (settings.ai.replyLanguage && settings.ai.replyLanguage !== 'auto' ? settings.ai.replyLanguage : 'the same language as the email being replied to');
 const clampInt = (n, lo, hi, d) => (Number.isFinite(Number(n)) ? Math.max(lo, Math.min(hi, Math.round(Number(n)))) : d);
 
+// A deadline in the words of a calendar entry (en, sl, hr/sr, de, fr, es, it).
+const DEADLINE = /(?<!\p{L})(deadline|due|cut-?off|submission|last day|rok|oddaj\p{L}*|frist|abgabe\p{L}*|f[aä]llig\p{L}*|[ée]ch[ée]ance|date limite|plazo|fecha l[ií]mite|scadenza)(?!\p{L})/iu;
+export const isDeadline = (e) => DEADLINE.test(String(e?.title || ''));
+
+/**
+ * The AI sometimes still lists a deadline as an event. A deadline is a task with a due date, not a slot in the calendar:
+ * it becomes the due of the matching action item (the first without one), or an item of its own.
+ */
+export function deadlinesToItems(d, tz, text) {
+  const events = Array.isArray(d.events) ? d.events : [];
+  const items = (Array.isArray(d.action_items) ? d.action_items : []).map((a) => (typeof a === 'string' ? { text: a, due: null } : a));
+  for (const e of events.filter(isDeadline)) {
+    const n = normalizeEvent(e, tz, { text });
+    if (!n) continue;
+    const due = e.all_day || !e.start_time ? String(e.date) : P.localStamp(Date.parse(n.start), tz).match(/d{4}-d{2}-d{2} d{2}:d{2}/)[0];
+    if (items.some((a) => String(a.due || '').slice(0, 10) === due.slice(0, 10))) continue;
+    const open = items.find((a) => !a.due);
+    if (open) open.due = due; else items.push({ text: String(e.title), due });
+  }
+  d.events = events.filter((e) => !isDeadline(e));
+  d.action_items = items;
+  return d;
+}
+
 export function serializeInsight(r) {
   if (!r) return null;
   const owner = r.needs_action ? get('SELECT user_id FROM messages WHERE id = ?', r.message_id)?.user_id : null;
   const action = owner ? actionKind(r, owner) : null;
   return {
     summary: r.summary, category: r.category, priority: r.priority, priorityReason: r.priority_reason, needsReply: !!r.needs_reply,
-    actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []),
+    actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []).filter((e) => !isDeadline(e)), // also in mail analysed before they became tasks
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
     needsAction: action === 'open', actionSuggested: action === 'suggested' && !r.dismissed_at, actionSummary: r.action_summary || null, expectsReply: !!r.expects_reply,
@@ -309,6 +333,8 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     }
     if (!fromMe && isAutomated(m)) res.data.needs_reply = false; // nobody reads a reply
     if (res.data.needs_action && notATask(res.data.action_summary)) res.data.needs_action = false;
+    deadlinesToItems(res.data, tz, `${m.subject || ''}
+${m.body_text || ''}`);
     // Items listed but the flag forgotten: they count as an action, for the second opinion to judge like any other.
     const listed = (Array.isArray(res.data.action_items) ? res.data.action_items : []).map((a) => String(a?.text ?? a ?? '').trim()).filter((a) => a && !notATask(a));
     if (!fromMe && !res.data.needs_action && listed.length) { res.data.needs_action = true; res.data.action_summary = listed[0]; }
