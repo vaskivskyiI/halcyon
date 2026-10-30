@@ -90,12 +90,18 @@ export default async function contactRoutes(app) {
   // Where an event, task or contact made from this email goes: the calendar, task list and address book of its space.
   app.get('/api/messages/:id/targets', async (req, reply) => targetsForMessage(req.user.id, req.params.id) || httpError(reply, 404, 'Not found'));
 
-  // The sender of an email saved as a contact, in the address book of the email's space. Someone already known only as
+  // The sender of an email (or, with `email`, anyone on it) saved as a contact, in the address book of the email's space. Someone already known only as
   // a collected address becomes a saved contact (moved there, uploaded when that book is synced) — no duplicate.
   app.post('/api/messages/:id/save-sender', async (req, reply) => {
-    const m = get('SELECT from_name, from_addr FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    const m = get('SELECT from_name, from_addr, to_json, cc_json, bcc_json FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     const t = m && targetsForMessage(req.user.id, req.params.id);
     if (!m || !t?.bookId) return httpError(reply, 404, 'Not found');
+    if (req.body?.email) {
+      const want = String(req.body.email).toLowerCase();
+      const on = [{ name: m.from_name, address: m.from_addr }, ...json(m.to_json, []), ...json(m.cc_json, []), ...json(m.bcc_json, [])].find((a) => String(a?.address || '').toLowerCase() === want);
+      if (!on) return httpError(reply, 404, 'Not found');
+      m.from_addr = on.address; m.from_name = on.name || '';
+    }
     const email = String(m.from_addr || '').toLowerCase();
     const known = get('SELECT c.* FROM contact_emails e JOIN contacts c ON c.id = e.contact_id WHERE e.user_id = ? AND e.email = ? AND c.deleted = 0 ORDER BY c.auto_collected, c.id LIMIT 1', req.user.id, email);
     if (known && !known.auto_collected) return { contact: serializeContact(known), existed: true };

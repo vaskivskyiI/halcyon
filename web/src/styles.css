@@ -604,3 +604,5 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display: inline-flex; align-items: center; }
 .msg-who { flex-wrap: wrap; row-gap: 2px; }
 .msg-who .who { min-width: 3em; }
+.person { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; user-select: text; }
+.person:hover { color: var(--accent); text-decoration: underline; }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CalendarClock, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
-  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight,
+  ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight, Copy, Search,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -755,7 +755,29 @@ function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
 }
 
 /** One header line (To / Cc / Bcc): names, full address on hover; long lists folded to "and N more". */
-function AddrLine({ label, list, empty }) {
+/** Anyone on an email: click for what can be done with them. A drag over the text still selects it. */
+function Person({ a, messageId, accountId, className, children }) {
+  const [openMenu, menuNode] = useMenu();
+  const copy = (text) => navigator.clipboard.writeText(text).then(() => toast('Copied')).catch(toastError);
+  const save = async () => {
+    try {
+      const r = await api.post(`/api/messages/${messageId}/save-sender`, { email: a.address });
+      toast(r.existed ? `${r.contact.displayName} is already in your contacts` : `${r.contact.displayName} saved to “${r.book}”`, { action: { label: 'Open', onClick: () => navigate(`#/contacts/${r.contact.id}`) } });
+    } catch (e) { toastError(e); }
+  };
+  const open = (e) => {
+    if (!a?.address || String(window.getSelection?.() || '')) return;
+    openMenu(e, [{ section: addrFull(a) },
+      { label: 'Write an email', icon: Send, onClick: () => openComposer({ to: [a], accountId }) },
+      { label: 'Copy email address', icon: Copy, onClick: () => copy(a.address) },
+      a.name && { label: 'Copy name and address', icon: Copy, onClick: () => copy(addrFull(a)) },
+      { label: 'Save as contact', icon: UserPlus, onClick: save },
+      { label: 'Find their mail', icon: Search, onClick: () => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${a.address}` } })) }]);
+  };
+  return <><button type="button" className={`person ${className || ''}`} title={addrFull(a)} onClick={open} onContextMenu={open}>{children}</button>{menuNode}</>;
+}
+
+function AddrLine({ label, list, empty, m }) {
   const [all, setAll] = useState(false);
   if (!list?.length && !empty) return null;
   const shown = all ? list : (list || []).slice(0, 6);
@@ -763,7 +785,7 @@ function AddrLine({ label, list, empty }) {
     <div className="small muted addr-line">
       <span className="addr-label">{label}</span>
       {!list?.length ? <span>{empty}</span> : <span>
-        {shown.map((a, i) => <span key={i} title={addrFull(a)}>{addrLabel(a)}{i < shown.length - 1 ? ', ' : ''}</span>)}
+        {shown.map((a, i) => <span key={i}><Person a={a} messageId={m.id} accountId={m.accountId}>{addrLabel(a)}</Person>{i < shown.length - 1 ? ', ' : ''}</span>)}
         {list.length > shown.length && <> <button className="link-btn" onClick={() => setAll(true)}>and {list.length - shown.length} more</button></>}
       </span>}
     </div>
@@ -846,13 +868,13 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
         <div className="grow" style={{ minWidth: 0 }}>
           <div className="row msg-who">{m.onBehalfOf
             ? <span className="who truncate" title={`${addrFull(m.onBehalfOf)} sent this on behalf of ${addrFull(m.from)}`}>{m.onBehalfOf.name || m.onBehalfOf.address} <span className="behalf">on behalf of</span> {m.from.name || m.from.address}</span>
-            : <span className="who truncate">{m.from.name || m.from.address}</span>}
+            : <span className="who truncate" onClick={(e) => e.stopPropagation()}><Person a={m.from} messageId={m.id} accountId={m.accountId}>{m.from.name || m.from.address}</Person></span>}
             {expanded && m.from.name && <span className="small faint truncate">&lt;{m.from.address}&gt;</span>}<span onClick={(e) => e.stopPropagation()}><RecentChip {...recent} /></span><span className="grow" /><span className="small muted" style={{ flex: 'none' }}>{fmtFull(m.date)}</span></div>
           {expanded ? <div className="addr-lines" onClick={(e) => e.stopPropagation()}>
             {m.onBehalfOf && <div className="small addr-line"><span className="addr-label">Sent by</span><span><b>{addrFull(m.onBehalfOf)}</b> on behalf of {addrFull(m.from)} — replies go to {addrFull((m.replyTo?.length ? m.replyTo : [m.from])[0])}</span></div>}
-            <AddrLine label="To" list={m.to} empty="undisclosed recipients" />
-            <AddrLine label="Cc" list={m.cc} />
-            <AddrLine label="Bcc" list={m.bcc} />
+            <AddrLine label="To" list={m.to} empty="undisclosed recipients" m={m} />
+            <AddrLine label="Cc" list={m.cc} m={m} />
+            <AddrLine label="Bcc" list={m.bcc} m={m} />
           </div>
             : <div className="small muted truncate">{realAtts.length > 0 && <><Paperclip size={11} /> {realAtts.length} · </>}{m.snippet}</div>}
           {/* Attachments right under the header, so they are not missed below a long message. */}

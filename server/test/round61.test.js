@@ -112,3 +112,12 @@ test('sign-in for a companion app: only to the configured address, one use, and 
   assert.deepEqual(spaces.find((s) => s.id === String(space)).members.map((m) => m.role).sort(), ['member', 'owner'].sort());
   assert.equal((await call(ann, 'POST', '/api/sso/spaces', {})).status, 401, 'a session is not the secret');
 });
+
+test('anyone on an email can be saved as a contact, and nobody who is not on it', async () => {
+  const id = Number(mail(annId, 'ann2@private.example', 'People', 'Hello'));
+  db.prepare('UPDATE messages SET to_json = ?, cc_json = ? WHERE id = ?').run(JSON.stringify([{ name: 'To Person', address: 'to@x.example' }]), JSON.stringify([{ name: '', address: 'cc@x.example' }]), id);
+  const r = await data(ann, 'POST', `/api/messages/${id}/save-sender`, { email: 'TO@x.example' });
+  assert.equal(r.contact.displayName, 'To Person');
+  assert.equal((await data(ann, 'POST', `/api/messages/${id}/save-sender`, { email: 'cc@x.example' })).contact.displayName, 'cc');
+  assert.equal((await call(ann, 'POST', `/api/messages/${id}/save-sender`, { email: 'stranger@x.example' })).status, 404);
+});
