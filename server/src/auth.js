@@ -176,6 +176,32 @@ export default async function authRoutes(app) {
     if (get('SELECT id FROM users WHERE email = ?', email.toLowerCase())) return reply.code(400).send({ error: 'User exists' });
     return publicUser(createUser({ email, name, password, isAdmin }));
   });
+  const person = (id) => get("SELECT * FROM users WHERE id = ? AND COALESCE(kind, 'person') = 'person'", id);
+  // Name, email, role. The server always keeps one administrator.
+  app.patch('/api/admin/users/:id', { preHandler: requireUser }, async (req, reply) => {
+    if (!req.user.is_admin) return reply.code(403).send({ error: 'Admin only' });
+    const u = person(req.params.id);
+    if (!u) return reply.code(404).send({ error: 'Not found' });
+    const { name, isAdmin } = req.body || {};
+    const email = req.body?.email === undefined ? u.email : String(req.body.email).toLowerCase().trim();
+    if (!/^\S+@\S+$/.test(email)) return reply.code(400).send({ error: 'A valid email is required' });
+    if (get('SELECT id FROM users WHERE email = ? AND id != ?', email, u.id)) return reply.code(400).send({ error: 'User exists' });
+    if (u.is_admin && isAdmin === false && get("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND COALESCE(kind, 'person') = 'person'").n < 2) return reply.code(400).send({ error: 'The last administrator cannot lose that role' });
+    run('UPDATE users SET email = ?, name = ?, is_admin = ? WHERE id = ?', email, name === undefined ? u.name : String(name).trim() || email, isAdmin === undefined ? u.is_admin : isAdmin ? 1 : 0, u.id);
+    return publicUser(get('SELECT * FROM users WHERE id = ?', u.id));
+  });
+  // A new password for anyone, without the old one. Everyone signed in as that user is signed out (the admin's own
+  // session stays): a reset is often about a lost device or a stolen password.
+  app.post('/api/admin/users/:id/password', { preHandler: requireUser }, async (req, reply) => {
+    if (!req.user.is_admin) return reply.code(403).send({ error: 'Admin only' });
+    const u = person(req.params.id);
+    if (!u) return reply.code(404).send({ error: 'Not found' });
+    const { password } = req.body || {};
+    if (!password || String(password).length < 8) return reply.code(400).send({ error: 'Password must be at least 8 characters' });
+    run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(String(password)), u.id);
+    run('DELETE FROM sessions WHERE user_id = ? AND token != ?', u.id, sessionFromRequest(req)?.token || '');
+    return { ok: true };
+  });
   app.delete('/api/admin/users/:id', { preHandler: requireUser }, async (req, reply) => {
     if (!req.user.is_admin) return reply.code(403).send({ error: 'Admin only' });
     if (Number(req.params.id) === req.user.id) return reply.code(400).send({ error: 'Cannot delete yourself' });

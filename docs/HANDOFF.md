@@ -926,6 +926,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (quiet: keeps what is unfolded and translations, ignores failures). Settings → calendars and lists follows too.
 - Deadlines are tasks: the prompt keeps them out of `events`; `deadlinesToItems` moves any that slip through to the due
   (date, and time if stated) of an action item; `serializeInsight` hides them for mail analysed earlier.
+- Settings → Users: PATCH `/api/admin/users/:id` (name, email, isAdmin; the last admin keeps the role), POST
+  `/api/admin/users/:id/password` (no old password needed; ends that user's sessions, not the caller's).
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return

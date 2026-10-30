@@ -245,14 +245,24 @@ export function Diagnostics() {
 export function AdminUsers() {
   const [users, setUsers] = useState([]);
   const [f, setF] = useState({ email: '', name: '', password: '', isAdmin: false });
+  const [edit, setEdit] = useState(null);
   const load = () => api.get('/api/admin/users').then(setUsers).catch(toastError);
   useEffect(() => { load(); }, []);
+  const saveEdit = async () => {
+    try {
+      const u = await api.patch(`/api/admin/users/${edit.id}`, { name: edit.name, email: edit.email, isAdmin: edit.isAdmin });
+      if (edit.password) await api.post(`/api/admin/users/${edit.id}/password`, { password: edit.password });
+      if (u.id === store.get().user?.id) store.set({ user: u });
+      setEdit(null); load();
+      toast(edit.password ? 'Saved. The new password works now and this user was signed out' : 'Saved');
+    } catch (e) { toastError(e); }
+  };
   return (
     <div className="settings-section">
       <h2>Users</h2>
       <div className="muted">Each user has their own accounts, AI providers, calendars and contacts.</div>
       <table className="simple"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th /></tr></thead><tbody>
-        {users.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td>{u.is_admin ? 'Admin' : 'User'}</td><td><button className="icon-btn" onClick={async () => { if (confirm(`Delete ${u.email} and all their data?`)) { await api.del(`/api/admin/users/${u.id}`).catch(toastError); load(); } }}><Trash2 size={15} /></button></td></tr>)}
+        {users.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td>{u.is_admin ? 'Admin' : 'User'}</td><td style={{ whiteSpace: 'nowrap' }}><button className="icon-btn" title="Edit, or set a new password" onClick={() => setEdit({ id: u.id, name: u.name || '', email: u.email, isAdmin: !!u.is_admin, password: '' })}><Pencil size={15} /></button><button className="icon-btn" title="Delete" onClick={async () => { if (confirm(`Delete ${u.email} and all their data?`)) { await api.del(`/api/admin/users/${u.id}`).catch(toastError); load(); } }}><Trash2 size={15} /></button></td></tr>)}
       </tbody></table>
       <h3>Add user</h3>
       <div className="form-grid">
@@ -262,6 +272,15 @@ export function AdminUsers() {
         <label className="row small" style={{ alignSelf: 'end' }}><input type="checkbox" checked={f.isAdmin} onChange={(e) => setF({ ...f, isAdmin: e.target.checked })} /> Administrator</label>
       </div>
       <div><button className="btn primary" onClick={async () => { try { await api.post('/api/admin/users', f); setF({ email: '', name: '', password: '', isAdmin: false }); load(); toast('User created'); } catch (e) { toastError(e); } }}>Create user</button></div>
+      {edit && <Modal title={`Edit ${edit.email}`} onClose={() => setEdit(null)} footer={<><button className="btn ghost" onClick={() => setEdit(null)}>Cancel</button><button className="btn primary" onClick={saveEdit}>Save</button></>}>
+        <div className="form-grid">
+          <label className="field">Name<input className="input" autoComplete="off" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+          <label className="field">Email<input className="input" autoComplete="off" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></label>
+          <label className="field">New password<input className="input" type="password" autoComplete="new-password" placeholder="Leave empty to keep it" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></label>
+          <label className="row small" style={{ alignSelf: 'end' }}><input type="checkbox" checked={edit.isAdmin} onChange={(e) => setEdit({ ...edit, isAdmin: e.target.checked })} /> Administrator</label>
+        </div>
+        <div className="small muted">A new password takes effect at once and signs this user out everywhere. The old one is not needed. Their mail passwords are not changed.</div>
+      </Modal>}
     </div>
   );
 }
