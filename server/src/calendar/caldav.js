@@ -33,7 +33,8 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
   const collections = await client.fetchCalendars();
   const remoteCals = collections.filter((c) => !c.components || c.components.includes('VEVENT'));
   for (const [i, remote] of remoteCals.entries()) {
-    let cal = get('SELECT * FROM calendars WHERE user_id = ? AND url = ?', account.user_id, remote.url);
+    // Also one of this account already shared in a space: it is the same calendar, not a new one.
+    let cal = get('SELECT * FROM calendars WHERE url = ? AND (user_id = ? OR account_id = ?)', remote.url, account.user_id, account.id ?? -1);
     if (!cal) {
       const name = typeof remote.displayName === 'string' ? remote.displayName : 'Calendar';
       const color = typeof remote.calendarColor === 'string' ? remote.calendarColor.slice(0, 7) : PALETTE[i % PALETTE.length];

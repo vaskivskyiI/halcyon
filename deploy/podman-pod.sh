@@ -60,6 +60,10 @@ HALCYON_SECURE_COOKIES=0
 # Inside the pod the reverse proxy is not on loopback; set its address if it adds X-Forwarded-For.
 HALCYON_TRUST_PROXY=
 HALCYON_ALLOW_SIGNUP=0
+# Sign in with Halcyon for Inkwell: the same long random secret here and in inkwell.env, and Inkwell's exact callback,
+# e.g. HALCYON_SSO_REDIRECTS=https://notes.example.org/api/auth/halcyon/callback
+HALCYON_SSO_SECRET=
+HALCYON_SSO_REDIRECTS=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 MICROSOFT_CLIENT_ID=

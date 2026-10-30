@@ -164,7 +164,7 @@ export function todoIcs(t, tz) {
 
 /** The task list for a CalDAV collection that holds tasks (made when first seen). */
 function listFor(account, remote, i, readonly) {
-  let list = get('SELECT * FROM task_lists WHERE user_id = ? AND url = ?', account.user_id, remote.url);
+  let list = get('SELECT * FROM task_lists WHERE url = ? AND (user_id = ? OR account_id = ?)', remote.url, account.user_id, account.id ?? -1);
   if (!list) {
     const name = typeof remote.displayName === 'string' && remote.displayName ? remote.displayName : 'Tasks';
     const color = typeof remote.calendarColor === 'string' ? remote.calendarColor.slice(0, 7) : PALETTE[i % PALETTE.length];

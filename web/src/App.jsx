@@ -25,6 +25,8 @@ import SettingsView from './settings/SettingsView.jsx';
 export default function App() {
   const [status, setStatus] = useState(null);
   const user = store.use((s) => s.user);
+  // Came here to sign in for a companion app (see routes/sso.js): back to it once signed in.
+  useEffect(() => { const next = new URLSearchParams(location.search).get('sso'); if (user && next?.startsWith('/api/sso/authorize?')) location.replace(next); }, [user]);
 
   const boot = async () => {
     try {

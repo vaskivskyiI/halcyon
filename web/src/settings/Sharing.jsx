@@ -63,9 +63,9 @@ export default function Sharing() {
               <b>Shared here</b>
               {/* The space's own empty calendar / contacts (made with it) are not something that was shared. */}
               {[...s.accounts.map((a) => (a.kind === 'archive' ? ['archive', a.name || a.email, { accountId: a.id }] : ['account', a.email, { accountId: a.id }])),
-                ...s.calendars.filter((c) => !c.accountId && (c.items || c.source !== 'local')).map((c) => ['calendar', c.name, { calendarId: c.id }]),
-                ...s.addressBooks.filter((b) => !b.accountId && (b.items || b.source !== 'local')).map((b) => ['contacts', b.name, { addressBookId: b.id }]),
-                ...s.taskLists.filter((l) => !l.accountId && (l.items || l.source !== 'local' || l.name !== 'Tasks')).map((l) => ['tasks', l.name, { taskListId: l.id }])].map(([kind, label, body]) => (
+                ...s.calendars.filter((c) => !s.accounts.some((a) => a.id === c.accountId) && (c.items || c.source !== 'local')).map((c) => ['calendar', c.name, { calendarId: c.id }]),
+                ...s.addressBooks.filter((b) => !s.accounts.some((a) => a.id === b.accountId) && (b.items || b.source !== 'local')).map((b) => ['contacts', b.name, { addressBookId: b.id }]),
+                ...s.taskLists.filter((l) => !s.accounts.some((a) => a.id === l.accountId) && (l.items || l.source !== 'local' || l.name !== 'Tasks')).map((l) => ['tasks', l.name, { taskListId: l.id }])].map(([kind, label, body]) => (
                 <div key={`${kind}${label}`} className="row" style={{ gap: 6 }}>
                   <span className="grow">{label} <span className="faint">· {kind}</span></span>
                   {owner && <button className="btn sm ghost" title="Back into your own mail" onClick={() => back(body, label)}><Undo2 size={13} /> Move to my mail</button>}
@@ -139,11 +139,11 @@ function AddToSpace({ space, mine, onDone }) {
         <select className="input" style={{ width: 'auto', height: 30 }} value={accountId} onChange={(e) => { setAccountId(e.target.value); setWithCal(false); setWithBook(false); }}>
           <option value="">Mail account: none</option>{mail.map((a) => <option key={a.id} value={a.id}>{a.email}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={calendarId} onChange={(e) => setCalendarId(e.target.value)}>
-          <option value="">Calendar: none</option>{mine.calendars.filter((c) => !c.accountId && !c.readonly).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <option value="">Calendar: none</option>{mine.calendars.map((c) => <option key={c.id} value={c.id}>{c.name}{c.showAs === 'info' || c.readonly ? ' (read-only)' : c.accountId ? ' (synced)' : ''}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={bookId} onChange={(e) => setBookId(e.target.value)}>
-          <option value="">Contacts: none</option>{mine.books.filter((b) => !b.accountId && !b.readonly).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
+          <option value="">Contacts: none</option>{mine.books.map((b) => <option key={b.id} value={b.id}>{b.name}{b.readonly ? ' (read-only)' : b.accountId ? ' (synced)' : ''}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={listId} onChange={(e) => setListId(e.target.value)}>
-          <option value="">Tasks: none</option>{mine.lists.filter((l) => !l.accountId && !l.readonly).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
+          <option value="">Tasks: none</option>{mine.lists.map((l) => <option key={l.id} value={l.id}>{l.name}{l.readonly ? ' (read-only)' : l.accountId ? ' (synced)' : ''}</option>)}</select>
         {archives.length > 0 && <select className="input" style={{ width: 'auto', height: 30 }} value={archiveId} onChange={(e) => setArchiveId(e.target.value)}>
           <option value="">Archive: none</option>{archives.map((a) => <option key={a.id} value={a.id}>{a.name || a.email}</option>)}</select>}
       </div>

@@ -934,6 +934,9 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Sharing also takes task lists (`moveTaskList`) and archives (`moveAccount`, refused while an archive job runs).
 - A shared space shown in My mail also adds its calendars, events, tasks, lists and contacts: `withShared` tags items with
   owner / ownerName, web api.js `owners` sends changes as that space. `?all=1` (Settings) stays one's own. Items do not move between owners.
+- AI sees what the login sees: `aiSpacesOf` (spaces shown in My mail; a privacy-mode space only for a privacy-mode login) feeds the assistant, brief and semantic search. Inside a space, or with a space-limited view, only that.
+- Sharing takes any calendar, address book or task list: read-only ones too; those of a server go together; those synced through an account stay linked to it (sync finds them by url + account_id).
+- Sign in with Halcyon (`routes/sso.js`, HALCYON_SSO_SECRET / HALCYON_SSO_REDIRECTS): one-time code, exact callback; POST /api/sso/spaces gives a companion app the shared spaces and member ids.
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return

@@ -329,7 +329,7 @@ export default function Reader({ id, view }) {
 
   const files = threadFiles(msgs);
   const inkwell = { kind: 'email', refs: [inkMsg.id, ...msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)],
-    item: { ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date, space: store.get().accounts?.find((a) => a.id === inkMsg.accountId)?.space } };
+    item: { ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date, space: (() => { const a = store.get().accounts?.find((x) => x.id === inkMsg.accountId); return a?.space || a?.ownerName; })() } };
   const showMessage = (mid) => {
     setShowAll(true);
     setExpanded((s) => new Set(s).add(mid));

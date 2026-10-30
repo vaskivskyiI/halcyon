@@ -23,6 +23,16 @@ export function mergedOf(userId) {
   return showShared ? sharedOf(userId).filter((s) => !hiddenShared.map(Number).includes(s.id)) : [];
 }
 /**
+ * The shared spaces the person's AI may read: those shown with their own mail. A space that keeps its AI on this server
+ * (privacy mode) is left out unless the person's does too: its mail would otherwise reach the person's cloud provider.
+ * A login that only has the space sees only the space, and inside a space nothing is added.
+ */
+export function aiSpacesOf(userId) {
+  const mine = getSettings(userId).ai;
+  return mergedOf(userId).filter((s) => { const a = getSettings(s.id).ai; return a.enabled !== false && (!a.privacyMode || mine.privacyMode); });
+}
+
+/**
  * A list of one's own with the same list of each shared space shown with it (not while working inside a space). The
  * spaces' items say whose they are (owner, ownerName), so the web app sends changes to them as that space.
  */
@@ -209,24 +219,24 @@ export function moveAccount(from, to, accountId, { calendars = false, contacts =
 export function moveCalendar(from, to, calendarId) {
   const c = get('SELECT * FROM calendars WHERE id = ? AND user_id = ?', calendarId, from);
   if (!c) throw new Error('Calendar not found');
-  if (c.account_id) throw new Error('This calendar belongs to a mail account — it moves together with that account');
-  tx(() => { moveCalendarRows(from, to, [c.id]); fixDefaults(from, to); });
+  // A server's calendars share its login, so they go together. One synced through a mail account stays linked to it:
+  // the account's sync keeps it up to date for the space, also when the account stays private.
+  const ids = c.source_id ? idsOf(all('SELECT id FROM calendars WHERE source_id = ? AND user_id = ?', c.source_id, from)) : [c.id];
+  tx(() => { moveCalendarRows(from, to, ids); fixDefaults(from, to); });
   return afterMove(from, to);
 }
 
 export function moveAddressBook(from, to, bookId) {
   const b = get('SELECT * FROM address_books WHERE id = ? AND user_id = ?', bookId, from);
   if (!b) throw new Error('Address book not found');
-  if (b.account_id) throw new Error('This address book belongs to a mail account — it moves together with that account');
   tx(() => { moveBookRows(from, to, [b.id]); fixDefaults(from, to); });
   return afterMove(from, to);
 }
 
-/** A task list with its tasks, like a calendar. The list of a mail account moves with that account. */
+/** A task list with its tasks, like a calendar. One synced through a mail account stays linked to it. */
 export function moveTaskList(from, to, listId) {
   const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', listId, from);
   if (!l) throw new Error('Task list not found');
-  if (l.account_id) throw new Error('This task list belongs to a mail account — it moves together with that account');
   tx(() => {
     run('UPDATE task_lists SET user_id = ?, is_default = 0, space = NULL WHERE id = ?', to, l.id);
     run('UPDATE tasks SET user_id = ? WHERE list_id = ? AND user_id = ?', to, l.id, from);

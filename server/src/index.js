@@ -13,6 +13,7 @@ import diagnosticsRoutes from './routes/diagnostics.js';
 import threadRoutes from './routes/threads.js';
 import senderRoutes from './routes/senders.js';
 import sharedRoutes from './routes/shared.js';
+import ssoRoutes from './routes/sso.js';
 import mcpRoutes from './mcp/server.js';
 import archiveRoutes from './routes/archives.js';
 import { resumeJobs } from './mail/archive.js';
@@ -105,6 +106,7 @@ export async function buildServer({ background = true } = {}) {
   await app.register(threadRoutes);
   await app.register(senderRoutes);
   await app.register(sharedRoutes);
+  await app.register(ssoRoutes);
   await app.register(mcpRoutes);
   await app.register(archiveRoutes);
   await app.register(accountRoutes);

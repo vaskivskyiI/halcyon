@@ -13,6 +13,9 @@ export const config = {
   mailStoreDir: path.join(dataDir, 'mail'),
   webDir: path.resolve(env.HALCYON_WEB_DIR || path.join(import.meta.dirname, '../../web/dist')),
   publicUrl: (env.HALCYON_PUBLIC_URL || '').replace(/\/$/, ''),
+  // A companion app on the same server (Inkwell): shared secret and its exact callback addresses, comma separated.
+  ssoSecret: env.HALCYON_SSO_SECRET || '',
+  ssoRedirects: (env.HALCYON_SSO_REDIRECTS || '').split(',').map((x) => x.trim()).filter(Boolean),
   // Single-user mode is used by the desktop app: requests from loopback are auto-authenticated.
   singleUser: env.HALCYON_SINGLE_USER === '1',
   // When set (desktop app), single-user requests must also present this secret cookie/header.

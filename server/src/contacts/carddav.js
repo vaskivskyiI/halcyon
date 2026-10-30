@@ -37,7 +37,7 @@ export async function syncCardDav(account) {
   const client = await davClient(account, account.carddav_url, 'carddav');
   const books = await client.fetchAddressBooks();
   for (const remote of books) {
-    let book = get('SELECT * FROM address_books WHERE user_id = ? AND url = ?', account.user_id, remote.url);
+    let book = get('SELECT * FROM address_books WHERE url = ? AND (user_id = ? OR account_id = ?)', remote.url, account.user_id, account.id ?? -1);
     if (!book) {
       const r = run("INSERT INTO address_books (user_id, account_id, name, source, url, created_at) VALUES (?, ?, ?, 'carddav', ?, ?)",
         account.user_id, account.id, typeof remote.displayName === 'string' ? remote.displayName : 'Contacts', remote.url, now());

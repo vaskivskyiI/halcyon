@@ -26,6 +26,7 @@ import { describedFor, promptBlock, applyAiTags } from './custom.js';
 import { keywords } from '../util/text.js';
 import { notifyUser } from '../notifications.js';
 import { writingContext, replyPeople } from './context.js';
+import { aiSpacesOf } from '../shared.js';
 
 const log = logger('ai');
 
@@ -155,6 +156,16 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
  * once and new mail shows up immediately). Scoped to the space.
  */
 export function briefLive(userId, space = '') {
+  const own = briefOf(userId, space);
+  if (scope(userId, space)) return own;
+  for (const sp of aiSpacesOf(userId)) {
+    const r = briefOf(sp.id, '');
+    for (const k of Object.keys(own)) own[k].push(...r[k].map((x) => ({ ...x, owner: sp.id, ownerName: sp.name })));
+  }
+  return own;
+}
+
+function briefOf(userId, space) {
   const sc = scope(userId, space);
   const accIn = inIds('m.account_id', sc?.accountIds);
   const live = `i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${now()})`;
@@ -829,26 +840,32 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
   if (cached && !force) return { day: today, space: sc?.space || '', content: cached.content_json, createdAt: cached.created_at, model: cached.model };
   if (cacheOnly) { enqueue(userId, 'brief', key, 60); return { day: today, space: sc?.space || '', content: null, pending: true }; }
   const { ctx, uiLanguage, settings } = ctxFor(userId);
-  const accIn = inIds('m.account_id', sc?.accountIds);
-  const since = now() - 36 * 3600e3;
-  const important = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.action_items_json
-    FROM messages m JOIN folders f ON f.id = m.folder_id LEFT JOIN ai_insights i ON i.message_id = m.id
-    WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL
-      AND (i.message_id IS NULL OR (i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${now()})))
-    ORDER BY COALESCE(i.priority, 40) DESC, m.date DESC LIMIT 25`, userId, since);
-  const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, i.summary FROM messages m JOIN ai_insights i ON i.message_id = m.id
-    WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, userId, now() - 7 * 864e5);
-  const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
   const tz = getSettings(userId).calendar.timezone;
-  const events = (sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
-  const tasks = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
-    AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn})) ORDER BY due LIMIT 15`, userId, end.getTime(), userId)
-    .map((t) => ({ title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));
+  // The day of everything this login sees: its own and the shared spaces shown with it.
+  const gather = (uid, sc, space = '') => {
+    const accIn = inIds('m.account_id', sc?.accountIds);
+    const since = now() - 36 * 3600e3;
+    const important = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.action_items_json
+      FROM messages m JOIN folders f ON f.id = m.folder_id LEFT JOIN ai_insights i ON i.message_id = m.id
+      WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL
+        AND (i.message_id IS NULL OR (i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${now()})))
+      ORDER BY COALESCE(i.priority, 40) DESC, m.date DESC LIMIT 25`, uid, since);
+    const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, i.summary FROM messages m JOIN ai_insights i ON i.message_id = m.id
+      WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, uid, now() - 7 * 864e5);
+    const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
+    const events = (sc && !sc.calendarIds.length ? [] : listRange(uid, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
+    const tasks = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
+      AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn})) ORDER BY due LIMIT 15`, uid, end.getTime(), uid)
+      .map((t) => ({ title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));
+    return { important, awaiting, events, tasks, space };
+  };
+  const parts = [gather(userId, sc), ...(sc ? [] : aiSpacesOf(userId).map((sp) => gather(sp.id, null, sp.name)))];
+  const inSpace = (x, p) => (p.space ? { ...x, space: p.space } : x);
   const data = {
     date: today,
-    recentEmails: important.map((m) => ({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, priority: m.priority, needsReply: !!m.needs_reply, unread: !m.is_read })),
-    awaitingYourReply: awaiting.map((m) => ({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, receivedDaysAgo: Math.round((now() - m.date) / 864e5) })),
-    events, tasks,
+    recentEmails: parts.flatMap((p) => p.important.map((m) => inSpace({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, priority: m.priority, needsReply: !!m.needs_reply, unread: !m.is_read }, p))),
+    awaitingYourReply: parts.flatMap((p) => p.awaiting.map((m) => inSpace({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, receivedDaysAgo: Math.round((now() - m.date) / 864e5) }, p))),
+    events: parts.flatMap((p) => p.events.map((e) => inSpace(e, p))), tasks: parts.flatMap((p) => p.tasks.map((x) => inSpace(x, p))),
   };
   const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: summaryLanguage(settings, uiLanguage, 'brief'), data }), temperature: 0.3, maxTokens: 1200, interactive });
   run('INSERT OR REPLACE INTO briefs (user_id, day, content_json, model, created_at) VALUES (?, ?, ?, ?, ?)', userId, key, res.text.trim(), res.model, now());

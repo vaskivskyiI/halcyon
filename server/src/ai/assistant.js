@@ -1,6 +1,7 @@
 // "Ask your inbox": retrieval-augmented chat over the AI memory (email chunks, conversation summaries, events,
 // contacts, facts) plus keyword search, calendar and tasks. A chat is bound to the space it was started in and
 // only ever retrieves data visible in that space.
+import { aiSpacesOf } from '../shared.js';
 import { get, all, run, json, now } from '../db/index.js';
 import { getSettings } from '../settings.js';
 import { chat } from './router.js';
@@ -33,7 +34,7 @@ const relDays = (t) => {
 const OPEN_ITEMS_Q = /attention|important|urgent|to-?do|act on|action|reply|respond|pending|open|outstanding|today|tomorrow|this week|need to|should i|upcoming|next|nujn|odgovor|nalog|pomembn|danes|jutri/i;
 const PAST_Q = /last (year|month|week)|ago|history|earlier|previous|in 20\d\d|lani|prejšnj|zgodovin/i;
 
-export async function buildContext(userId, question, sc) {
+export async function buildContext(userId, question, sc, { mails = 8 } = {}) {
   const tz = getSettings(userId).calendar.timezone;
   const when = (t) => `${localStamp(t, tz)} (${relDays(t)})`;
   const openQ = OPEN_ITEMS_Q.test(question) && !PAST_Q.test(question);
@@ -65,7 +66,7 @@ export async function buildContext(userId, question, sc) {
   const texts = memoryText([...bestChunk.values(), ...hits.filter((h) => h.kind !== 'message').map((h) => h.id)]);
   // The scope check is repeated here: memory hits are only candidates, the database decides what is visible.
   // Small local models have short context windows (often 8k tokens): keep the prompt compact.
-  const msgs = ids.map((id) => get(`SELECT m.*, i.summary AS ai_summary FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id = ? AND m.user_id = ? AND ${accIn}`, id, userId)).filter(Boolean).slice(0, 8);
+  const msgs = ids.map((id) => get(`SELECT m.*, i.summary AS ai_summary FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id = ? AND m.user_id = ? AND ${accIn}`, id, userId)).filter(Boolean).slice(0, mails);
   const emailPart = msgs.map((m) => {
     // The matching passage is kept whole (it is what answers the question); otherwise the start of the email.
     const excerpt = bestChunk.has(m.id) && texts.get(bestChunk.get(m.id)) ? chunkBody(texts.get(bestChunk.get(m.id))).slice(0, 1500) : stripQuoted(m.body_text).slice(0, 1000);
@@ -177,12 +178,19 @@ export async function ask(userId, { chatId, question, space = '', author = null 
   const sc = scope(userId, chatRow.space);
   const history = all('SELECT role, content FROM chat_messages WHERE chat_id = ? ORDER BY id DESC LIMIT 10', chatRow.id).reverse();
   onStatus?.('Searching your mail…');
-  const { text, sources } = await buildContext(userId, question, sc);
+  // What the login sees, the AI sees: its own and the shared spaces shown with it. A view limited to one space stays so.
+  const spaces = aiSpacesOf(userId).filter((s) => !sc || s.name.toLowerCase() === sc.space.toLowerCase());
+  const mails = spaces.length ? Math.max(4, Math.ceil(8 / (spaces.length + 1))) : 8;
+  const own = await buildContext(userId, question, sc, { mails });
+  const theirs = (await Promise.all(spaces.map((s) => buildContext(s.id, question, null, { mails }).then((r) => ({ ...r, space: s })).catch(() => null)))).filter(Boolean);
+  const text = [own.text, ...theirs.map((t) => `=== SHARED SPACE "${t.space.name}" (what the user shares with others) ===\n${t.text}`)].join('\n\n');
+  const sources = [...own.sources, ...theirs.flatMap((t) => t.sources.map((x) => ({ ...x, owner: t.space.id, ownerName: t.space.name })))];
   onStatus?.(`Reading ${sources.length} email${sources.length === 1 ? '' : 's'}…`);
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const settings = getSettings(userId);
   const accounts = userAccounts(userId).filter((a) => !sc || sc.accountIds.includes(a.id));
-  const ctx = userContext(user, settings, accounts) + (sc ? `\nThis conversation is limited to the user's "${sc.space}" space; you only see its mail, calendars and contacts.` : '');
+  const ctx = userContext(user, settings, accounts) + (sc ? `\nThis conversation is limited to the user's "${sc.space}" space; you only see its mail, calendars and contacts.` : '')
+    + (theirs.length ? `\nBesides their own, you see the shared space${theirs.length > 1 ? 's' : ''} ${theirs.map((t) => `"${t.space.name}"`).join(', ')}; say which an item belongs to when it matters.` : '');
   // A busy or stuck model server must not leave the user staring at a spinner: give up if no answer starts in time.
   const ctl = new AbortController();
   signal?.addEventListener('abort', () => ctl.abort(signal.reason));

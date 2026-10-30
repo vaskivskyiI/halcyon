@@ -874,16 +874,21 @@ export default async function mailRoutes(app) {
     const f = parseQuery(req.query.q);
     const words = [...f.terms.filter((t) => t !== 'OR'), ...f.bodyTerms];
     if (!words.length) return { items: [] };
-    const query = await embedQuery(req.user.id, words.join(' '));
-    if (!query) return { items: [], unavailable: true };
-    const exclude = new Set(ids(req.query.exclude));
-    const hits = messageHits(req.user.id, query, 40, sc).filter((h) => !exclude.has(h.id) && h.score > 0.3);
-    if (!hits.length) return { items: [] };
-    const { where, params } = buildWhere(req.user.id, { ...f, terms: [], bodyTerms: [] }, sc);
-    const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const open = openChecker(req.user.id);
-    return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map((r) => listItem(r, open)) };
+    const search = async (uid, sc) => {
+      const query = await embedQuery(uid, words.join(' '));
+      if (!query) return { items: [], unavailable: true };
+      const exclude = new Set(ids(req.query.exclude));
+      const hits = messageHits(uid, query, 40, sc).filter((h) => !exclude.has(h.id) && h.score > 0.3);
+      if (!hits.length) return { items: [] };
+      const { where, params } = buildWhere(uid, { ...f, terms: [], bodyTerms: [] }, sc);
+      const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const open = openChecker(uid);
+      return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map((r) => listItem(r, open)) };
+    };
+    const own = await search(req.user.id, sc);
+    const rest = await Promise.all((sc ? [] : mergedSpaces(req)).map(async (sp) => ({ sp, r: await search(sp.id, null).catch(() => ({ items: [] })) })));
+    return { ...own, items: [...own.items, ...rest.flatMap(({ sp, r }) => r.items.map((m) => ({ ...m, owner: sp.id, ownerName: sp.name })))] };
   });
 }
 
