@@ -15,7 +15,7 @@ export async function inkwellLinks(kind, refs) {
   const key = `${kind}:${ids.join(',')}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL) return hit.data;
-  const data = await api.get(`/api/integrations/inkwell/links?kind=${kind}&ref=${ids.join(',')}`).catch(() => ({ url: null, links: [] }));
+  const data = api.get(`/api/integrations/inkwell/links?kind=${kind}&ref=${ids.join(',')}`).catch(() => ({ url: null, links: [] }));
   cache.set(key, { at: Date.now(), data });
   return data;
 }
@@ -31,8 +31,13 @@ export default function InkwellNotes({ kind, refs, item, style, part }) {
   useEffect(() => {
     let live = true;
     setData(null);
-    inkwellLinks(kind, refs || []).then((d) => { if (live) setData(d); });
-    return () => { live = false; };
+    const ask = () => inkwellLinks(kind, refs || []).then((d) => { if (live) setData(d); });
+    ask();
+    // Back from Inkwell, where a note may just have been made (also when the browser restores this page as it was).
+    const back = () => { forgetInkwellLinks(); ask(); };
+    window.addEventListener('focus', back);
+    window.addEventListener('pageshow', back);
+    return () => { live = false; window.removeEventListener('focus', back); window.removeEventListener('pageshow', back); };
   }, [kind, key]);
   if (!data?.url || data.error) return null;
   const seen = new Set();

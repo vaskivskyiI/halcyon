@@ -928,6 +928,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (date, and time if stated) of an action item; `serializeInsight` hides them for mail analysed earlier.
 - Settings → Users: PATCH `/api/admin/users/:id` (name, email, isAdmin; the last admin keeps the role), POST
   `/api/admin/users/:id/password` (no old password needed; ends that user's sessions, not the caller's).
+- Inkwell lookups: email refs include the other copies of the email (same Message-ID); InkwellNotes asks again on focus
+  and pageshow, so a note made in Inkwell shows on return. The recent-conversations chip is on every message.
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return

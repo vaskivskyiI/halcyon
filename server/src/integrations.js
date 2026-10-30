@@ -1,5 +1,5 @@
 import { Agent, fetch as undiciFetch } from 'undici';
-import { get, run, now } from './db/index.js';
+import { all, get, run, now } from './db/index.js';
 import { encrypt, decrypt } from './util/crypto.js';
 import { tlsOf } from './mail/connection.js';
 
@@ -79,8 +79,11 @@ export async function inkwellLookup(userId, kind, refs, { signal } = {}) {
   const c = inkwellConfig(userId);
   if (!c?.url || !c.token) return null;
   if (!INKWELL_KINDS.includes(kind)) throw Object.assign(new Error('Unknown kind'), { statusCode: 400 });
-  const ids = [...new Set(refs.map((r) => String(r).trim()).filter((r) => /^\d+$/.test(r)))].slice(0, 100);
+  let ids = [...new Set(refs.map((r) => String(r).trim()).filter((r) => /^\d+$/.test(r)))].slice(0, 100);
   if (!ids.length) return [];
+  // A note is linked to the copy it was made from (Inbox, Archive, Gmail's All Mail): the other copies are the same email.
+  if (kind === 'email') ids = [...new Set([...ids, ...all(`SELECT DISTINCT c.id FROM messages m JOIN messages c ON c.user_id = m.user_id AND c.message_id = m.message_id
+    WHERE m.id IN (${ids.join(',')}) AND COALESCE(m.message_id, '') != ''`).map((r) => String(r.id))])].slice(0, 100);
   const r = await inkFetch(c)(`${c.url}/api/links/lookup?kind=${kind}&ref=${ids.join(',')}`, {
     headers: { authorization: `Bearer ${c.token}`, accept: 'application/json' }, signal: signal || AbortSignal.timeout(TIMEOUT_MS),
   });

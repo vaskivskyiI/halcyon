@@ -328,7 +328,7 @@ export default function Reader({ id, view }) {
   ]);
 
   const files = threadFiles(msgs);
-  const inkwell = { kind: 'email', refs: msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id),
+  const inkwell = { kind: 'email', refs: [inkMsg.id, ...msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)],
     item: { ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date, space: store.get().accounts?.find((a) => a.id === inkMsg.accountId)?.space } };
   const showMessage = (mid) => {
     setShowAll(true);
@@ -427,7 +427,7 @@ export default function Reader({ id, view }) {
             let n = 0; while (i + n < msgs.length - 2 && !expanded.has(msgs[i + n].id)) n++;
             return <button key={`fold${m.id}`} className="thread-fold" onClick={() => setShowAll(true)}>{n} earlier message{n > 1 ? 's' : ''}</button>;
           }
-          return <MessageCard key={m.id} m={m} view={view} recentOf={m.id === latest.id} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const x = new Set(s); x.has(m.id) ? x.delete(m.id) : x.add(m.id); return x; })}
+          return <MessageCard key={m.id} m={m} view={view} expanded={expanded.has(m.id) || msgs.length === 1} toggle={() => setExpanded((s) => { const x = new Set(s); x.has(m.id) ? x.delete(m.id) : x.add(m.id); return x; })}
             onReply={(mode) => reply(mode, m)} onShowImages={() => { setAllowImages(true); load(true); }} translation={thread.translations?.[m.id]} onInviteChanged={load}
             onExtractEvent={async () => { try { setEventDraft(await api.post('/api/ai/extract-event', { messageId: m.id })); } catch (e) { toastError(e); } }} />;
         })}
@@ -836,9 +836,9 @@ function dragOut(m, a) {
   };
 }
 
-function MessageCard({ m, view, recentOf, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
+function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
-  const recent = useRecentWith(recentOf ? m.id : null);
+  const recent = useRecentWith(m.id);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`} data-msg={m.id}>
       <div className="msg-card-head" onClick={toggle}>
