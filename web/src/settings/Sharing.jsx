@@ -62,7 +62,7 @@ export default function Sharing() {
             <div className="small">
               <b>Shared here</b>
               {/* The space's own empty calendar / contacts (made with it) are not something that was shared. */}
-              {[...s.accounts.map((a) => ['account', a.email, { accountId: a.id }]),
+              {[...s.accounts.map((a) => (a.kind === 'archive' ? ['archive', a.name || a.email, { accountId: a.id }] : ['account', a.email, { accountId: a.id }])),
                 ...s.calendars.filter((c) => !c.accountId && (c.items || c.source !== 'local')).map((c) => ['calendar', c.name, { calendarId: c.id }]),
                 ...s.addressBooks.filter((b) => !b.accountId && (b.items || b.source !== 'local')).map((b) => ['contacts', b.name, { addressBookId: b.id }]),
                 ...s.taskLists.filter((l) => !l.accountId && (l.items || l.source !== 'local' || l.name !== 'Tasks')).map((l) => ['tasks', l.name, { taskListId: l.id }])].map(([kind, label, body]) => (
@@ -105,14 +105,18 @@ function AddToSpace({ space, mine, onDone }) {
   const [calendarId, setCalendarId] = useState('');
   const [bookId, setBookId] = useState('');
   const [listId, setListId] = useState('');
+  const [archiveId, setArchiveId] = useState('');
   const [busy, setBusy] = useState(false);
-  const acc = mine.accounts.find((a) => a.id === Number(accountId));
+  const mail = mine.accounts.filter((a) => a.kind !== 'archive' && !a.owner);
+  const archives = mine.accounts.filter((a) => a.kind === 'archive' && !a.owner);
+  const acc = mail.find((a) => a.id === Number(accountId));
+  const archive = archives.find((a) => a.id === Number(archiveId));
   const accCals = acc ? mine.calendars.filter((c) => c.accountId === acc.id) : [];
   const accBooks = acc ? mine.books.filter((b) => b.accountId === acc.id) : [];
   const cal = mine.calendars.find((c) => c.id === Number(calendarId));
   const book = mine.books.find((b) => b.id === Number(bookId));
   const list = mine.lists.find((l) => l.id === Number(listId));
-  const what = [acc && `the mail account ${acc.email}${withCal && accCals.length ? ' with its synced calendar' : ''}${withBook && accBooks.length ? ' with its synced contacts' : ''}`, cal && `the calendar “${cal.name}”`, book && `the contacts “${book.name}”`, list && `the task list “${list.name}”`].filter(Boolean);
+  const what = [acc && `the mail account ${acc.email}${withCal && accCals.length ? ' with its synced calendar' : ''}${withBook && accBooks.length ? ' with its synced contacts' : ''}`, cal && `the calendar “${cal.name}”`, book && `the contacts “${book.name}”`, list && `the task list “${list.name}”`, archive && `the archive “${archive.name || archive.email}” with all its mail`].filter(Boolean);
   const share = async () => {
     const kept = [acc && accCals.length && !withCal && 'its synced calendar', acc && accBooks.length && !withBook && 'its synced contacts'].filter(Boolean);
     if (!confirm(`Share in “${space.name}”: ${what.join(', ')}?\n\nEveryone in the space will see it there (and it leaves your own mail). The AI analysis made so far is kept.${kept.length ? `\n\nNot shared: ${kept.join(' and ')} — they stay yours as a copy but are no longer synced (their sync uses the account's login).` : ''}`)) return;
@@ -122,8 +126,9 @@ function AddToSpace({ space, mine, onDone }) {
       if (cal) await api.post(`/api/shared/${space.id}/move-in`, { calendarId: cal.id });
       if (book) await api.post(`/api/shared/${space.id}/move-in`, { addressBookId: book.id });
       if (list) await api.post(`/api/shared/${space.id}/move-in`, { taskListId: list.id });
+      if (archive) await api.post(`/api/shared/${space.id}/move-in`, { accountId: archive.id });
       toast(`Shared in “${space.name}”`);
-      setAccountId(''); setCalendarId(''); setBookId(''); setListId(''); setWithCal(false); setWithBook(false);
+      setAccountId(''); setCalendarId(''); setBookId(''); setListId(''); setArchiveId(''); setWithCal(false); setWithBook(false);
       onDone();
     } catch (e) { toastError(e); } finally { setBusy(false); }
   };
@@ -132,13 +137,15 @@ function AddToSpace({ space, mine, onDone }) {
       <b>Add from my mail</b>
       <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
         <select className="input" style={{ width: 'auto', height: 30 }} value={accountId} onChange={(e) => { setAccountId(e.target.value); setWithCal(false); setWithBook(false); }}>
-          <option value="">Mail account: none</option>{mine.accounts.map((a) => <option key={a.id} value={a.id}>{a.email}</option>)}</select>
+          <option value="">Mail account: none</option>{mail.map((a) => <option key={a.id} value={a.id}>{a.email}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={calendarId} onChange={(e) => setCalendarId(e.target.value)}>
           <option value="">Calendar: none</option>{mine.calendars.filter((c) => !c.accountId && !c.readonly).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={bookId} onChange={(e) => setBookId(e.target.value)}>
           <option value="">Contacts: none</option>{mine.books.filter((b) => !b.accountId && !b.readonly).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={listId} onChange={(e) => setListId(e.target.value)}>
           <option value="">Tasks: none</option>{mine.lists.filter((l) => !l.accountId && !l.readonly).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
+        {archives.length > 0 && <select className="input" style={{ width: 'auto', height: 30 }} value={archiveId} onChange={(e) => setArchiveId(e.target.value)}>
+          <option value="">Archive: none</option>{archives.map((a) => <option key={a.id} value={a.id}>{a.name || a.email}</option>)}</select>}
       </div>
       {acc && (accCals.length > 0 || accBooks.length > 0) && <div style={{ display: 'grid', gap: 2 }}>
         {accCals.length > 0 && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={withCal} onChange={(e) => setWithCal(e.target.checked)} /> Also share the calendar synced from this account ({accCals.map((c) => c.name).join(', ')})</label>}

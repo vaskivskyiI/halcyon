@@ -152,6 +152,7 @@ function fixDefaults(from, to) {
 export function moveAccount(from, to, accountId, { calendars = false, contacts = false } = {}) {
   const acc = get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', accountId, from);
   if (!acc) throw new Error('Account not found');
+  if (get("SELECT 1 AS x FROM archive_jobs WHERE account_id = ? AND status IN ('queued', 'running')", acc.id)) throw new Error('This archive is still importing or moving mail — share it when that is finished');
   tx(() => {
     // Calendars / contacts synced through this account that are not to be shared stay with the person as their own
     // copy; they are no longer synced (their sync runs with the account's login, which now belongs to the space).
@@ -168,7 +169,7 @@ export function moveAccount(from, to, accountId, { calendars = false, contacts =
     remapLabels(from, to, msgIds);
     run('UPDATE messages SET user_id = ? WHERE account_id = ?', to, acc.id);
     // Conversation summaries go along when the whole conversation does; otherwise they are made again.
-    for (const t of all(`SELECT DISTINCT thread_id FROM messages WHERE account_id = ? AND thread_id IS NOT NULL`, acc.id)) {
+    for (const t of all(`SELECT DISTINCT m.thread_id FROM messages m JOIN thread_summaries s ON s.user_id = ? AND s.thread_id = m.thread_id WHERE m.account_id = ?`, from, acc.id)) {
       const rest = get('SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND thread_id = ?', from, t.thread_id).n;
       if (rest) run('DELETE FROM thread_summaries WHERE user_id = ? AND thread_id = ?', from, t.thread_id);
       else run('UPDATE OR REPLACE thread_summaries SET user_id = ? WHERE user_id = ? AND thread_id = ?', to, from, t.thread_id);
@@ -177,6 +178,7 @@ export function moveAccount(from, to, accountId, { calendars = false, contacts =
     run(`UPDATE ai_feedback SET user_id = ? WHERE user_id = ? AND message_id IN (${list})`, to, from);
     run(`UPDATE ai_approvals SET user_id = ? WHERE user_id = ? AND message_id IN (${list})`, to, from);
     run(`UPDATE tasks SET user_id = ? WHERE user_id = ? AND source_message_id IN (${list})`, to, from);
+    run('UPDATE archive_jobs SET user_id = ? WHERE account_id = ? AND user_id = ?', to, acc.id, from);
     // Queued AI work for these messages: done again for the new owner (finished work is kept).
     run(`DELETE FROM ai_jobs WHERE user_id = ? AND type IN ('analyze', 'embed', 'memory', 'draft') AND ref_id IN (${msgIds.map((id) => `'${id}'`).join(',') || "''"})`, from);
     run('UPDATE drafts SET user_id = ? WHERE account_id = ? AND user_id = ?', to, acc.id, from);

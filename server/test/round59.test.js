@@ -51,3 +51,20 @@ test('someone else\'s list cannot be taken, and only the owner moves it back', a
   assert.equal((await call(ann, 'GET', '/api/shared')).data.find((x) => x.id === space).taskLists.some((l) => l.id === list), false);
   assert.ok(back);
 });
+
+test('an archive is shared with its mail, and not while it is still importing', async () => {
+  const { db } = await import('../src/db/index.js');
+  const a = (await call(ann, 'POST', '/api/archives', { name: 'Old mail' })).data;
+  const f = { id: Number(db.prepare("INSERT INTO folders (account_id, path, name) VALUES (?, 'Old', 'Old')").run(a.id).lastInsertRowid) };
+  const uid = db.prepare('SELECT user_id FROM accounts WHERE id = ?').get(a.id).user_id;
+  const msg = Number(db.prepare("INSERT INTO messages (user_id, account_id, folder_id, message_id, subject, from_addr, date) VALUES (?, ?, ?, '<o@x>', 'Old contract', 'o@x.example', ?)").run(uid, a.id, f.id, Date.now() - 864e8).lastInsertRowid);
+  const job = db.prepare("INSERT INTO archive_jobs (user_id, account_id, type, status, created_at) VALUES (?, ?, 'import', 'running', ?)").run(uid, a.id, Date.now()).lastInsertRowid;
+  assert.equal((await call(ann, 'POST', `/api/shared/${space}/move-in`, { accountId: a.id })).status, 400);
+  db.prepare("UPDATE archive_jobs SET status = 'done' WHERE id = ?").run(job);
+  assert.equal((await call(ann, 'POST', `/api/shared/${space}/move-in`, { accountId: a.id })).status, 200);
+  assert.ok((await call(ben, 'GET', '/api/archives', undefined, space)).data.archives.some((x) => x.id === a.id));
+  assert.equal((await call(ben, 'GET', `/api/messages/${msg}`, undefined, space)).status, 200);
+  assert.equal((await call(ann, 'GET', '/api/shared')).data.find((x) => x.id === space).accounts.find((x) => x.id === a.id).kind, 'archive');
+  assert.equal((await call(ann, 'POST', `/api/shared/${space}/move-out`, { accountId: a.id })).status, 200);
+  assert.equal(db.prepare('SELECT user_id FROM messages WHERE id = ?').get(msg).user_id, uid);
+});

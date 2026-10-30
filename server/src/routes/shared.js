@@ -19,7 +19,7 @@ export default async function sharedRoutes(app) {
   app.get('/api/shared', async (req) => S.sharedOf(req.user.id).map((s) => ({
     ...s,
     members: S.membersOf(s.id).map((m) => ({ id: m.id, name: m.name, email: m.email, role: m.role, you: m.id === req.user.id })),
-    accounts: all('SELECT id, email, name FROM accounts WHERE user_id = ? ORDER BY sort_order, id', s.id),
+    accounts: all("SELECT id, email, name, COALESCE(kind, 'mail') AS kind FROM accounts WHERE user_id = ? ORDER BY sort_order, id", s.id),
     calendars: all("SELECT c.id, c.name, c.account_id AS accountId, c.source, (SELECT COUNT(*) FROM events e WHERE e.calendar_id = c.id AND e.deleted = 0) AS items FROM calendars c WHERE c.user_id = ? ORDER BY c.id", s.id),
     addressBooks: all("SELECT b.id, b.name, b.account_id AS accountId, b.source, (SELECT COUNT(*) FROM contacts x WHERE x.address_book_id = b.id AND x.deleted = 0) AS items FROM address_books b WHERE b.user_id = ? ORDER BY b.id", s.id),
     taskLists: all('SELECT l.id, l.name, l.account_id AS accountId, l.source, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS items FROM task_lists l WHERE l.user_id = ? ORDER BY l.id', s.id),
