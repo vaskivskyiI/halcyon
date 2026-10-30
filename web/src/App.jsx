@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
-import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command, NotebookPen } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing, offlineState } from './api.js';
 import './back.js';
 import { pushIsOn } from './push.js';
 import { loadQuickSteps } from './mail/extras.js';
 import { store } from './store.js';
 import { useRoute } from './router.js';
-import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setShowShared, applyMergedSpaces } from './data.js';
+import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, loadInkwell, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setShowShared, applyMergedSpaces } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
 import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
@@ -39,6 +39,7 @@ export default function App() {
         applyMergedSpaces();
         loadQuickSteps();
         await Promise.all([loadFolders(), loadAccounts(), loadLabels(), loadProviders()]);
+        loadInkwell();
         connectEvents();
       }
     } catch (e) { setStatus({ error: e.message }); }
@@ -135,6 +136,7 @@ function Shell() {
   const theme = ['light', 'dark', 'system'].includes(settings?.ui?.theme) ? settings.ui.theme : 'system';
   const space = store.use((s) => s.space);
   const connected = store.use((s) => s.connected);
+  const inkwell = store.use((s) => s.inkwell);
   const taskDialog = store.use((s) => s.taskDialog);
   const [syncing, setSyncing] = useState(false);
 
@@ -207,6 +209,10 @@ function Shell() {
             <Icon size={21} />{badge > 0 && <span className="badge">{badge > 99 ? '99+' : badge}</span>}
           </button>
         ))}
+        {/* Inkwell, the notes app (Settings → Integrations): same tab, Ctrl/middle click a new one; the desktop app opens it in the browser. */}
+        {inkwell && <button title="Notes (Inkwell)" aria-label="Notes (Inkwell)"
+          onClick={(e) => (e.ctrlKey || e.metaKey ? window.open(`${inkwell}/`, '_blank', 'noopener') : location.assign(`${inkwell}/`))}
+          onAuxClick={(e) => { if (e.button === 1) window.open(`${inkwell}/`, '_blank', 'noopener'); }}><NotebookPen size={20} /></button>}
         <button title="Go to, do, find — Ctrl+K" aria-label="Go to or do (Ctrl+K)" onClick={() => window.dispatchEvent(new Event('halcyon:palette'))}><Command size={19} /></button>
         <div className="spacer" />
         <Problems />

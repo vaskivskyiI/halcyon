@@ -161,6 +161,7 @@ export default function Reader({ id, view }) {
   const drafts = (thread.related?.drafts || []).filter((d) => !(d.quick && d.inReplyToId === latest.id)); // that one is in the quick reply box
   const adopted = new Set(drafts.map((d) => d.serverMsgid).filter(Boolean));
   const target = thread.current;
+  const inkMsg = isDraftMsg(target) ? latest : target; // the email a new Inkwell note is about
   const ins = latest.insight || target.insight;
   const ids = conv ? msgs.filter((m) => !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent').map((m) => m.id) : [target.id];
   const act = (requested, extra) => {
@@ -376,7 +377,8 @@ export default function Reader({ id, view }) {
           }} />}
 
         {!isDraftMsg(latest) && <RecentWith messageId={latest.id} view={view} />}
-        {!isDraftMsg(latest) && <InkwellNotes kind="email" refs={msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)} />}
+        {!isDraftMsg(latest) && <InkwellNotes kind="email" refs={msgs.filter((m) => !isDraftMsg(m)).map((m) => m.id)}
+          item={{ ref: inkMsg.id, title: inkMsg.subject, from: addrFull(inkMsg.from), date: inkMsg.date }} />}
 
         {msgs.map((m, i) => {
           if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;

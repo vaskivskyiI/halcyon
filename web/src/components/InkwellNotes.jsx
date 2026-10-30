@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NotebookPen, Plus } from 'lucide-react';
 import { api } from '../api.js';
+import { inkwellNewUrl } from '../../../server/src/util/inkwell.js';
 
 // Answers per page load for a minute, so reopening the same mail or event does not ask Inkwell again.
 const cache = new Map();
@@ -20,10 +21,10 @@ export async function inkwellLinks(kind, refs) {
 }
 
 /**
- * Inkwell pages linked to this email / event / task, and a button for a new one. Renders nothing while Inkwell is not
+ * Inkwell pages linked to this email / event / task, and a button for a new one (`item`: ref and details for it). Renders nothing while Inkwell is not
  * connected or does not answer, so the view stays as it is without it.
  */
-export default function InkwellNotes({ kind, refs, style }) {
+export default function InkwellNotes({ kind, refs, item, style }) {
   const [data, setData] = useState(null);
   const key = (refs || []).filter((r) => r != null).join(',');
   useEffect(() => {
@@ -38,7 +39,8 @@ export default function InkwellNotes({ kind, refs, style }) {
   return (
     <div className="card inkwell-notes" style={style}>
       <div className="inkwell-head"><NotebookPen size={13} /><span className="grow">Notes{links.length ? <span className="muted"> · {links.length}</span> : ''}</span>
-        <a className="btn sm ghost" href={`${data.url}/#/`} target="_blank" rel="noreferrer" title="Opens Inkwell"><Plus size={13} /> New note in Inkwell</a></div>
+        {item?.ref != null && <a className="btn sm ghost" href={inkwellNewUrl(data.url, kind, item)} title={links.length ? 'Opens the note linked to this in Inkwell' : 'Makes a note in Inkwell, linked to this'}>
+          <Plus size={13} /> {links.length ? 'Open in Inkwell' : 'New note in Inkwell'}</a>}</div>
       {links.map((l) => (
         <a key={l.id} className="recent-row" href={l.url} target="_blank" rel="noreferrer">
           <span className="truncate">{l.icon ? `${l.icon} ` : ''}{l.title || 'Untitled'}</span>

@@ -892,3 +892,7 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   accounts' Server certificate) or no check; requests then go through an undici Agent built from `tlsOf()`.
   Certificate errors say what to do (`inkwellError`). Tests use `server/test/fixtures/tls` (test CA + server
   certificate for 127.0.0.1, valid for 100 years; the CA key is not kept).
+- "New note in Inkwell" (or "Open in Inkwell" when notes are linked) opens `<inkwell>/#/new?kind=&ref=&title=…` in the
+  same tab (event: start, end, location, attendees; email: from, date; task: due — `server/src/util/inkwell.js`
+  `inkwellNewUrl`, shared with the web UI): Inkwell opens the linked note or makes one. The rail has "Notes" (opens
+  Inkwell) while it is connected (`store.inkwell`, data.js `loadInkwell`).

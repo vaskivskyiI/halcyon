@@ -624,7 +624,8 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
         </select>
       </div>
       <textarea className="input" rows={4} placeholder="Description" value={ev.description || ''} onChange={(e) => set('description', e.target.value)} disabled={readonly} />
-      {isExisting && <InkwellNotes kind="event" refs={[initial.id, initial.seriesId]} style={{ margin: 0 }} />}
+      {isExisting && <InkwellNotes kind="event" refs={[initial.id, initial.seriesId]} style={{ margin: 0 }}
+        item={{ ref: initial.seriesId || initial.id, title: ev.title, start: ev.start, end: ev.end, location: ev.location, attendees: (ev.attendees || []).map((a) => a.name || a.email) }} />}
       {ev.organizer?.email && <div className="small faint">Organizer: {ev.organizer.name || ev.organizer.email}</div>}
       {ev.sourceMessageId && <div className="small"><a href={`#/mail/unified/${ev.sourceMessageId}`} onClick={onClose}>Open related email</a></div>}
       {scopeFor && <ScopeModal title={scopeFor === 'delete' ? 'Delete recurring event' : 'Save recurring event'} onClose={() => setScopeFor(null)} onPick={(s) => { const f = scopeFor; setScopeFor(null); f === 'delete' ? remove(s) : save(s); }} />}

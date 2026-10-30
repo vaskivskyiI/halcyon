@@ -75,6 +75,8 @@ export async function loadFolders() {
 }
 export async function loadAccounts() { store.set({ accounts: await api.get('/api/accounts'), accountsLoaded: true }); }
 export async function loadLabels() { store.set({ labels: await api.get('/api/labels') }); }
+// Inkwell's address when it is connected (Settings → Integrations): the rail's "Notes" opens it.
+export async function loadInkwell() { const r = await api.get('/api/integrations/inkwell').catch(() => null); store.set({ inkwell: r?.configured ? r.url : null }); }
 export async function loadProviders() { store.set({ aiProviders: await api.get('/api/ai/providers') }); }
 
 // Applied at once (a switch flips immediately), then saved; put back if the server refuses.

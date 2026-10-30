@@ -136,3 +136,14 @@ test('Inkwell behind a private CA: refused until its CA is added or checking is 
     assert.ok((await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42')).error, 'checked again');
   } finally { await new Promise((r) => secure.close(r)); }
 });
+
+test('"New note in Inkwell" opens Inkwell\'s #/new with the item, URL-encoded', async () => {
+  const { inkwellNewUrl } = await import('../src/util/inkwell.js');
+  const ev = inkwellNewUrl('https://notes.example.org', 'event', { ref: 42, title: 'Kick-off & plan', start: Date.UTC(2026, 10, 1, 9), end: Date.UTC(2026, 10, 1, 10), location: 'Room 4', attendees: ['Ana Novak', 'bob@x.si'] });
+  assert.equal(ev, 'https://notes.example.org/#/new?kind=event&ref=42&title=Kick-off%20%26%20plan&start=2026-11-01T09%3A00%3A00.000Z&end=2026-11-01T10%3A00%3A00.000Z&location=Room%204&attendees=Ana%20Novak%2C%20bob%40x.si');
+  const q = new URLSearchParams(ev.split('#/new?')[1]);
+  assert.deepEqual([q.get('title'), q.get('attendees')], ['Kick-off & plan', 'Ana Novak, bob@x.si']);
+  const mail = new URLSearchParams(inkwellNewUrl('https://n.example', 'email', { ref: 7, title: 'a+b?', from: 'Ana <ana@x.si>', date: 0, due: null }).split('?')[1]);
+  assert.deepEqual(Object.fromEntries(mail), { kind: 'email', ref: '7', title: 'a+b?', from: 'Ana <ana@x.si>', date: '1970-01-01T00:00:00.000Z' });
+  assert.equal(inkwellNewUrl('https://n.example', 'task', { ref: 3, title: '', due: undefined }), 'https://n.example/#/new?kind=task&ref=3');
+});

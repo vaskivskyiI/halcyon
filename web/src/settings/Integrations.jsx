@@ -3,6 +3,7 @@ import { Check, Unplug } from 'lucide-react';
 import { api } from '../api.js';
 import { toast, toastError } from '../util.js';
 import { forgetInkwellLinks } from '../components/InkwellNotes.jsx';
+import { loadInkwell } from '../data.js';
 import { CertField, tlsBody } from './Accounts.jsx';
 
 /**
@@ -19,7 +20,7 @@ export default function Integrations() {
     setBusy(true);
     try {
       const r = await api.put('/api/integrations/inkwell', { url: f.url, token: f.token || undefined, tls: tlsBody(f.tls) });
-      setInk(r); setF({ url: r.url, token: '', tls: r.tls }); forgetInkwellLinks();
+      setInk(r); setF({ url: r.url, token: '', tls: r.tls }); forgetInkwellLinks(); loadInkwell();
       if (!r.url) return toast('Inkwell disconnected');
       const t = await api.post('/api/integrations/inkwell/test');
       t.ok ? toast('Connected to Inkwell') : toast(`Saved, but: ${t.error}`, { kind: 'error' });
@@ -27,7 +28,7 @@ export default function Integrations() {
   };
   const disconnect = async () => {
     if (!confirm('Disconnect Inkwell? Its notes no longer show next to mail, events and tasks.')) return;
-    try { const r = await api.put('/api/integrations/inkwell', { url: '' }); setInk(r); forgetInkwellLinks(); setF({ url: '', token: '', tls: null }); } catch (e) { toastError(e); }
+    try { const r = await api.put('/api/integrations/inkwell', { url: '' }); setInk(r); forgetInkwellLinks(); loadInkwell(); setF({ url: '', token: '', tls: null }); } catch (e) { toastError(e); }
   };
 
   return (
