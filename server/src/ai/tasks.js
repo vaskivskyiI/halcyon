@@ -70,7 +70,7 @@ export function deadlinesToItems(d, tz, text) {
   for (const e of events.filter(isDeadline)) {
     const n = normalizeEvent(e, tz, { text });
     if (!n) continue;
-    const due = e.all_day || !e.start_time ? String(e.date) : P.localStamp(Date.parse(n.start), tz).match(/d{4}-d{2}-d{2} d{2}:d{2}/)[0];
+    const due = e.all_day || !e.start_time ? String(e.date) : P.localStamp(Date.parse(n.start), tz).match(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/)[0];
     if (items.some((a) => String(a.due || '').slice(0, 10) === due.slice(0, 10))) continue;
     const open = items.find((a) => !a.due);
     if (open) open.due = due; else items.push({ text: String(e.title), due });
@@ -333,8 +333,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     }
     if (!fromMe && isAutomated(m)) res.data.needs_reply = false; // nobody reads a reply
     if (res.data.needs_action && notATask(res.data.action_summary)) res.data.needs_action = false;
-    deadlinesToItems(res.data, tz, `${m.subject || ''}
-${m.body_text || ''}`);
+    deadlinesToItems(res.data, tz, `${m.subject || ''}\n${m.body_text || ''}`);
     // Items listed but the flag forgotten: they count as an action, for the second opinion to judge like any other.
     const listed = (Array.isArray(res.data.action_items) ? res.data.action_items : []).map((a) => String(a?.text ?? a ?? '').trim()).filter((a) => a && !notATask(a));
     if (!fromMe && !res.data.needs_action && listed.length) { res.data.needs_action = true; res.data.action_summary = listed[0]; }
