@@ -209,6 +209,19 @@ export function moveAddressBook(from, to, bookId) {
   return afterMove(from, to);
 }
 
+/** A task list with its tasks, like a calendar. The list of a mail account moves with that account. */
+export function moveTaskList(from, to, listId) {
+  const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', listId, from);
+  if (!l) throw new Error('Task list not found');
+  if (l.account_id) throw new Error('This task list belongs to a mail account — it moves together with that account');
+  tx(() => {
+    run('UPDATE task_lists SET user_id = ?, is_default = 0, space = NULL WHERE id = ?', to, l.id);
+    run('UPDATE tasks SET user_id = ? WHERE list_id = ? AND user_id = ?', to, l.id, from);
+  });
+  for (const u of [from, to]) notify(u, 'tasks:changed', {});
+  return afterMove(from, to);
+}
+
 export function moveTasks(from, to, taskIds) {
   return run(`UPDATE tasks SET user_id = ? WHERE user_id = ? AND id IN (${inList(taskIds)})`, to, from).changes;
 }

@@ -22,6 +22,7 @@ export default async function sharedRoutes(app) {
     accounts: all('SELECT id, email, name FROM accounts WHERE user_id = ? ORDER BY sort_order, id', s.id),
     calendars: all("SELECT c.id, c.name, c.account_id AS accountId, c.source, (SELECT COUNT(*) FROM events e WHERE e.calendar_id = c.id AND e.deleted = 0) AS items FROM calendars c WHERE c.user_id = ? ORDER BY c.id", s.id),
     addressBooks: all("SELECT b.id, b.name, b.account_id AS accountId, b.source, (SELECT COUNT(*) FROM contacts x WHERE x.address_book_id = b.id AND x.deleted = 0) AS items FROM address_books b WHERE b.user_id = ? ORDER BY b.id", s.id),
+    taskLists: all('SELECT l.id, l.name, l.account_id AS accountId, l.source, (SELECT COUNT(*) FROM tasks t WHERE t.list_id = l.id AND t.done = 0) AS items FROM task_lists l WHERE l.user_id = ? ORDER BY l.id', s.id),
     tasks: get('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 0', s.id).n,
     unread: get(`SELECT COUNT(DISTINCT m.thread_id) AS n FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND f.special_use = '\\Inbox' AND m.is_read = 0 AND m.snoozed_until IS NULL`, s.id).n,
   })));
@@ -55,6 +56,7 @@ export default async function sharedRoutes(app) {
       if (b.accountId) return S.moveAccount(req.user.id, id, Number(b.accountId), { calendars: b.withCalendars === true, contacts: b.withContacts === true });
       if (b.calendarId) return S.moveCalendar(req.user.id, id, Number(b.calendarId));
       if (b.addressBookId) return S.moveAddressBook(req.user.id, id, Number(b.addressBookId));
+      if (b.taskListId) return S.moveTaskList(req.user.id, id, Number(b.taskListId));
       if (Array.isArray(b.taskIds)) return { moved: S.moveTasks(req.user.id, id, b.taskIds) };
       throw new Error('Nothing to move');
     });
@@ -66,6 +68,7 @@ export default async function sharedRoutes(app) {
       if (b.accountId) return S.moveAccount(id, req.user.id, Number(b.accountId), { calendars: true, contacts: true });
       if (b.calendarId) return S.moveCalendar(id, req.user.id, Number(b.calendarId));
       if (b.addressBookId) return S.moveAddressBook(id, req.user.id, Number(b.addressBookId));
+      if (b.taskListId) return S.moveTaskList(id, req.user.id, Number(b.taskListId));
       throw new Error('Nothing to move');
     });
   });

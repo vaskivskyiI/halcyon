@@ -13,11 +13,11 @@ import { toast, toastError } from '../util.js';
 export default function Sharing() {
   const shared = store.use((s) => s.shared) || [];
   const acting = store.use((s) => s.acting);
-  const [mine, setMine] = useState({ accounts: [], calendars: [], books: [] });
+  const [mine, setMine] = useState({ accounts: [], calendars: [], books: [], lists: [] });
   const [name, setName] = useState('');
   // Own accounts, calendars and address books; those synced through an account are offered together with it.
-  const loadMine = () => !acting && Promise.all([api.get('/api/accounts'), api.get('/api/calendars?allSpaces=1'), api.get('/api/address-books')])
-    .then(([accounts, calendars, books]) => setMine({ accounts, calendars: calendars.map((c) => ({ ...c, accountId: c.accountId ?? c.account_id ?? null })), books })).catch(() => {});
+  const loadMine = () => !acting && Promise.all([api.get('/api/accounts'), api.get('/api/calendars?allSpaces=1'), api.get('/api/address-books'), api.get('/api/task-lists?all=1')])
+    .then(([accounts, calendars, books, lists]) => setMine({ accounts, calendars: calendars.map((c) => ({ ...c, accountId: c.accountId ?? c.account_id ?? null })), books, lists: lists.map((l) => ({ ...l, accountId: l.accountId ?? l.account_id ?? null })) })).catch(() => {});
   useEffect(() => { loadShared(); loadMine(); }, []);
   const refresh = () => { loadShared(); loadMine(); loadAccounts().catch(() => {}); };
   const call = async (fn, done) => { try { await fn(); if (done) toast(done); refresh(); } catch (e) { toastError(e); } };
@@ -64,13 +64,14 @@ export default function Sharing() {
               {/* The space's own empty calendar / contacts (made with it) are not something that was shared. */}
               {[...s.accounts.map((a) => ['account', a.email, { accountId: a.id }]),
                 ...s.calendars.filter((c) => !c.accountId && (c.items || c.source !== 'local')).map((c) => ['calendar', c.name, { calendarId: c.id }]),
-                ...s.addressBooks.filter((b) => !b.accountId && (b.items || b.source !== 'local')).map((b) => ['contacts', b.name, { addressBookId: b.id }])].map(([kind, label, body]) => (
+                ...s.addressBooks.filter((b) => !b.accountId && (b.items || b.source !== 'local')).map((b) => ['contacts', b.name, { addressBookId: b.id }]),
+                ...s.taskLists.filter((l) => !l.accountId && (l.items || l.source !== 'local' || l.name !== 'Tasks')).map((l) => ['tasks', l.name, { taskListId: l.id }])].map(([kind, label, body]) => (
                 <div key={`${kind}${label}`} className="row" style={{ gap: 6 }}>
                   <span className="grow">{label} <span className="faint">· {kind}</span></span>
                   {owner && <button className="btn sm ghost" title="Back into your own mail" onClick={() => back(body, label)}><Undo2 size={13} /> Move to my mail</button>}
                 </div>
               ))}
-              {!s.accounts.length && !s.calendars.some((c) => c.items) && !s.addressBooks.some((b) => b.items) && <div className="faint">Nothing shared yet.</div>}
+              {!s.accounts.length && !s.calendars.some((c) => c.items) && !s.addressBooks.some((b) => b.items) && !s.tasks && <div className="faint">Nothing shared yet.</div>}
               <div className="faint">{s.tasks} open task{s.tasks === 1 ? '' : 's'} · tasks made from the shared mail are shared · the space has its own calendar and contacts for what is added inside it</div>
             </div>
             <AddToSpace space={s} mine={mine} onDone={refresh} />
@@ -103,13 +104,15 @@ function AddToSpace({ space, mine, onDone }) {
   const [withBook, setWithBook] = useState(false);
   const [calendarId, setCalendarId] = useState('');
   const [bookId, setBookId] = useState('');
+  const [listId, setListId] = useState('');
   const [busy, setBusy] = useState(false);
   const acc = mine.accounts.find((a) => a.id === Number(accountId));
   const accCals = acc ? mine.calendars.filter((c) => c.accountId === acc.id) : [];
   const accBooks = acc ? mine.books.filter((b) => b.accountId === acc.id) : [];
   const cal = mine.calendars.find((c) => c.id === Number(calendarId));
   const book = mine.books.find((b) => b.id === Number(bookId));
-  const what = [acc && `the mail account ${acc.email}${withCal && accCals.length ? ' with its synced calendar' : ''}${withBook && accBooks.length ? ' with its synced contacts' : ''}`, cal && `the calendar “${cal.name}”`, book && `the contacts “${book.name}”`].filter(Boolean);
+  const list = mine.lists.find((l) => l.id === Number(listId));
+  const what = [acc && `the mail account ${acc.email}${withCal && accCals.length ? ' with its synced calendar' : ''}${withBook && accBooks.length ? ' with its synced contacts' : ''}`, cal && `the calendar “${cal.name}”`, book && `the contacts “${book.name}”`, list && `the task list “${list.name}”`].filter(Boolean);
   const share = async () => {
     const kept = [acc && accCals.length && !withCal && 'its synced calendar', acc && accBooks.length && !withBook && 'its synced contacts'].filter(Boolean);
     if (!confirm(`Share in “${space.name}”: ${what.join(', ')}?\n\nEveryone in the space will see it there (and it leaves your own mail). The AI analysis made so far is kept.${kept.length ? `\n\nNot shared: ${kept.join(' and ')} — they stay yours as a copy but are no longer synced (their sync uses the account's login).` : ''}`)) return;
@@ -118,8 +121,9 @@ function AddToSpace({ space, mine, onDone }) {
       if (acc) await api.post(`/api/shared/${space.id}/move-in`, { accountId: acc.id, withCalendars: withCal, withContacts: withBook });
       if (cal) await api.post(`/api/shared/${space.id}/move-in`, { calendarId: cal.id });
       if (book) await api.post(`/api/shared/${space.id}/move-in`, { addressBookId: book.id });
+      if (list) await api.post(`/api/shared/${space.id}/move-in`, { taskListId: list.id });
       toast(`Shared in “${space.name}”`);
-      setAccountId(''); setCalendarId(''); setBookId(''); setWithCal(false); setWithBook(false);
+      setAccountId(''); setCalendarId(''); setBookId(''); setListId(''); setWithCal(false); setWithBook(false);
       onDone();
     } catch (e) { toastError(e); } finally { setBusy(false); }
   };
@@ -133,6 +137,8 @@ function AddToSpace({ space, mine, onDone }) {
           <option value="">Calendar: none</option>{mine.calendars.filter((c) => !c.accountId && !c.readonly).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
         <select className="input" style={{ width: 'auto', height: 30 }} value={bookId} onChange={(e) => setBookId(e.target.value)}>
           <option value="">Contacts: none</option>{mine.books.filter((b) => !b.accountId && !b.readonly).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
+        <select className="input" style={{ width: 'auto', height: 30 }} value={listId} onChange={(e) => setListId(e.target.value)}>
+          <option value="">Tasks: none</option>{mine.lists.filter((l) => !l.accountId && !l.readonly).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
       </div>
       {acc && (accCals.length > 0 || accBooks.length > 0) && <div style={{ display: 'grid', gap: 2 }}>
         {accCals.length > 0 && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={withCal} onChange={(e) => setWithCal(e.target.checked)} /> Also share the calendar synced from this account ({accCals.map((c) => c.name).join(', ')})</label>}
