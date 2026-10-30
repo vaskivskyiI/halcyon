@@ -896,3 +896,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   same tab (event: start, end, location, attendees; email: from, date; task: due — `server/src/util/inkwell.js`
   `inkwellNewUrl`, shared with the web UI): Inkwell opens the linked note or makes one. The rail has "Notes" (opens
   Inkwell) while it is connected (`store.inkwell`, data.js `loadInkwell`).
+
+### All-day events are dates; multi-day selection (migration 45)
+- All-day events are stored as UTC midnight of their date (`allDayMs`, calendar/recurrence.js): createEvent / updateEvent
+  round to it, `dateOnly` in ics.js too, migration 45 converts rows that held a local midnight (their rules fell on the
+  wrong day and their end reached into the next). CalendarView turns them into local midnights on load (`localAllDay`).
+- `expand()` runs rules on wall-clock time in the event's zone (the user's when the zone name is unknown, e.g. Windows
+  names from Outlook), so BYMONTHDAY / BYDAY mean the event's own day and the time stays across DST.
+- Not recoverable automatically: an all-day event made in the editor and already saved to a CalDAV server before this
+  fix was written one day early there, and came back so.
+- `useDaySpan` (CalendarView): press and drag over days in month view or the all-day row of week / day view opens a new
+  all-day event over them. Mouse only, like the time selection.

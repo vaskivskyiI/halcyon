@@ -504,4 +504,13 @@ export const migrations = [
   ALTER TABLE integrations ADD COLUMN tls_ca TEXT;
   ALTER TABLE integrations ADD COLUMN tls_insecure INTEGER DEFAULT 0;
   `,
+  // 45: all-day events are stored as UTC midnight of their date. Those made in the editor had a local midnight: yearly
+  // rules then fell on the wrong day and the end reached into the next day. The nearest UTC midnight is their date.
+  `
+  UPDATE events SET recurrence_id = CAST(round(recurrence_id / 86400000.0) AS INTEGER) * 86400000
+    WHERE all_day = 1 AND recurrence_id IS NOT NULL AND recurrence_id % 86400000 != 0;
+  UPDATE events SET end = MAX(CAST(round(end / 86400000.0) AS INTEGER) * 86400000, CAST(round(start / 86400000.0) AS INTEGER) * 86400000 + 86400000),
+    start = CAST(round(start / 86400000.0) AS INTEGER) * 86400000
+    WHERE all_day = 1 AND (start % 86400000 != 0 OR end % 86400000 != 0);
+  `,
 ];

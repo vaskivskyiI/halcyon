@@ -48,7 +48,8 @@ export default function CalendarView() {
   const [from, to] = rangeFor(view, date, weekStart);
 
   const loadCals = () => api.get('/api/calendars').then(setCalendars).catch(toastError);
-  const load = useCallback(() => api.get(`/api/events?from=${from.getTime()}&to=${to.getTime()}`).then(setEvents).catch(toastError), [from.getTime(), to.getTime()]);
+  // All-day events arrive as UTC dates; here they run from local midnight to local midnight, so they fill their own days.
+  const load = useCallback(() => api.get(`/api/events?from=${from.getTime()}&to=${to.getTime()}`).then((l) => setEvents(l.map(localAllDay))).catch(toastError), [from.getTime(), to.getTime()]);
   useEffect(() => { loadCals(); }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => onEvent((e) => e.type === 'calendar:changed' && (load(), loadCals())), [load]);
@@ -150,7 +151,7 @@ export default function CalendarView() {
           <button className="icon-btn mobile-only" onClick={() => newEvent()}><Plus size={18} /></button>
           <select className="input" style={{ width: 'auto' }} value={view} onChange={(e) => setView(e.target.value)}>{VIEWS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
         </div>
-        {view === 'month' && <MonthView onMenu={eventMenu} from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onOpen={openEvent} onDay={(d) => { setDate(d); setView('day'); }} />}
+        {view === 'month' && <MonthView onMenu={eventMenu} from={from} date={date} events={shown} onNew={(d) => newEvent(d.getTime() + 9 * 3600e3)} onSpan={newEvent} onOpen={openEvent} onDay={(d) => { setDate(d); setView('day'); }} />}
         {['week', 'workweek', 'day'].includes(view) && <TimeGrid onMenu={eventMenu} from={from} days={Math.round((to - from) / 864e5)} events={shown} settings={settings} onNew={newEvent} onOpen={openEvent} onMove={moveEvent} />}
         {evMenuNode}
         {view === 'agenda' && <Agenda events={shown} onOpen={openEvent} onMenu={eventMenu} />}
@@ -161,6 +162,9 @@ export default function CalendarView() {
     </div>
   );
 }
+
+const localDate = (t) => { const d = new Date(t); return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()).getTime(); };
+const localAllDay = (e) => (e.allDay ? { ...e, start: localDate(e.start), end: localDate(e.end) } : e);
 
 function CalendarItem({ c, calendars, reload }) {
   const [openMenu, menuNode] = useMenu();
@@ -280,7 +284,34 @@ function MiniMonth({ date, onPick, weekStart }) {
   );
 }
 
-function MonthView({ from, date, events, onNew, onOpen, onDay, onMenu }) {
+/**
+ * Press on a day and drag over others: a new all-day event over those days (month view, all-day row of week and day
+ * view). Days are found under the pointer by their data-day, so the drag runs across weeks. A plain click does nothing.
+ */
+function useDaySpan(onNew) {
+  const [span, setSpan] = useState(null);
+  const start = (m, day) => {
+    if (m.button !== 0 || m.target.closest('.ev-pill, .num')) return;
+    m.preventDefault();
+    let cur = { from: day, to: day };
+    setSpan(cur);
+    const move = (e) => {
+      const d = Number(document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-day]')?.dataset.day);
+      if (d && d !== cur.to) { cur = { ...cur, to: d }; setSpan(cur); }
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+      setSpan(null);
+      if (cur.from !== cur.to) onNew(Math.min(cur.from, cur.to), true, addDays(new Date(Math.max(cur.from, cur.to)), 1).getTime());
+    };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  };
+  const inSpan = (day) => !!span && day >= Math.min(span.from, span.to) && day <= Math.max(span.from, span.to);
+  return [start, inSpan];
+}
+
+function MonthView({ from, date, events, onNew, onSpan, onOpen, onDay, onMenu }) {
+  const [startSpan, inSpan] = useDaySpan(onSpan);
   const today = startOfDay(new Date()).getTime();
   const days = [...Array(42)].map((_, i) => addDays(from, i));
   return (
@@ -291,7 +322,7 @@ function MonthView({ from, date, events, onNew, onOpen, onDay, onMenu }) {
           const s = d.getTime(), e = s + 864e5;
           const evs = events.filter((x) => x.start < e && (x.end > s || x.start >= s));
           return (
-            <div key={i} className={`month-cell ${d.getMonth() !== date.getMonth() ? 'other' : ''} ${s === today ? 'today' : ''}`} onDoubleClick={() => onNew(d)}>
+            <div key={i} data-day={s} className={`month-cell ${d.getMonth() !== date.getMonth() ? 'other' : ''} ${s === today ? 'today' : ''} ${inSpan(s) ? 'span-sel' : ''}`} onMouseDown={(m) => startSpan(m, s)} onDoubleClick={() => onNew(d)}>
               <span className="num" style={{ cursor: 'pointer' }} onClick={() => onDay(d)}>{d.getDate()}</span>
               {evs.slice(0, 4).map((ev) => (
                 <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={ev.allDay ? { background: ev.color, color: '#fff' } : { color: 'var(--text)' }} onClick={() => onOpen(ev)} onContextMenu={(e) => onMenu?.(e, ev)} title={ev.title}>
@@ -344,6 +375,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60e3); return () => clearInterval(t); }, []);
   const dayList = [...Array(days)].map((_, i) => addDays(from, i));
   const cols = `56px repeat(${days}, 1fr)`;
+  const [startSpan, inSpan] = useDaySpan(onNew);
   const allDay = events.filter((e) => e.allDay || e.end - e.start >= 864e5);
   const timed = events.filter((e) => !(e.allDay || e.end - e.start >= 864e5));
 
@@ -398,7 +430,7 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
         <div className="small faint" style={{ padding: 4, textAlign: 'right' }}>all-day</div>
         {dayList.map((d, i) => {
           const s = d.getTime(), e = s + 864e5;
-          return <div key={i} className="day-col" style={{ padding: 2, display: 'flex', flexDirection: 'column', gap: 2 }} onDoubleClick={() => onNew(s, true)}>
+          return <div key={i} data-day={s} className={`day-col ${inSpan(s) ? 'span-sel' : ''}`} style={{ padding: 2, display: 'flex', flexDirection: 'column', gap: 2 }} onMouseDown={(m) => startSpan(m, s)} onDoubleClick={() => onNew(s, true)}>
             {allDay.filter((x) => x.start < e && x.end > s).map((ev) => <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={{ background: ev.color, color: '#fff' }} onClick={() => onOpen(ev)} onContextMenu={(e) => onMenu?.(e, ev)}>{ev.title}</div>)}
           </div>;
         })}

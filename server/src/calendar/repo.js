@@ -1,3 +1,4 @@
+import { allDayMs } from './recurrence.js';
 import { localToEpoch } from '../util/time.js';
 import { get, all, run, json, now, update, tx } from '../db/index.js';
 import { uuid } from '../util/crypto.js';
@@ -46,7 +47,8 @@ export function createEvent(userId, e, extra = {}) {
   if (!cal) throw new Error('No calendar');
   if (cal.readonly) throw readOnly();
   const s = getSettings(userId);
-  const start = Number(e.start), end = Number(e.end || start + s.calendar.defaultDurationMin * 60e3);
+  let start = Number(e.start), end = Number(e.end || start + s.calendar.defaultDurationMin * 60e3);
+  if (e.allDay) { start = allDayMs(start); end = Math.max(allDayMs(end), start + 864e5); }
   const r = run('INSERT INTO events (calendar_id, uid, start, end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', cal.id, e.uid || uuid(), start, end, now(), now());
   update('events', r.lastInsertRowid, {
     ...toRow({ reminders: [s.calendar.defaultReminderMin], ...e, calendarId: cal.id }), start, end,
@@ -91,6 +93,10 @@ export function updateEvent(userId, id, patch, extra = {}) {
     patch = rest;
   }
   const cur = get('SELECT e.*, c.source FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ?', id);
+  if (patch.allDay ?? !!cur.all_day) {
+    const start = allDayMs(patch.start ?? cur.start);
+    patch = { ...patch, start, end: Math.max(allDayMs(patch.end ?? cur.end), start + 864e5) };
+  }
   update('events', id, { ...toRow(patch), dirty: cur.source === 'caldav' ? 1 : 0, ...extra, updated_at: now() }, COLS);
   notify(userId, 'calendar:changed', {});
   // Copies of this event in other calendars follow at once (calendar/linked.js).

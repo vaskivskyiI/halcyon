@@ -573,3 +573,6 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 .card.inkwell-notes { margin-bottom: 12px; padding: 6px 10px; }
 .inkwell-notes .inkwell-head { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
 .inkwell-notes .btn { text-decoration: none; }
+/* Days being selected for a new multi-day event */
+.span-sel { background: var(--accent-soft) !important; }
+.allday-row { min-height: 26px; }
