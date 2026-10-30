@@ -195,7 +195,7 @@ export default function Reader({ id, view }) {
   const sameAsk = (a, b) => a.from.address?.toLowerCase() === b.from.address?.toLowerCase()
     && ((a.insight.actionSummary && a.insight.actionSummary.toLowerCase() === b.insight.actionSummary?.toLowerCase())
       || ((a.insight.actionItems || []).length > 0 && (a.insight.actionItems || []).map((x) => x.text.toLowerCase()).sort().join('\n') === (b.insight.actionItems || []).map((x) => x.text.toLowerCase()).sort().join('\n')));
-  const asked = msgs.filter((m) => m.insight?.needsAction && !m.insight.expired && !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent' && !['newsletter', 'promotion', 'social'].includes(m.insight.category));
+  const asked = msgs.filter((m) => m.insight?.needsAction && !m.insight.expired && !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent');
   const actions = asked.filter((m, i) => !asked.slice(i + 1).some((n) => sameAsk(m, n))).map((m) => ({ m, ins: m.insight }));
   const settleItem = async (mid, text, resolution) => {
     try {
@@ -203,6 +203,15 @@ export default function Reader({ id, view }) {
       setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === mid ? { ...m, insight: r.insight } : m)), current: t.current.id === mid ? { ...t.current, insight: r.insight } : t.current }));
       window.dispatchEvent(new Event('halcyon:poll'));
       if (r.insight?.dismissed && resolution) toast('All its actions are settled — removed from Action needed');
+    } catch (e) { toastError(e); }
+  };
+  const suggested = msgs.filter((m) => m.insight?.actionSuggested && !m.insight.expired && !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent');
+  const answerSuggestion = async (mid, accept) => {
+    try {
+      const r = await api.post(`/api/messages/${mid}/action-suggestion`, { accept });
+      setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === mid ? { ...m, insight: r.insight } : m)), current: t.current.id === mid ? { ...t.current, insight: r.insight } : t.current }));
+      window.dispatchEvent(new Event('halcyon:poll'));
+      toast(accept ? 'Added to Action needed' : 'Ignored', { action: { label: 'Undo', onClick: () => answerSuggestion(mid, null) } });
     } catch (e) { toastError(e); }
   };
   const toggleTask = async (t) => { await api.patch(`/api/tasks/${t.id}`, { done: !t.done }).catch(toastError); load(); };
@@ -372,7 +381,7 @@ export default function Reader({ id, view }) {
 
         {settings.ai.enabled && !isDraftMsg(latest) && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}
-          actions={actions} onItem={settleItem}
+          actions={actions} onItem={settleItem} suggested={suggested} onSuggestion={answerSuggestion}
           onDone={async (mid, resolution = 'done', undo = false) => {
             try {
               // That email only (and its copies): the conversation's other actions are settled on their own.
@@ -507,7 +516,7 @@ function ActionList({ actions, needsReply, onDone, onItem }) {
   );
 }
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, onItem, actions, related, onTask }) {
+function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, onItem, actions, related, onTask, suggested, onSuggestion }) {
   const [openMenu, menuNode] = useMenu();
   const [suggesting, setSuggesting] = useState(false);
   // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
@@ -560,6 +569,12 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
         <button className="btn sm ghost" title="Your email did not answer it: put it back in Needs reply" onClick={() => onNeedsReply(true)}>Still needs a reply</button>
       </div>}
       <ActionList actions={actions} needsReply={ins?.needsReply} onDone={onDone} onItem={onItem} />
+      {suggested?.map((m) => (
+        <div key={m.id} className="notice suggested-action" style={{ margin: '8px 0 0' }}>
+          <ClipboardCheck size={15} /><span className="grow"><b>Possible action:</b> {m.insight.actionSummary || m.insight.actionItems?.[0]?.text || 'see the email'}</span>
+          <button className="btn sm" title="Not important enough to be added by itself: you decide" onClick={() => onSuggestion(m.id, true)}>Add to Action needed</button>
+          <button className="btn sm ghost" onClick={() => onSuggestion(m.id, false)}>Ignore</button>
+        </div>))}
       {ins?.requests?.map((rq, i) => (
         <div key={i} className="notice" style={{ display: 'block', margin: '8px 0 0' }}>
           <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Forward size={13} /> {requester?.name || requester?.address} asks for an earlier email{rq.description && rq.description !== 'requested email' ? `: ${rq.description}` : ''}</div>

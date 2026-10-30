@@ -95,17 +95,29 @@ test('unchanged conversations are not summarised again', async () => {
   assert.equal(r.summary, before);
 });
 
-test('every action the AI shows counts in Action needed: low priority, a notification; not advertising', async () => {
-  const seen = async () => (await api('GET', '/api/messages?view=needsaction')).items.map((m) => m.id);
+test('less important actions wait for the user: suggested, then taken on or ignored; re-analysis keeps the answer', async () => {
+  const view = async (v) => (await api('GET', `/api/messages?view=${v}`)).items.map((m) => m.id);
   const low = mail({ thread: 'p1', subject: 'Permit', action: 1, reply: 0 }), note = mail({ thread: 'p2', subject: 'Bill due', action: 1, reply: 0 }), ad = mail({ thread: 'p3', subject: 'Sale', action: 1, reply: 0 });
+  const big = mail({ thread: 'p4', subject: 'Contract', action: 1, reply: 0 }), bill = mail({ thread: 'p5', subject: 'Final notice', action: 1, reply: 0 });
   db.prepare('UPDATE ai_insights SET priority = 5 WHERE message_id = ?').run(low);
-  db.prepare("UPDATE ai_insights SET category = 'notification' WHERE message_id = ?").run(note);
+  db.prepare("UPDATE ai_insights SET category = 'notification', priority = 40 WHERE message_id = ?").run(note);
   db.prepare("UPDATE ai_insights SET category = 'promotion' WHERE message_id = ?").run(ad);
-  const list = await seen();
-  assert.ok(list.includes(low) && list.includes(note));
-  assert.ok(!list.includes(ad));
-  await api('POST', `/api/messages/${low}/feedback`, { kind: 'unimportant' });
-  assert.ok(!(await seen()).includes(low), 'not important: gone');
+  db.prepare("UPDATE ai_insights SET category = 'notification', priority = 80 WHERE message_id = ?").run(bill);
+  let open = await view('needsaction'), sugg = await view('suggested');
+  assert.ok(open.includes(big) && open.includes(bill), 'what matters goes in by itself');
+  for (const id of [low, note, ad]) { assert.ok(!open.includes(id)); assert.ok(sugg.includes(id)); }
+  assert.ok(!sugg.includes(big));
+  assert.equal((await api('GET', `/api/threads/p1`)).messages[0].insight.actionSuggested, true);
+  const r = await api('POST', `/api/messages/${low}/action-suggestion`, { accept: true });
+  assert.deepEqual([r.insight.needsAction, r.insight.actionSuggested], [true, false]);
+  await api('POST', `/api/messages/${note}/action-suggestion`, { accept: false });
+  open = await view('needsaction'); sugg = await view('suggested');
+  assert.ok(open.includes(low) && !sugg.includes(low));
+  assert.ok(!open.includes(note) && !sugg.includes(note), 'ignored: in neither');
+  await api('POST', `/api/messages/${note}/action-suggestion`, { accept: null });
+  assert.ok((await view('suggested')).includes(note), 'undo asks again');
+  await T.analyzeMessage(uid, low, { force: true });
+  assert.ok((await view('needsaction')).includes(low), 'the answer survives re-analysis');
 });
 
 test('mail that lists items without the flag is analysed again once', async () => {

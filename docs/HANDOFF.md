@@ -917,8 +917,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Removing "needs reply" also clears copies and older repeats (same sender and subject, which `supersededSql` only hid);
   the reader always clears the whole conversation.
 - Action needed agrees with the AI card: action items without `needs_action` go to the second opinion like any action
-  and are dropped if it rejects them; only newsletter / promotion / social are left out, no priority limit ("Not
-  important" clears the action). `reanalyzeItems` re-checks recent mail once. Only Inbox mail is listed.
+  and are dropped if it rejects them. `reanalyzeItems` re-checks recent mail once. Only Inbox mail is listed.
+- Suggested actions (migration 47): less important mail (ads; notifications below priority 70; other mail below 60% of
+  the minimum priority) never enters Action needed by itself. `actionKind` says 'open' or 'suggested'; the AI card asks,
+  the view `suggested` lists them, POST `/api/messages/:id/action-suggestion` { accept: true | false | null } sets
+  `action_user`, which survives re-analysis. Serialized `needsAction` means open, `actionSuggested` means undecided.
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return

@@ -517,4 +517,8 @@ export const migrations = [
   `
   ALTER TABLE ai_insights ADD COLUMN summary_base TEXT;
   `,
+  // 47: the user's answer to a suggested action: 1 = goes to Action needed, 0 = ignored, NULL = not asked.
+  `
+  ALTER TABLE ai_insights ADD COLUMN action_user INTEGER;
+  `,
 ];

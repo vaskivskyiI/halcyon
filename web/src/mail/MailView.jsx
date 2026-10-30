@@ -399,7 +399,7 @@ function MessageList({ view, openId, onMenu }) {
   const openRef = useRef(openId);
   const keepOpen = (next, cur) => {
     const id = openRef.current;
-    if (!id || next.some((m) => m.id === id) || ['needsaction', 'needsreply', 'waiting', 'important', 'snoozed'].includes(view)) return next;
+    if (!id || next.some((m) => m.id === id) || ['needsaction', 'suggested', 'needsreply', 'waiting', 'important', 'snoozed'].includes(view)) return next;
     const i = cur.findIndex((m) => m.id === id);
     if (i < 0 || (threaded && cur[i].threadId && next.some((m) => m.threadId === cur[i].threadId))) return next;
     const out = [...next];
@@ -509,7 +509,7 @@ function MessageList({ view, openId, onMenu }) {
   useEffect(() => onEvent((e) => {
     // A finished analysis can move a message between Focused and Other: re-query those tabs.
     // A finished analysis can move a message between Focused and Other, or in / out of the AI views: re-query those.
-    if (e.type === 'ai:insight' && (effectiveTab === 'focused' || effectiveTab === 'other' || ['needsaction', 'needsreply', 'important', 'waiting'].includes(view))) refresh(800);
+    if (e.type === 'ai:insight' && (effectiveTab === 'focused' || effectiveTab === 'other' || ['needsaction', 'suggested', 'needsreply', 'important', 'waiting'].includes(view))) refresh(800);
     if (['mail:changed', 'folder:synced', 'mail:unsnoozed', 'mail:new'].includes(e.type)) {
       if (e.type === 'folder:synced' && !e.payload.newCount) return;
       window.dispatchEvent(new Event('halcyon:tabcounts'));
@@ -668,6 +668,7 @@ function MessageList({ view, openId, onMenu }) {
     if (view.startsWith('ct~')) { const c = decodeURIComponent(view.slice(3)); return c[0].toUpperCase() + c.slice(1); }
     if (view.startsWith('l')) return store.get().labels.find((l) => `l${l.id}` === view)?.name || 'Label';
     for (const a of folders.accounts) { const f = a.folders.find((x) => `f${x.id}` === view); if (f) return f.name; }
+    if (view === 'suggested') return 'Suggested actions';
     return 'Mail';
   }, [view, folders]);
 
@@ -727,6 +728,7 @@ function MessageList({ view, openId, onMenu }) {
         onTouchStart={(e) => { pullStart.current = listRef.current?.scrollTop === 0 ? e.touches[0].clientY : null; }}
         onTouchMove={(e) => { if (pullStart.current != null) setPull(Math.max(0, Math.min(110, (e.touches[0].clientY - pullStart.current) / 2))); }}
         onTouchEnd={() => { if (pull > 70) { window.dispatchEvent(new Event('halcyon:sync')); load(false); } pullStart.current = null; setPull(0); }}>
+        {view === 'needsaction' && folders?.counts?.suggested > 0 && <a className="list-group" href="#/mail/suggested"><ClipboardCheck size={12} /> {folders.counts.suggested} suggested — less important, you decide</a>}
         {!showAi && pinned.length > 0 && <div className="list-group"><Pin size={12} /> Pinned · {pinned.length}</div>}
         {!showAi && pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}

@@ -11,9 +11,21 @@ import { userAccounts } from '../accounts.js';
 /** Categories of mail that is rarely personal (newsletters, ads, social networks, automated notices). */
 export const NOISE_LIST = ['newsletter', 'promotion', 'social', 'notification'];
 export const NOISE = `(${NOISE_LIST.map((c) => `'${c}'`).join(', ')})`;
-/** An action passed the second opinion, so it counts in any mail but advertising; a notification can ask to pay or sign. */
 const AD_LIST = ['newsletter', 'promotion', 'social'];
 const ADS = `(${AD_LIST.map((c) => `'${c}'`).join(', ')})`;
+/** A notification goes to Action needed by itself only when it matters this much (a bill due, a contract to sign). */
+const NOTICE_MIN = 70;
+// Actions matter even when the AI rated the mail low, so they need only part of the minimum priority replies need.
+const actionMin = (min) => Math.floor(min * 0.6);
+const importantActionSql = (i, min) => `(COALESCE(${i}.category, '') NOT IN ${ADS} AND ${i}.priority >= CASE WHEN ${i}.category = 'notification' THEN ${NOTICE_MIN} ELSE ${actionMin(min)} END)`;
+const importantAction = (category, priority, min) => !AD_LIST.includes(category || '') && (priority ?? 0) >= (category === 'notification' ? NOTICE_MIN : actionMin(min));
+
+/** Where an insight's action stands: 'open' (Action needed), 'suggested' (the user decides), or null. */
+export function actionKind(ins, userId) {
+  if (!ins?.needs_action || ins.action_user === 0) return null;
+  if (ins.action_user === 1) return 'open';
+  return importantAction(ins.category, ins.priority, openSettings(userId).min) ? 'open' : 'suggested';
+}
 
 export function openSettings(userId) {
   const s = getSettings(userId).ai;
@@ -25,7 +37,7 @@ export function openSettings(userId) {
  * the request repeated, the same email received twice): only the newest one counts as open. what: 'reply' | 'action'.
  */
 export function supersededSql(what, m = 'm') {
-  const flag = what === 'reply' ? '(ni.needs_reply = 1 OR ni.needs_reply_user = 1)' : 'ni.needs_action = 1';
+  const flag = what === 'reply' ? '(ni.needs_reply = 1 OR ni.needs_reply_user = 1)' : '(ni.needs_action = 1 AND ni.action_user IS NOT 0)';
   return `EXISTS (SELECT 1 FROM messages n JOIN ai_insights ni ON ni.message_id = n.id WHERE n.user_id = ${m}.user_id AND n.subject_key = ${m}.subject_key
     AND COALESCE(${m}.subject_key, '') != '' AND n.from_addr = ${m}.from_addr AND n.id != ${m}.id AND (n.date > ${m}.date OR (n.date = ${m}.date AND n.id > ${m}.id))
     AND ${flag} AND ni.dismissed_at IS NULL AND n.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox'))`;
@@ -75,8 +87,16 @@ export function openActionSql(userId, i = 'i', m = 'm') {
   const { days, min } = openSettings(userId);
   const t = now();
   return `(${i}.dismissed_at IS NULL AND ${i}.needs_action = 1 AND (${i}.expires_at IS NULL OR ${i}.expires_at > ${t})
-    AND COALESCE(${i}.category, '') NOT IN ${ADS} AND ${m}.date >= ${t - days * 864e5}
-    AND NOT ${supersededSql('action', m)})`;
+    AND ((${i}.action_user = 1 AND ${m}.date >= ${t - 2 * days * 864e5})
+      OR (${i}.action_user IS NULL AND ${importantActionSql(i, min)} AND ${m}.date >= ${t - days * 864e5} AND NOT ${supersededSql('action', m)})))`;
+}
+
+/** SQL condition: an action in less important mail, waiting for the user to take it on or ignore it. */
+export function suggestedActionSql(userId, i = 'i', m = 'm') {
+  const { days, min } = openSettings(userId);
+  const t = now();
+  return `(${i}.dismissed_at IS NULL AND ${i}.needs_action = 1 AND ${i}.action_user IS NULL AND (${i}.expires_at IS NULL OR ${i}.expires_at > ${t})
+    AND NOT ${importantActionSql(i, min)} AND ${m}.date >= ${t - days * 864e5} AND NOT ${supersededSql('action', m)})`;
 }
 
 /** The user's own addresses (accounts and their aliases), lower-case. */
@@ -128,7 +148,8 @@ export function openChecker(userId) {
     const relevant = (r.ai_priority ?? 0) >= min && !NOISE_LIST.includes(r.ai_category || '');
     const reply = live && !r.is_answered && ((r.ai_needs_reply_user === 1 && r.date >= t - 2 * days * 864e5)
       || (!!r.ai_needs_reply && r.ai_needs_reply_user == null && relevant && r.date >= t - days * 864e5 && !r.ai_superseded_reply));
-    const action = live && !!r.ai_needs_action && !r.ai_superseded_action && !AD_LIST.includes(r.ai_category || '') && r.date >= t - days * 864e5;
+    const action = live && !!r.ai_needs_action && ((r.ai_action_user === 1 && r.date >= t - 2 * days * 864e5)
+      || (r.ai_action_user == null && !r.ai_superseded_action && importantAction(r.ai_category, r.ai_priority, min) && r.date >= t - days * 864e5));
     return { reply, action };
   };
 }

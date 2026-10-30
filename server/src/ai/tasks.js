@@ -18,7 +18,7 @@ import { applyHabit } from './habits.js';
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
-import { openSettings, openReplySql, openActionSql, NOISE as OPEN_NOISE, NOISE_LIST, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
+import { openSettings, openReplySql, openActionSql, actionKind, NOISE as OPEN_NOISE, NOISE_LIST, openRequestsFor, resolveByAi, ownAddresses } from './open-items.js';
 import { splitPlainQuote } from '../util/quotes.js';
 import { verifyOpen, resolveCheck, isAutomated, notATask, checkRequests } from './verify.js';
 import { logger } from '../util/log.js';
@@ -58,12 +58,14 @@ const clampInt = (n, lo, hi, d) => (Number.isFinite(Number(n)) ? Math.max(lo, Ma
 
 export function serializeInsight(r) {
   if (!r) return null;
+  const owner = r.needs_action ? get('SELECT user_id FROM messages WHERE id = ?', r.message_id)?.user_id : null;
+  const action = owner ? actionKind(r, owner) : null;
   return {
     summary: r.summary, category: r.category, priority: r.priority, priorityReason: r.priority_reason, needsReply: !!r.needs_reply,
     actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []),
     sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
-    needsAction: !!r.needs_action, actionSummary: r.action_summary || null, expectsReply: !!r.expects_reply,
+    needsAction: action === 'open', actionSuggested: action === 'suggested' && !r.dismissed_at, actionSummary: r.action_summary || null, expectsReply: !!r.expects_reply,
     actionState: json(r.action_state_json, {}),
     topic: r.topic || null, dismissed: !!r.dismissed_at,
     // How a requested action was settled ('done' | 'skipped') and when.
@@ -98,8 +100,9 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
   let needsAction = d.needs_action && !quiet ? 1 : 0;
   if (expires && expires < now()) { priority = Math.min(priority, 10); needsReply = 0; needsAction = 0; } // analysed after it expired
   // What the user decided by hand survives re-analysis.
-  const prev = get('SELECT needs_reply_user, dismissed_at, resolution, resolved_by, action_state_json FROM ai_insights WHERE message_id = ?', messageId);
+  const prev = get('SELECT needs_reply_user, dismissed_at, resolution, resolved_by, action_state_json, action_user, action_summary FROM ai_insights WHERE message_id = ?', messageId);
   if (prev?.needs_reply_user != null) needsReply = prev.needs_reply_user;
+  if (prev?.action_user === 1 && !needsAction) { needsAction = 1; d.action_summary = prev.action_summary; }
   const dismissed = prev?.dismissed_at ?? (quiet ? now() : null);
   run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json,
     suggested_replies_json, events_json, sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_reply_user,
@@ -115,6 +118,7 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
     d.topic || null, dismissed, prev?.needs_reply_user ?? null, needsAction, needsAction ? String(d.action_summary || '').slice(0, 160) || null : null);
   if (prev?.resolution) run('UPDATE ai_insights SET resolution = ?, resolved_by = ? WHERE message_id = ?', prev.resolution, prev.resolved_by, messageId);
   if (prev?.action_state_json) run('UPDATE ai_insights SET action_state_json = ? WHERE message_id = ?', prev.action_state_json, messageId); // items settled by hand
+  if (prev?.action_user != null) run('UPDATE ai_insights SET action_user = ? WHERE message_id = ?', prev.action_user, messageId);
   // The user's own email that waits for an answer ("Waiting for a reply"; only for mail sent from here or elsewhere).
   if (d.expects_reply !== undefined) run('UPDATE ai_insights SET expects_reply = ? WHERE message_id = ?', d.expects_reply && !quiet ? 1 : 0, messageId);
   run("UPDATE messages SET ai_status = 'done' WHERE id = ?", messageId);
@@ -266,9 +270,9 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   let model;
   if (dup) {
     run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply)
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply, action_user)
       SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply, action_user FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId, m.account_id);

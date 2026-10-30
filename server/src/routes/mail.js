@@ -22,12 +22,12 @@ import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
 import { CATEGORIES } from '../ai/prompts.js';
-import { openReplySql, openActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE, ownAddresses, repeatsOf } from '../ai/open-items.js';
+import { openReplySql, openActionSql, suggestedActionSql, openChecker, supersededSql, waitingSql, NOISE as OPEN_NOISE, ownAddresses, repeatsOf } from '../ai/open-items.js';
 
 const LIST_COLS = `m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.thread_id, m.subject, m.from_name, m.from_addr, m.to_json, m.cc_json, m.bcc_json, m.reply_to_json,
   m.date, m.snippet, m.has_attachments, m.is_read, m.is_flagged, m.is_answered, m.is_forwarded, m.is_draft, m.local_copy, m.sender_json, m.snoozed_until, m.labels_json, m.ai_status, m.calendar_ics,
   i.summary AS ai_summary, i.category AS ai_category, i.priority AS ai_priority, i.needs_reply AS ai_needs_reply, i.is_phishing AS ai_phishing, i.draft_reply IS NOT NULL AS ai_has_draft,
-  i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_reply_user AS ai_needs_reply_user, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
+  i.topic AS ai_topic, i.expires_at AS ai_expires_at, i.needs_reply_user AS ai_needs_reply_user, i.action_user AS ai_action_user, i.needs_action AS ai_needs_action, i.action_summary AS ai_action_summary, i.dismissed_at AS ai_dismissed,
   EXISTS (SELECT 1 FROM drafts dr JOIN messages dm ON dm.id = dr.in_reply_to WHERE dr.user_id = m.user_id AND dm.thread_id = m.thread_id) AS has_user_draft,
   (SELECT special_use FROM folders WHERE id = m.folder_id) AS folder_special,
   CASE WHEN i.needs_reply = 1 AND i.needs_reply_user IS NULL THEN ${supersededSql('reply')} ELSE 0 END AS ai_superseded_reply,
@@ -75,6 +75,7 @@ function scopeFor(userId, q, sc) {
   // Open items: one definition for lists, counts, search and the brief (ai/open-items.js).
   else if (view === 'needsreply') where.push(`${openReplySql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
   else if (view === 'needsaction') where.push(`${openActionSql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
+  else if (view === 'suggested') where.push(`${suggestedActionSql(userId)} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
   else if (view === 'important') where.push(`i.priority >= 70 AND i.dismissed_at IS NULL AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} AND m.date >= ${Date.now() - 30 * 864e5} AND m.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox')`);
   else if (view === 'topic' && q.topic) { where.push('lower(i.topic) = lower(?)'); params.push(String(q.topic)); }
   else if (view === 'category' && q.category) { where.push("i.category = ? AND m.folder_id NOT IN (SELECT id FROM folders WHERE special_use IN ('\\Trash','\\Junk'))"); params.push(String(q.category)); }
@@ -128,7 +129,7 @@ export default async function mailRoutes(app) {
     const unreadIn = (ids) => (ids.length ? get(`SELECT COUNT(${threaded ? 'DISTINCT thread_id' : '*'}) AS n FROM messages
       WHERE folder_id IN (${ids.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL`, ...ids).n : 0);
     const counts = {
-      unified: unreadIn(out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox').map((f) => f.id))), needsreply: countView('needsreply'), needsaction: countView('needsaction'), snoozed: countView('snoozed'), waiting: countView('waiting'),
+      unified: unreadIn(out.flatMap((a) => a.folders.filter((f) => f.specialUse === '\\Inbox').map((f) => f.id))), needsreply: countView('needsreply'), needsaction: countView('needsaction'), suggested: countView('suggested'), snoozed: countView('snoozed'), waiting: countView('waiting'),
       scheduled: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND status IN ('queued','failed')`, uid).n,
       // Messages that could not be sent (or are retrying after an error): the Outbox count turns red.
       outboxFailed: get(`SELECT COUNT(*) AS n FROM outbox WHERE user_id = ? AND ${inIds('account_id', sc?.accountIds)} AND (status = 'failed' OR (status = 'queued' AND error IS NOT NULL))`, uid).n,
@@ -189,7 +190,7 @@ export default async function mailRoutes(app) {
     for (const sp of mergedSpaces(req)) {
       const other = folderList(sp.id, null);
       own.accounts.push(...other.accounts.map((a) => ({ ...a, owner: sp.id, ownerName: sp.name })));
-      for (const k of ['unified', 'unifiedImportant', 'needsreply', 'needsaction', 'snoozed', 'scheduled', 'outboxFailed']) own.counts[k] = (own.counts[k] || 0) + (other.counts[k] || 0);
+      for (const k of ['unified', 'unifiedImportant', 'needsreply', 'needsaction', 'suggested', 'snoozed', 'scheduled', 'outboxFailed']) own.counts[k] = (own.counts[k] || 0) + (other.counts[k] || 0);
     }
     return own;
   });
@@ -314,7 +315,7 @@ export default async function mailRoutes(app) {
     return { items: rows.slice(0, limit).map((r) => listItem(r, open)), hasMore: rows.length > limit };
   }
   // Views that can include the shared spaces' mail (not folders — a folder belongs to one of them).
-  const MERGE_VIEWS = new Set(['unified', 'needsreply', 'needsaction', 'important', 'flagged', 'snoozed', 'category', 'topic', 'waiting']);
+  const MERGE_VIEWS = new Set(['unified', 'needsreply', 'needsaction', 'suggested', 'important', 'flagged', 'snoozed', 'category', 'topic', 'waiting']);
   app.get('/api/messages', async (req) => {
     const q = req.query;
     const own = await listMessages(req.user.id, q, scope(req.user.id, reqSpace(req)));
@@ -626,6 +627,23 @@ export default async function mailRoutes(app) {
     notify(req.user.id, 'mail:changed', { ids });
     scheduleBriefRefresh(req.user.id);
     refreshSettled(req.user.id, ids, [m.thread_id]);
+    return { insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) };
+  });
+
+  // The user's answer to a suggested action: into Action needed (accept) or ignored, for every copy; it survives
+  // re-analysis. null asks again.
+  app.post('/api/messages/:id/action-suggestion', async (req, reply) => {
+    const m = get('SELECT id, thread_id, message_id FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!m) return httpError(reply, 404, 'Not found');
+    const value = req.body?.accept == null ? null : req.body.accept ? 1 : 0;
+    const targets = [...new Set([m.id, ...(m.message_id ? all('SELECT id FROM messages WHERE user_id = ? AND message_id = ?', req.user.id, m.message_id).map((r) => r.id) : [])])];
+    for (const id of targets) {
+      run('UPDATE ai_insights SET action_user = ? WHERE message_id = ? AND needs_action = 1', value, id);
+      const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', id);
+      if (ins) notify(req.user.id, 'ai:insight', { messageId: id, threadId: m.thread_id, insight: serializeInsight(ins) });
+    }
+    notify(req.user.id, 'mail:changed', { ids: targets });
+    scheduleBriefRefresh(req.user.id);
     return { insight: serializeInsight(get('SELECT * FROM ai_insights WHERE message_id = ?', m.id)) };
   });
 

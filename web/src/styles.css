@@ -592,3 +592,4 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 .thread-file .meta { flex: 0 1 auto; max-width: 45%; color: var(--text-2); }
 .thread-file .size { flex: none; }
 @media (max-width: 600px) { .thread-file .meta { display: none; } }
+.suggested-action { flex-wrap: wrap; }
