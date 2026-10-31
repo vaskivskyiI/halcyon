@@ -155,17 +155,18 @@ function saveInsight(m, d, model, tz, { quiet = false } = {}) {
  * The live part of the daily brief, always computed fresh (so done tasks and dismissed or expired items disappear at
  * once and new mail shows up immediately). Scoped to the space.
  */
-export function briefLive(userId, space = '') {
-  const own = briefOf(userId, space);
+/** light: without the open-item queries, which are the slow ones (Home takes their counts from the folder list). */
+export function briefLive(userId, space = '', { light = false } = {}) {
+  const own = briefOf(userId, space, light);
   if (scope(userId, space)) return own;
   for (const sp of aiSpacesOf(userId)) {
-    const r = briefOf(sp.id, '');
+    const r = briefOf(sp.id, '', light);
     for (const k of Object.keys(own)) own[k].push(...r[k].map((x) => ({ ...x, owner: sp.id, ownerName: sp.name })));
   }
   return own;
 }
 
-function briefOf(userId, space) {
+function briefOf(userId, space, light = false) {
   const sc = scope(userId, space);
   const accIn = inIds('m.account_id', sc?.accountIds);
   const live = `i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${now()})`;
@@ -174,14 +175,14 @@ function briefOf(userId, space) {
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
     WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND m.date >= ? AND m.snoozed_until IS NULL AND i.priority >= 60 AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE} AND ${live}
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 48 * 3600e3).map(row);
-  const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic
+  const awaiting = light ? [] : all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
     WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND ${openReplySql(userId)} AND m.date >= ? AND m.snoozed_until IS NULL
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 7 * 864e5).map(row).filter((m) => !attention.some((a) => a.id === m.id));
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const events = sc && !sc.calendarIds.length ? [] : listRange(userId, start.getTime(), start.getTime() + 864e5, sc?.calendarIds, { includeInfo: false })
     .map((e) => ({ id: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location, onlineMeeting: e.onlineMeeting, color: e.color }));
-  const actions = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic, i.action_summary
+  const actions = light ? [] : all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, m.is_read, i.summary, i.priority, i.needs_reply, i.category, i.topic, i.action_summary
     FROM messages m JOIN folders f ON f.id = m.folder_id JOIN ai_insights i ON i.message_id = m.id
     WHERE m.user_id = ? AND ${accIn} AND f.special_use = '\\Inbox' AND ${openActionSql(userId)} AND m.date >= ? AND m.snoozed_until IS NULL
     ORDER BY i.priority DESC, m.date DESC LIMIT 12`, userId, now() - 21 * 864e5).map((m) => ({ ...row(m), action: m.action_summary }))

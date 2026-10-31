@@ -222,6 +222,9 @@ export default async function aiRoutes(app) {
     try { return await T.extractEvent(req.user.id, Number(req.body.messageId)); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
+  // Home: what today holds, without the AI overview.
+  app.get('/api/ai/today', async (req) => T.briefLive(req.user.id, reqSpace(req), { light: true }));
+
   app.get('/api/ai/brief', async (req, reply) => {
     // The live lists never depend on the AI; the overview text may fail (e.g. AI server busy) without hiding them.
     const live = T.briefLive(req.user.id, reqSpace(req));

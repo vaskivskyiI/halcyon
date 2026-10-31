@@ -42,3 +42,10 @@ test('signing out continues only to the companion app', async () => {
   const ok = await get(`/api/sso/logout?return=${encodeURIComponent('https://notes.test/?signedout=1')}`, c);
   assert.equal(ok.headers.get('location'), 'https://notes.test/?signedout=1');
 });
+
+test('Home asks only for what is quick: no open-item lists, no AI overview', async () => {
+  const r = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'ann@example.org', password: 'password123' }) });
+  const today = await (await get('/api/ai/today', r.headers.get('set-cookie').split(';')[0])).json();
+  assert.deepEqual([today.awaiting, today.actions, today.content], [[], [], undefined]);
+  assert.ok(Array.isArray(today.events) && Array.isArray(today.tasks));
+});

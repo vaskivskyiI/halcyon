@@ -1,5 +1,5 @@
 // Home of the suite: every app at a glance, and what today asks for. Works without AI: the lists come straight from the data.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Mail, Calendar, Users, CheckSquare, Sparkles, NotebookPen, Columns2 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -10,17 +10,22 @@ import { embedUrl, openBeside } from '../components/SidePane.jsx';
 const time = (e) => (e.allDay ? 'All day' : new Date(e.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
 
+let lastLive = null; // shown at once when coming back, then refreshed
+
 export default function HomeView() {
   const user = store.use((s) => s.user);
   const unread = store.use((s) => s.folders.counts?.unified || 0);
   const reply = store.use((s) => s.folders.counts?.needsreply || 0);
   const action = store.use((s) => s.folders.counts?.needsaction || 0);
   const inkwell = store.use((s) => s.inkwell);
-  const [live, setLive] = useState(null);
+  const [live, setLive] = useState(lastLive);
+  const timer = useRef();
   useEffect(() => {
-    const load = () => api.get('/api/ai/brief').then((r) => setLive(r.live || {})).catch(() => setLive({}));
+    const load = () => api.get('/api/ai/today').then((r) => { lastLive = r; setLive(r); }).catch(() => setLive((c) => c || {}));
     load();
-    return onEvent((e) => { if (['tasks:changed', 'calendar:changed', 'mail:changed', 'mail:new'].includes(e.type)) load(); });
+    // Mail events come in bursts while syncing: one refresh after them.
+    const off = onEvent((e) => { if (['tasks:changed', 'calendar:changed', 'mail:changed', 'mail:new'].includes(e.type)) { clearTimeout(timer.current); timer.current = setTimeout(load, 3000); } });
+    return () => { off(); clearTimeout(timer.current); };
   }, []);
   const tiles = [
     ['Mail', Mail, '#/mail/unified', [unread && `${unread} unread`, reply && `${reply} to answer`, action && `${action} to do`].filter(Boolean).join(' · ') || 'Nothing waiting'],
@@ -32,7 +37,7 @@ export default function HomeView() {
   ];
   const go = (href) => (href.startsWith('#') ? navigate(href) : location.assign(href));
   const beside = (label, href) => openBeside(label, href.startsWith('#') ? embedUrl(location.origin, href) : embedUrl(href.replace(/\/$/, '')));
-  const mail = [...(live?.attention || []), ...(live?.awaiting || []), ...(live?.actions || [])].slice(0, 6);
+  const mail = (live?.attention || []).slice(0, 6);
   return (
     <div className="home">
       <h1>{greeting()}{user?.name ? `, ${user.name.split(' ')[0]}` : ''}</h1>
@@ -47,7 +52,7 @@ export default function HomeView() {
         <section className="card"><h3>Today</h3>
           {(live.events || []).map((e, i) => <a key={i} className="home-row" href="#/calendar"><span className="faint">{time(e)}</span><span className="truncate">{e.title}</span></a>)}
           {!live.events?.length && <div className="small faint">Nothing in the calendar.</div>}</section>
-        <section className="card"><h3>Mail that waits</h3>
+        <section className="card"><h3>Important mail</h3>
           {mail.map((m) => <a key={m.id} className="home-row" href={`#/mail/unified/${m.id}`}><span className="truncate"><b>{m.from}</b> · {m.subject}</span></a>)}
           {!mail.length && <div className="small faint">All clear.</div>}</section>
         <section className="card"><h3>Tasks</h3>
