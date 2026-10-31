@@ -19,8 +19,10 @@ export function SidePane() {
   const pane = store.use((s) => s.beside);
   const [dragging, setDragging] = useState(false);
   const ref = useRef();
-  useEffect(() => { if (!store.get().beside && saved()?.url) store.set({ beside: saved() }); }, []);
-  if (!pane?.url) return null;
+  // The saved pane belongs to the outer window: a frame showing it would open it again inside itself.
+  const framed = document.documentElement.classList.contains('embedded');
+  useEffect(() => { if (!framed && !store.get().beside && saved()?.url) store.set({ beside: saved() }); }, []);
+  if (framed || !pane?.url) return null;
   const close = () => { keep({ width: pane.width }); store.set({ beside: null }); };
   const drag = (e) => {
     e.preventDefault();
