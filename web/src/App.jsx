@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command, NotebookPen } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command, NotebookPen, Home, Columns2, LogOut, UserCog } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing, offlineState } from './api.js';
 import './back.js';
 import { pushIsOn } from './push.js';
@@ -20,6 +20,8 @@ import Problems from './components/Problems.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import { openComposer } from './mail/Composer.jsx';
 import AssistantView from './assistant/AssistantView.jsx';
+import HomeView from './home/HomeView.jsx';
+import { SidePane, embedUrl, openBeside } from './components/SidePane.jsx';
 import SettingsView from './settings/SettingsView.jsx';
 
 export default function App() {
@@ -61,6 +63,7 @@ export default function App() {
 
 function Shell() {
   const route = useRoute();
+  const [openMenu, menuNode] = useMenu();
   const section = route[0] || 'mail';
   const unread = store.use((s) => s.folders.counts?.unified || 0);
   const settings = store.use((s) => s.settings);
@@ -130,15 +133,16 @@ function Shell() {
     if (accountsLoaded && !accounts.length && section === 'mail' && !(store.get().shared || []).length) navigate('#/settings/accounts');
   }, [accountsLoaded, accounts.length]);
 
+  const inkwell = store.use((s) => s.inkwell);
+  // The same order in every app of the suite (Inkwell: web/src/Rail.jsx), so nothing jumps when switching.
   const nav = [
-    ['mail', Mail, 'Mail', unread], ['calendar', Calendar, 'Calendar'], ['contacts', Users, 'Contacts'],
-    ['tasks', CheckSquare, 'Tasks'], ['assistant', Sparkles, 'Assistant'],
+    ['home', Home, 'Home'], ['mail', Mail, 'Mail', unread], ['calendar', Calendar, 'Calendar'], ['contacts', Users, 'Contacts'],
+    ['tasks', CheckSquare, 'Tasks'], ...(inkwell ? [['notes', NotebookPen, 'Notes']] : []), ['assistant', Sparkles, 'Assistant'],
   ];
   const dark = document.documentElement.dataset.theme === 'dark';
   const theme = ['light', 'dark', 'system'].includes(settings?.ui?.theme) ? settings.ui.theme : 'system';
   const space = store.use((s) => s.space);
   const connected = store.use((s) => s.connected);
-  const inkwell = store.use((s) => s.inkwell);
   const taskDialog = store.use((s) => s.taskDialog);
   const [syncing, setSyncing] = useState(false);
 
@@ -205,17 +209,19 @@ function Shell() {
       <CommandPalette />
       <nav className="rail">
         <img className="logo" src="./icon.svg" alt="Halcyon" />
-        {nav.map(([id, Icon, label, badge]) => (
-          <button key={id} className={`${section === id ? 'active' : ''} ${dropNav === id ? 'drop' : ''}`} title={DROP_HINT[id] ? `${label} — ${DROP_HINT[id]}` : label} aria-label={label} onClick={() => navigate(section === id ? `#/${id}` : lastRoute.get(id) || `#/${id}`)}
+        {nav.map(([id, Icon, label, badge]) => (id === 'notes'
+          /* Inkwell, the notes app (Settings → Integrations): same tab, Ctrl/middle click a new one; the desktop app opens it in the browser. */
+          ? <button key={id} title="Notes (Inkwell)" aria-label="Notes (Inkwell)"
+            onClick={(e) => (e.ctrlKey || e.metaKey ? window.open(`${inkwell}/`, '_blank', 'noopener') : location.assign(`${inkwell}/`))}
+            onAuxClick={(e) => { if (e.button === 1) window.open(`${inkwell}/`, '_blank', 'noopener'); }}><Icon size={20} /></button>
+          : <button key={id} className={`${section === id ? 'active' : ''} ${dropNav === id ? 'drop' : ''}`} title={DROP_HINT[id] ? `${label} — ${DROP_HINT[id]}` : label} aria-label={label} onClick={() => navigate(section === id ? `#/${id}` : lastRoute.get(id) || `#/${id}`)}
             {...(DROP_HINT[id] ? dropProps(id) : {})}>
             <Icon size={21} />{badge > 0 && <span className="badge">{badge > 99 ? '99+' : badge}</span>}
           </button>
         ))}
-        {/* Inkwell, the notes app (Settings → Integrations): same tab, Ctrl/middle click a new one; the desktop app opens it in the browser. */}
-        {inkwell && <button title="Notes (Inkwell)" aria-label="Notes (Inkwell)"
-          onClick={(e) => (e.ctrlKey || e.metaKey ? window.open(`${inkwell}/`, '_blank', 'noopener') : location.assign(`${inkwell}/`))}
-          onAuxClick={(e) => { if (e.button === 1) window.open(`${inkwell}/`, '_blank', 'noopener'); }}><NotebookPen size={20} /></button>}
         <button title="Go to, do, find — Ctrl+K" aria-label="Go to or do (Ctrl+K)" onClick={() => window.dispatchEvent(new Event('halcyon:palette'))}><Command size={19} /></button>
+        <button className="desk-only" title="Open another app beside this one" aria-label="Open another app beside this one" onClick={(e) => openMenu(e, [{ section: 'Open beside' },
+          ...nav.filter(([id]) => id !== 'home').map(([id, Icon, label]) => ({ label, icon: Icon, onClick: () => openBeside(label, id === 'notes' ? embedUrl(inkwell) : embedUrl(location.origin, `#/${id}`)) }))])}><Columns2 size={19} /></button>
         <div className="spacer" />
         <Problems />
         <SpaceSwitcher />
@@ -225,9 +231,11 @@ function Shell() {
         <button className="desk-only" title={`Theme: ${{ light: 'light', dark: 'dark', system: 'automatic (as the device)' }[theme]} — click for ${{ light: 'dark', dark: 'automatic', system: 'light' }[theme]}`} aria-label="Change theme"
           onClick={() => saveSettings({ ui: { theme: { light: 'dark', dark: 'system', system: 'light' }[theme] } })}>{theme === 'system' ? <SunMoon size={19} /> : dark ? <Moon size={19} /> : <Sun size={19} />}</button>
         <button className={section === 'settings' ? 'active' : ''} title="Settings" aria-label="Settings" onClick={() => navigate('#/settings')}><Settings size={21} /></button>
+        <ProfileButton />
       </nav>
       {/* Remount views when the space changes so every list reloads in the new scope. */}
       <main className="main" key={space}>
+        {section === 'home' && <HomeView />}
         {section === 'mail' && <MailView route={route} />}
         {section === 'calendar' && <CalendarView route={route} />}
         {section === 'contacts' && <ContactsView route={route} />}
@@ -235,11 +243,33 @@ function Shell() {
         {section === 'assistant' && <AssistantView route={route} />}
         {section === 'settings' && <SettingsView route={route} />}
       </main>
+      <SidePane />
+      {menuNode}
       <ComposerDock />
       <Toasts />
       {taskDialog && <TaskDialog messageId={taskDialog} onClose={() => store.set({ taskDialog: null })} />}
     </div>
   );
+}
+
+/** Who is signed in, at the bottom of the left menu. Signing out ends the session in every app of the suite. */
+function ProfileButton() {
+  const user = store.use((s) => s.user);
+  const inkwell = store.use((s) => s.inkwell);
+  const [openMenu, menuNode] = useMenu();
+  const signOut = async () => {
+    const suite = await api.get('/api/auth/status').then((r) => r.suite).catch(() => false);
+    await api.post('/api/auth/logout');
+    if (suite && inkwell) location.assign(`${inkwell}/api/auth/halcyon/logout?return=${encodeURIComponent(`${location.origin}/`)}`);
+    else location.replace('/');
+  };
+  return <>
+    <button className="profile-btn" title={user?.email ? `${user.name || ''} ${user.email}`.trim() : 'Profile'} aria-label="Profile" onClick={(e) => openMenu(e, [
+      { section: [user?.name, user?.email].filter(Boolean).join(' · ') },
+      { label: 'Password and sessions', icon: UserCog, onClick: () => navigate('#/settings/security') },
+      { label: 'Sign out', icon: LogOut, onClick: signOut }])}><span className="avatar-letter">{(user?.name || user?.email || '?')[0].toUpperCase()}</span></button>
+    {menuNode}
+  </>;
 }
 
 /** Rail button for choosing the active space (only shown once spaces are defined). */

@@ -16,6 +16,8 @@ export const config = {
   // A companion app on the same server (Inkwell): shared secret and its exact callback addresses, comma separated.
   ssoSecret: env.HALCYON_SSO_SECRET || '',
   ssoRedirects: (env.HALCYON_SSO_REDIRECTS || '').split(',').map((x) => x.trim()).filter(Boolean),
+  // The addresses of those apps: they may be shown next to Halcyon, and Halcyon next to them.
+  get companions() { return [...new Set(this.ssoRedirects.flatMap((u) => { try { return [new URL(u).origin]; } catch { return []; } }))]; },
   // Single-user mode is used by the desktop app: requests from loopback are auto-authenticated.
   singleUser: env.HALCYON_SINGLE_USER === '1',
   // When set (desktop app), single-user requests must also present this secret cookie/header.

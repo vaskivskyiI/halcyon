@@ -2,7 +2,7 @@
 // callback in HALCYON_SSO_REDIRECTS. An authorization-code exchange: the browser only carries a one-time code, the app
 // trades it for the login server to server. The same secret lets the app read who is in which shared space, nothing else.
 import crypto from 'node:crypto';
-import { all, get, now } from '../db/index.js';
+import { all, get, run, now } from '../db/index.js';
 import { config } from '../config.js';
 import { userFromRequest, sessionFromRequest } from '../auth.js';
 import { membersOf } from '../shared.js';
@@ -31,6 +31,18 @@ export default async function ssoRoutes(app) {
     to.searchParams.set('code', code);
     to.searchParams.set('state', String(state));
     return reply.redirect(to.href);
+  });
+
+  // Signing out of the suite: the app the person was in sends the browser here, and it continues to `return`.
+  app.get('/api/sso/logout', async (req, reply) => {
+    const back = String(req.query.return || '');
+    let origin = '';
+    try { origin = new URL(back).origin; } catch { /* no address */ }
+    const to = config.companions.includes(origin) ? back : '/';
+    const s = sessionFromRequest(req);
+    if (s) run('DELETE FROM sessions WHERE token = ?', s.token);
+    reply.clearCookie('halcyon_session', { path: '/' });
+    return reply.redirect(to);
   });
 
   app.post('/api/sso/token', async (req, reply) => {

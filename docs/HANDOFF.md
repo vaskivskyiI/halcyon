@@ -937,6 +937,7 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - AI sees what the login sees: `aiSpacesOf` (spaces shown in My mail; a privacy-mode space only for a privacy-mode login) feeds the assistant, brief and semantic search. Inside a space, or with a space-limited view, only that.
 - Sharing takes any calendar, address book or task list: read-only ones too; those of a server go together; those synced through an account stay linked to it (sync finds them by url + account_id).
 - Sign in with Halcyon (`routes/sso.js`, HALCYON_SSO_SECRET / HALCYON_SSO_REDIRECTS): one-time code, exact callback; POST /api/sso/spaces gives a companion app the shared spaces and member ids.
+- The suite: same left menu order in Halcyon (App.jsx nav) and Inkwell (Rail.jsx); Home is `#/home` (home/HomeView.jsx); `components/SidePane.jsx` shows a second app in a frame (`?embed=1` hides its rail), allowed for origins in HALCYON_SSO_REDIRECTS (`config.companions`). Profile button signs out of both: GET /api/sso/logout and Inkwell /api/auth/halcyon/logout, each returning only to the other.
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,
   list_open_items, list_events and list_tasks take an optional `space` (a token's own space always wins) and return

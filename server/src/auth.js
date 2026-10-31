@@ -104,7 +104,7 @@ export default async function authRoutes(app) {
     const count = get('SELECT COUNT(*) AS n FROM users').n;
     const u = userFromRequest(req);
     const as = u && actingAs(req, u, '/api/me');
-    return { needsSetup: count === 0 && !config.singleUser, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup, readOnly: !!sessionFromRequest(req)?.read_only,
+    return { needsSetup: count === 0 && !config.singleUser, suite: !!config.ssoSecret, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup, readOnly: !!sessionFromRequest(req)?.read_only,
       acting: as ? { id: as.id, name: as.name } : null };
   });
 

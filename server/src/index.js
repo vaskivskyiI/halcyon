@@ -37,8 +37,8 @@ import { logger } from './util/log.js';
 const log = logger('server');
 // Email HTML is rendered in a srcdoc iframe, which inherits this policy: no scripts, no remote fonts/frames, and
 // remote images only when the user chose to load them (the sanitizer strips them otherwise).
-const CSP = ["default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob: https: http:",
-  "font-src 'self' data:", "connect-src 'self'", "frame-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'self'"].join('; ');
+const CSP = (others = '') => ["default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob: https: http:",
+  "font-src 'self' data:", "connect-src 'self'", `frame-src 'self' blob:${others}`, "object-src 'none'", "base-uri 'none'", "form-action 'self'", `frame-ancestors 'self'${others}`].join('; ');
 
 export async function buildServer({ background = true } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024, trustProxy: config.trustProxy });
@@ -56,10 +56,12 @@ export async function buildServer({ background = true } = {}) {
   app.addHook('onResponse', async (req, reply) => { if (req.t0 != null) recordTiming(req, reply.statusCode, performance.now() - req.t0); });
 
   app.addHook('onSend', async (req, reply, payload) => {
-    reply.header('x-frame-options', 'SAMEORIGIN');
+    // Next to a companion app of the suite (see routes/sso.js), and nowhere else.
+    const others = config.companions.map((o) => ` ${o}`).join('');
+    if (!others) reply.header('x-frame-options', 'SAMEORIGIN');
     reply.header('referrer-policy', 'no-referrer');
     reply.header('x-content-type-options', 'nosniff');
-    if (!reply.hasHeader('content-security-policy')) reply.header('content-security-policy', CSP);
+    if (!reply.hasHeader('content-security-policy')) reply.header('content-security-policy', CSP(others));
     return payload;
   });
 
