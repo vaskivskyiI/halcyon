@@ -18,6 +18,10 @@ export const config = {
   ssoRedirects: (env.HALCYON_SSO_REDIRECTS || '').split(',').map((x) => x.trim()).filter(Boolean),
   // The addresses of those apps: they may be shown next to Halcyon, and Halcyon next to them.
   get companions() { return [...new Set(this.ssoRedirects.flatMap((u) => { try { return [new URL(u).origin]; } catch { return []; } }))]; },
+  // Inkwell of the same suite, reached server to server with the same secret: no one pastes its address or a token.
+  // Default: the first companion app; HALCYON_INKWELL_CA when it uses a private certificate authority.
+  get inkwellUrl() { return (env.HALCYON_INKWELL_URL || this.companions[0] || '').replace(/\/+$/, ''); },
+  inkwellCa: env.HALCYON_INKWELL_CA || '',
   // Single-user mode is used by the desktop app: requests from loopback are auto-authenticated.
   singleUser: env.HALCYON_SINGLE_USER === '1',
   // When set (desktop app), single-user requests must also present this secret cookie/header.

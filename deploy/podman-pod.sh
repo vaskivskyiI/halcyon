@@ -64,6 +64,10 @@ HALCYON_ALLOW_SIGNUP=0
 # e.g. HALCYON_SSO_REDIRECTS=https://notes.example.org/api/auth/halcyon/callback
 HALCYON_SSO_SECRET=
 HALCYON_SSO_REDIRECTS=
+# The same secret also lets Inkwell and Halcyon use each other's data for the signed-in person (no tokens to paste).
+# Inkwell's address when it is not the origin of the callback above, and its CA if it uses a private one:
+HALCYON_INKWELL_URL=
+HALCYON_INKWELL_CA=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 MICROSOFT_CLIENT_ID=

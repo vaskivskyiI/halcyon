@@ -19,6 +19,7 @@ import { saveDraft } from '../mail/send.js';
 import { notify } from '../util/events.js';
 import { setTaskDone } from '../routes/tasks.js';
 import { pendingApprovalCount } from '../rules.js';
+import { trusted } from '../routes/sso.js';
 import { logger } from '../util/log.js';
 import { textToHtml } from '../util/text.js';
 
@@ -40,8 +41,28 @@ export function createToken(userId, { name, targetId, access = 'read', space = '
   return { id: Number(r.lastInsertRowid), token };
 }
 
+/**
+ * The suite's companion app (Inkwell), set up once by the administrator with the sign-on secret: it reaches a person's
+ * own mail (X-Halcyon-Target = the person) or a shared space they are in, as an assistant that may propose. Each such
+ * grant is a token row of the person's ("Inkwell (through sign-in)"), so it is listed, logged and can be turned off.
+ */
+function suiteGrant(req) {
+  if (!trusted(req)) return null;
+  const person = get("SELECT id FROM users WHERE id = ? AND COALESCE(kind, 'person') = 'person'", Number(req.headers['x-halcyon-sub']) || 0);
+  if (!person) return null;
+  const target = Number(req.headers['x-halcyon-target']) || person.id;
+  if (target !== person.id && !get("SELECT 1 AS x FROM shared_members m JOIN users u ON u.id = m.shared_id WHERE m.shared_id = ? AND m.user_id = ? AND u.kind = 'shared'", target, person.id)) return null;
+  const key = hash(`suite:${person.id}:${target}`);
+  if (!get('SELECT 1 AS x FROM mcp_tokens WHERE token_hash = ?', key)) {
+    run("INSERT INTO mcp_tokens (user_id, target_id, name, token_hash, access, space, created_at) VALUES (?, ?, 'Inkwell (through sign-in)', ?, 'propose', '', ?)", person.id, target, key, now());
+  }
+  return get('SELECT * FROM mcp_tokens WHERE token_hash = ? AND revoked_at IS NULL', key);
+}
+const isSuite = (t) => t.token_hash === hash(`suite:${t.user_id}:${t.target_id}`);
+
 /** The token's grant, or null: revoked, unknown, or its user no longer a member of the shared space. */
 function grantFor(req) {
+  if (req.headers['x-halcyon-sub']) return suiteGrant(req);
   const m = /^Bearer\s+(hmcp_[\w-]+)$/.exec(req.headers.authorization || '');
   const t = m && get('SELECT * FROM mcp_tokens WHERE token_hash = ? AND revoked_at IS NULL', hash(m[1]));
   if (!t) return null;
@@ -349,9 +370,17 @@ export default async function mcpRoutes(app) {
   app.delete('/api/mcp', async (req, reply) => reply.code(405).header('allow', 'POST').send());
 
   // Managing the tokens (as the person; Settings → Assistants).
-  app.get('/api/mcp-tokens', { preHandler: requireUser }, async (req) => all(`SELECT t.id, t.name, t.access, t.space, t.target_id AS targetId, u.name AS targetName, u.kind AS targetKind, t.created_at AS createdAt, t.last_used_at AS lastUsedAt
-    FROM mcp_tokens t JOIN users u ON u.id = t.target_id WHERE t.user_id = ? AND t.revoked_at IS NULL ORDER BY t.id`, req.user.id)
-    .map((t) => ({ ...t, target: t.targetKind === 'shared' ? t.targetName : 'My mail', log: all('SELECT tool, detail, ok, at FROM mcp_log WHERE token_id = ? ORDER BY id DESC LIMIT 30', t.id) })));
+  // Inkwell's grants through sign-in are listed also when turned off, so they can be turned on again.
+  app.get('/api/mcp-tokens', { preHandler: requireUser }, async (req) => all(`SELECT t.id, t.user_id, t.target_id, t.token_hash, t.revoked_at, t.name, t.access, t.space, t.target_id AS targetId, u.name AS targetName, u.kind AS targetKind, t.created_at AS createdAt, t.last_used_at AS lastUsedAt
+    FROM mcp_tokens t JOIN users u ON u.id = t.target_id WHERE t.user_id = ? ORDER BY t.id`, req.user.id)
+    .filter((t) => !t.revoked_at || isSuite(t))
+    .map(({ user_id: _u, target_id: _t, token_hash: _h, revoked_at: off, ...t }) => ({ ...t, suite: isSuite({ user_id: req.user.id, target_id: t.targetId, token_hash: _h }), off: !!off,
+      target: t.targetKind === 'shared' ? t.targetName : 'My mail', log: all('SELECT tool, detail, ok, at FROM mcp_log WHERE token_id = ? ORDER BY id DESC LIMIT 30', t.id) })));
+  app.post('/api/mcp-tokens/:id/restore', { preHandler: requireUser }, async (req) => {
+    const t = get('SELECT * FROM mcp_tokens WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (t && isSuite(t)) run('UPDATE mcp_tokens SET revoked_at = NULL WHERE id = ?', t.id);
+    return { ok: true };
+  });
   app.post('/api/mcp-tokens', { preHandler: requireUser }, async (req, reply) => {
     try { return createToken(req.user.id, req.body || {}); } catch (e) { return httpError(reply, 400, e.message); }
   });

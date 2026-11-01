@@ -54,14 +54,23 @@ function deepMerge(base, over) {
 }
 
 export function getSettings(userId) {
-  const row = get('SELECT settings_json FROM users WHERE id = ?', userId);
-  return deepMerge(DEFAULT_SETTINGS, json(row?.settings_json, {}));
+  const row = get('SELECT kind, settings_json FROM users WHERE id = ?', userId);
+  const s = deepMerge(DEFAULT_SETTINGS, json(row?.settings_json, {}));
+  // A shared space has no app language of its own (that is each member's): its AI writes in the language of its first
+  // owner, unless the space chose a summary language. Its time zone is fixed (members' devices never move it).
+  if (row?.kind === 'shared') {
+    const owner = get("SELECT u.settings_json FROM shared_members m JOIN users u ON u.id = m.user_id WHERE m.shared_id = ? AND m.role = 'owner' ORDER BY m.created_at LIMIT 1", userId);
+    s.ui = { ...s.ui, language: json(owner?.settings_json, {}).ui?.language || s.ui.language };
+    s.calendar = { ...s.calendar, tzAuto: false };
+  }
+  return s;
 }
 
 export function saveSettings(userId, patch) {
-  const merged = deepMerge(getSettings(userId), patch);
+  // Merged into what is stored (not into getSettings, which adds a shared space's derived language and zone).
+  const merged = deepMerge(deepMerge(DEFAULT_SETTINGS, json(get('SELECT settings_json FROM users WHERE id = ?', userId)?.settings_json, {})), patch);
   run('UPDATE users SET settings_json = ? WHERE id = ?', JSON.stringify(merged), userId);
-  return merged;
+  return getSettings(userId);
 }
 
 const validZone = (tz) => { try { new Intl.DateTimeFormat('en', { timeZone: tz }); return true; } catch { return false; } };

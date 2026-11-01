@@ -1,4 +1,4 @@
-import { requireUser, publicUser } from '../auth.js';
+import { requireUser, publicUser, ownerOnlyMessage } from '../auth.js';
 import { getSettings, saveSettings, timezoneChanged } from '../settings.js';
 import { resumeWaiting } from '../ai/queue.js';
 import { backfillAnalysis } from '../mail/pipeline.js';
@@ -36,24 +36,30 @@ export default async function settingsRoutes(app) {
     return { ok: true };
   });
 
-  // In a shared space (req.person set) mail, calendar and AI settings are the space's; how the app looks, its language
-  // and notifications stay the person's own.
+  // In a shared space (req.person set) mail, calendar and AI settings are the space's, set once by its owners; how the
+  // app looks, its language, notifications and one's habits in writing and reading mail stay the person's own.
   const PERSONAL = ['ui', 'notifications'];
+  const HABITS = ['undoSendSeconds', 'loadRemoteImages', 'markReadAfterMs', 'replyAllDefault', 'composeFormat'];
+  const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
   const settingsFor = (req) => {
     const s = getSettings(req.user.id);
     if (!req.person) return s;
     const p = getSettings(req.person.id);
-    return { ...s, ...Object.fromEntries(PERSONAL.map((k) => [k, p[k]])) };
+    return { ...s, ...Object.fromEntries(PERSONAL.map((k) => [k, p[k]])), mail: { ...s.mail, ...pick(p.mail, HABITS) } };
   };
   app.get('/api/me', { preHandler: requireUser }, async (req) => ({
     user: publicUser(req.person || req.user), settings: settingsFor(req), oauth: oauthAvailable(), singleUser: config.singleUser, version: '1.0.0',
-    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, acting: req.person ? { id: req.user.id, name: req.user.name } : null,
+    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, acting: req.person ? { id: req.user.id, name: req.user.name, role: req.spaceRole } : null,
   }));
-  app.patch('/api/settings', { preHandler: requireUser }, async (req) => {
+  app.patch('/api/settings', { preHandler: requireUser }, async (req, reply) => {
     const body = { ...(req.body || {}) };
     if (req.person) {
-      const own = Object.fromEntries(PERSONAL.filter((k) => body[k]).map((k) => [k, body[k]]));
+      const own = { ...pick(body, PERSONAL), ...(body.mail && Object.keys(pick(body.mail, HABITS)).length ? { mail: pick(body.mail, HABITS) } : {}) };
       for (const k of PERSONAL) delete body[k];
+      if (body.mail) { body.mail = { ...body.mail }; for (const k of HABITS) delete body.mail[k]; if (!Object.keys(body.mail).length) delete body.mail; }
+      // The space's time zone is its owners' choice; a member's device zone never moves it.
+      if (body.calendar) { body.calendar = { ...body.calendar }; delete body.calendar.tzAuto; if (!Object.keys(body.calendar).length) delete body.calendar; }
+      if (Object.keys(body).length && req.spaceRole !== 'owner') return reply.code(403).send({ error: ownerOnlyMessage, code: 'owner-only' });
       if (Object.keys(own).length) saveSettings(req.person.id, own);
     }
     const old = getSettings(req.user.id);

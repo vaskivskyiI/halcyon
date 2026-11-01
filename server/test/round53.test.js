@@ -60,7 +60,7 @@ before(async () => {
 after(async () => { await app?.close(); ink?.close(); setTimeout(() => process.exit(0), 50).unref(); });
 
 test('not set up: no url, no links, and Inkwell is not asked', async () => {
-  assert.deepEqual(await api('GET', '/api/integrations/inkwell'), { url: '', hasToken: false, configured: false, tls: { ca: '', insecure: false } });
+  assert.deepEqual(await api('GET', '/api/integrations/inkwell'), { url: '', hasToken: false, configured: false, suite: false, suiteUrl: '', tls: { ca: '', insecure: false } });
   assert.deepEqual(await api('GET', '/api/integrations/inkwell/links?kind=event&ref=42'), { url: null, links: [] });
   assert.equal(seen.length, 0);
 });
@@ -69,7 +69,7 @@ test('saving: only http(s) addresses and ink_ tokens; the token is encrypted and
   assert.equal((await call('PUT', '/api/integrations/inkwell', { url: 'ftp://notes.example.org', token: TOKEN })).status, 400);
   assert.equal((await call('PUT', '/api/integrations/inkwell', { url: inkBase, token: 'hmcp_wrong_kind' })).status, 400);
   const saved = await api('PUT', '/api/integrations/inkwell', { url: `${inkBase}/`, token: TOKEN });
-  assert.deepEqual(saved, { url: inkBase, hasToken: true, configured: true, tls: { ca: '', insecure: false } }, 'trailing slash dropped, no token in the answer');
+  assert.deepEqual(saved, { url: inkBase, hasToken: true, configured: true, suite: false, suiteUrl: '', tls: { ca: '', insecure: false } }, 'trailing slash dropped, no token in the answer');
   assert.ok(!JSON.stringify(await api('GET', '/api/integrations/inkwell')).includes(TOKEN));
   assert.ok(!JSON.stringify(await api('GET', '/api/me')).includes(TOKEN));
   const row = db.prepare("SELECT token_enc FROM integrations WHERE kind = 'inkwell'").get();
@@ -109,7 +109,7 @@ test('Inkwell refusing the token or not reachable: no url, no links (the views l
   assert.deepEqual([down.url, down.links], [null, []]);
   assert.ok(down.error);
 
-  assert.deepEqual(await api('PUT', '/api/integrations/inkwell', { url: '' }), { url: '', hasToken: false, configured: false, tls: { ca: '', insecure: false } });
+  assert.deepEqual(await api('PUT', '/api/integrations/inkwell', { url: '' }), { url: '', hasToken: false, configured: false, suite: false, suiteUrl: '', tls: { ca: '', insecure: false } });
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM integrations").get().n, 0);
 });
 

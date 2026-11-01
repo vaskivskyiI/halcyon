@@ -35,18 +35,22 @@ export default function Integrations() {
     <div className="settings-section">
       <h2>Integrations</h2>
       <h3>Inkwell</h3>
-      <div className="muted">Your Inkwell notes linked to an email, an event or a task show next to it here, with a button for a new note. Create a token in Inkwell → Settings → Apps &amp; tokens.</div>
-      {ink && <div style={{ display: 'grid', gap: 10, maxWidth: 520 }}>
-        <label className="field">Inkwell address<input className="input" placeholder="https://notes.example.org" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
+      <div className="muted">Your Inkwell notes linked to an email, an event or a task show next to it here, with a button for a new note.</div>
+      {ink?.suite && <div className="notice"><Check size={14} /> Connected to <b>{ink.url}</b> — set up once by the administrator for everyone on this server (no token needed).</div>}
+      {ink && ink.suiteUrl && !ink.suite && <div className="notice">This server's Inkwell is {ink.suiteUrl}; you use another one below. Disconnect it to go back to the server's.</div>}
+      {ink && <details open={!ink.suiteUrl} style={{ maxWidth: 520 }}><summary className="small">{ink.suiteUrl ? 'Use another Inkwell' : 'Connect Inkwell'}</summary>
+      <div className="small faint" style={{ margin: '6px 0' }}>Create a token in Inkwell → Settings → Apps &amp; tokens.</div>
+      <div style={{ display: 'grid', gap: 10 }}>
+        <label className="field">Inkwell address<input className="input" placeholder="https://notes.example.org" value={ink.suite ? '' : f.url} onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
         <label className="field">API token<input className="input" type="password" autoComplete="off" placeholder={ink.hasToken ? 'Saved — type a new one to replace it' : 'ink_…'} value={f.token} onChange={(e) => setF({ ...f, token: e.target.value })} /></label>
         {/^https:/i.test(f.url.trim()) && <CertField value={f.tls} onChange={(tls) => setF((x) => ({ ...x, tls }))} />}
         <div className="row">
           <button className="btn primary" disabled={busy || !f.url.trim() || (!f.token.trim() && !ink.hasToken)} onClick={save}>Save</button>
-          {ink.configured && <span className="small faint"><Check size={12} /> Connected</span>}
+          {ink.configured && !ink.suite && <span className="small faint"><Check size={12} /> Connected</span>}
           <span className="grow" />
-          {ink.url && <button className="btn ghost" onClick={disconnect}><Unplug size={15} /> Disconnect</button>}
+          {ink.url && !ink.suite && <button className="btn ghost" onClick={disconnect}><Unplug size={15} /> Disconnect</button>}
         </div>
-      </div>}
+      </div></details>}
     </div>
   );
 }

@@ -66,13 +66,18 @@ export function userFromRequest(req) {
 
 export const AS_COOKIE = 'halcyon_as';
 const PERSON_ONLY = /^\/api\/(auth|admin|shared|mcp-tokens|integrations)(\/|$|\?)/;
+// A shared space is set up once, by its owners, for everyone in it: its accounts (signature, auto-reply), AI providers
+// and what the AI learned or was told, mail rules, categories, quick steps and read-only calendar servers. Members use
+// them (sync, test a connection) but do not change them. Settings: see routes/settings.js (personal keys stay free).
+const OWNER_ONLY = /^\/api\/(accounts(?!\/[^/]+\/(sync|test)\b)|ai\/(providers|rules|preferences|about-me|style|memory)|rules|custom-categories|quick-steps|calendar-sources|archives|spaces\/(assign|rename))(\/|$|\?)/;
+export const ownerOnlyMessage = 'Only an owner of the shared space can change this — it is set once for everyone in the space';
 
 /** The shared-space user this request acts as: a user row, null (acting as oneself) or false (not a member). */
 export function actingAs(req, person, path = req.url) {
   // Per request (header; on GET also ?as= — images and downloads cannot send headers), else the space entered (cookie).
   const id = Number(req.headers['x-halcyon-as'] || (req.method === 'GET' && req.query?.as) || req.cookies?.[AS_COOKIE]) || 0;
   if (!id || id === person.id || PERSON_ONLY.test(path)) return null;
-  const m = get(`SELECT u.* FROM shared_members m JOIN users u ON u.id = m.shared_id WHERE m.shared_id = ? AND m.user_id = ? AND u.kind = 'shared'`, id, person.id);
+  const m = get(`SELECT u.*, m.role AS member_role FROM shared_members m JOIN users u ON u.id = m.shared_id WHERE m.shared_id = ? AND m.user_id = ? AND u.kind = 'shared'`, id, person.id);
   return m || false;
 }
 
@@ -84,8 +89,10 @@ export async function requireUser(req, reply) {
   // Working in a shared space (shared.js): the request acts as the space's own user — only for members. Signing in,
   // passwords, user administration and managing shared spaces always act as the person.
   const as = actingAs(req, u);
-  if (as) { req.person = u; req.user = as; }
-  else if (as === false) return reply.code(403).send({ error: 'You are not a member of this shared space', code: 'not-member' });
+  if (as) {
+    req.person = u; req.user = as; req.spaceRole = as.member_role;
+    if (req.method !== 'GET' && as.member_role !== 'owner' && OWNER_ONLY.test(req.url)) return reply.code(403).send({ error: ownerOnlyMessage, code: 'owner-only' });
+  } else if (as === false) return reply.code(403).send({ error: 'You are not a member of this shared space', code: 'not-member' });
   const tz = req.headers['x-halcyon-tz'];
   if (tz && !req.readOnly) { try { noteClientTimezone(u.id, decodeURIComponent(String(tz))); } catch { /* ignore a bad header */ } }
 }
@@ -105,7 +112,7 @@ export default async function authRoutes(app) {
     const u = userFromRequest(req);
     const as = u && actingAs(req, u, '/api/me');
     return { needsSetup: count === 0 && !config.singleUser, suite: !!config.ssoSecret, user: publicUser(u), singleUser: config.singleUser, allowSignup: config.allowSignup, readOnly: !!sessionFromRequest(req)?.read_only,
-      acting: as ? { id: as.id, name: as.name } : null };
+      acting: as ? { id: as.id, name: as.name, role: as.member_role } : null };
   });
 
   app.post('/api/auth/setup', async (req, reply) => {

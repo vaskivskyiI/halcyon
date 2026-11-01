@@ -29,7 +29,8 @@ export default function Assistants() {
       setCreated({ ...r, name: f.name || 'Assistant' }); setF({ name: '', targetId: '', space: '', access: 'read' }); load();
     } catch (e) { toastError(e); }
   };
-  const revoke = async (t) => { if (!confirm(`Disconnect “${t.name}”? Its token stops working at once.`)) return; await api.del(`/api/mcp-tokens/${t.id}`).catch(toastError); load(); };
+  const revoke = async (t) => { if (!confirm(t.suite ? `Turn off Inkwell's access to ${t.target}? Inkwell then no longer shows its mail, events and tasks to you.` : `Disconnect “${t.name}”? Its token stops working at once.`)) return; await api.del(`/api/mcp-tokens/${t.id}`).catch(toastError); load(); };
+  const restore = (t) => api.post(`/api/mcp-tokens/${t.id}/restore`).then(load).catch(toastError);
 
   return (
     <div className="settings-section">
@@ -41,9 +42,10 @@ export default function Assistants() {
         <div key={t.id} className="card" style={{ padding: 12 }}>
           <div className="row">
             <button className="icon-btn" onClick={() => setOpen(open === t.id ? null : t.id)} title="Recent activity">{open === t.id ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>
-            <b className="grow">{t.name}</b>
+            <b className="grow" title={t.suite ? 'Set up once by the administrator: Inkwell reaches your mail as you, without a key' : undefined}>{t.name}{t.off ? <span className="faint"> — off</span> : ''}</b>
             <span className="small faint">{t.target}{t.space ? ` · ${t.space}` : ''} · {t.access === 'propose' ? 'can propose' : 'read only'} · {t.lastUsedAt ? `used ${new Date(t.lastUsedAt).toLocaleString()}` : 'not used yet'}</span>
-            <button className="icon-btn" title="Disconnect" onClick={() => revoke(t)}><Trash2 size={15} /></button>
+            {t.off ? <button className="btn sm" onClick={() => restore(t)}>Turn on</button>
+              : <button className="icon-btn" title={t.suite ? 'Turn off' : 'Disconnect'} onClick={() => revoke(t)}><Trash2 size={15} /></button>}
           </div>
           {open === t.id && <div className="small" style={{ marginTop: 8, display: 'grid', gap: 2 }}>
             {t.log.length ? t.log.map((l, i) => <div key={i} className={l.ok ? 'faint' : 'error-text'}>{new Date(l.at).toLocaleString()} · <b>{l.tool}</b> {l.detail}</div>) : <div className="faint">No activity yet.</div>}

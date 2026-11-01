@@ -2,6 +2,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { all, get, run, now } from './db/index.js';
 import { encrypt, decrypt } from './util/crypto.js';
 import { tlsOf } from './mail/connection.js';
+import { config } from './config.js';
 
 // Inkwell (the user's own notes app) links its pages to Halcyon mail, events and tasks; Halcyon asks it which pages
 // link to what is on screen. Personal: a person's own Inkwell, also while working in a shared space (message, event
@@ -15,15 +16,21 @@ const cleanBase = (url) => {
   return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
 };
 
+// The suite's Inkwell (config.inkwellUrl), set up once by the administrator: asked as the person with the sign-on secret.
+// A person's own saved address and token, if any, still win (another Inkwell).
+const suiteInkwell = (userId) => (config.inkwellUrl && config.ssoSecret ? { url: config.inkwellUrl, suite: true, sub: String(userId), token: null, tls_ca: config.inkwellCa || null, tls_insecure: 0 } : null);
+
 export function inkwellConfig(userId) {
   const r = get("SELECT base_url, token_enc, tls_ca, tls_insecure, updated_at FROM integrations WHERE user_id = ? AND kind = 'inkwell'", userId);
-  return r?.base_url ? { url: r.base_url, token: r.token_enc ? decrypt(r.token_enc) : null, tls_ca: r.tls_ca, tls_insecure: r.tls_insecure, updatedAt: r.updated_at } : null;
+  return r?.base_url ? { url: r.base_url, token: r.token_enc ? decrypt(r.token_enc) : null, tls_ca: r.tls_ca, tls_insecure: r.tls_insecure, updatedAt: r.updated_at } : suiteInkwell(userId);
 }
+const usable = (c) => !!(c?.url && (c.token || c.suite));
+const authHeaders = (c) => (c.suite ? { authorization: `Bearer ${config.ssoSecret}`, 'x-halcyon-sub': c.sub } : { authorization: `Bearer ${c.token}` });
 
 /** What the API shows: never the token itself. */
 export function inkwellPublic(userId) {
   const c = inkwellConfig(userId);
-  return { url: c?.url || '', hasToken: !!c?.token, configured: !!(c?.url && c?.token), tls: { ca: c?.tls_ca || '', insecure: !!c?.tls_insecure } };
+  return { url: c?.url || '', hasToken: !!c?.token, configured: usable(c), suite: !!c?.suite, suiteUrl: suiteInkwell(userId)?.url || '', tls: { ca: c?.suite ? '' : c?.tls_ca || '', insecure: !!c?.tls_insecure } };
 }
 
 /** Saves the address and (when given) a new token; an empty address disconnects. */
@@ -74,10 +81,12 @@ function noteUrl(base, item) {
 /** The pages edited last in the person's Inkwell (Home shows them next to the day's mail and calendar). */
 export async function inkwellRecent(userId, limit = 6) {
   const c = inkwellConfig(userId);
-  if (!c?.url || !c.token) return null;
+  if (!usable(c)) return null;
   const r = await inkFetch(c)(`${c.url}/api/recent?limit=${Math.min(Math.max(Number(limit) || 6, 1), 20)}`, {
-    headers: { authorization: `Bearer ${c.token}`, accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS),
+    headers: { ...authHeaders(c), accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS),
   });
+  // Through the suite, a person who never opened Inkwell has no notes there yet: nothing to show, not an error.
+  if (c.suite && r.status === 401) return [];
   if (!r.ok) throw new Error(r.status === 401 || r.status === 403 ? 'Inkwell did not accept the token' : `Inkwell answered ${r.status}`);
   const data = await r.json();
   if (!Array.isArray(data)) throw new Error('Inkwell sent an unexpected answer');
@@ -93,7 +102,7 @@ export async function inkwellRecent(userId, limit = 6) {
  */
 export async function inkwellLookup(userId, kind, refs, { signal } = {}) {
   const c = inkwellConfig(userId);
-  if (!c?.url || !c.token) return null;
+  if (!usable(c)) return null;
   if (!INKWELL_KINDS.includes(kind)) throw Object.assign(new Error('Unknown kind'), { statusCode: 400 });
   let ids = [...new Set(refs.map((r) => String(r).trim()).filter((r) => /^\d+$/.test(r)))].slice(0, 100);
   if (!ids.length) return [];
@@ -101,8 +110,9 @@ export async function inkwellLookup(userId, kind, refs, { signal } = {}) {
   if (kind === 'email') ids = [...new Set([...ids, ...all(`SELECT DISTINCT c.id FROM messages m JOIN messages c ON c.user_id = m.user_id AND c.message_id = m.message_id
     WHERE m.id IN (${ids.join(',')}) AND COALESCE(m.message_id, '') != ''`).map((r) => String(r.id))])].slice(0, 100);
   const r = await inkFetch(c)(`${c.url}/api/links/lookup?kind=${kind}&ref=${ids.join(',')}`, {
-    headers: { authorization: `Bearer ${c.token}`, accept: 'application/json' }, signal: signal || AbortSignal.timeout(TIMEOUT_MS),
+    headers: { ...authHeaders(c), accept: 'application/json' }, signal: signal || AbortSignal.timeout(TIMEOUT_MS),
   });
+  if (c.suite && r.status === 401) return [];
   if (!r.ok) throw new Error(r.status === 401 || r.status === 403 ? 'Inkwell did not accept the token' : `Inkwell answered ${r.status}`);
   const data = await r.json();
   if (!Array.isArray(data)) throw new Error('Inkwell sent an unexpected answer');

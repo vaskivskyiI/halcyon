@@ -122,7 +122,10 @@ test('in the space: shared settings but own appearance; own assistant chats; acc
   await ok('b', 'POST', `/api/shared/${sharedId}/enter`);
   await ok('b', 'PATCH', '/api/settings', { ui: { theme: 'dark' }, mail: { undoSendSeconds: 5 } });
   assert.equal(JSON.parse(db.prepare('SELECT settings_json FROM users WHERE id = ?').get(B).settings_json).ui.theme, 'dark');
-  assert.equal(JSON.parse(db.prepare('SELECT settings_json FROM users WHERE id = ?').get(sharedId).settings_json).mail.undoSendSeconds, 5);
+  // Undo send is a habit: Ben's own, also in the space; the space's settings are its owner's to change.
+  assert.equal(JSON.parse(db.prepare('SELECT settings_json FROM users WHERE id = ?').get(B).settings_json).mail.undoSendSeconds, 5);
+  assert.notEqual(JSON.parse(db.prepare('SELECT settings_json FROM users WHERE id = ?').get(sharedId).settings_json || '{}').mail?.undoSendSeconds, 5);
+  assert.equal((await as('b', 'PATCH', '/api/settings', { mail: { focusedInbox: false } })).status, 403);
   const me = await ok('b', 'GET', '/api/me');
   assert.equal(me.user.email, 'b@example.org'); assert.equal(me.acting.name, 'Studio'); assert.equal(me.settings.ui.theme, 'dark');
   assert.equal((await ok('b', 'GET', '/api/auth/status')).acting.id, sharedId);

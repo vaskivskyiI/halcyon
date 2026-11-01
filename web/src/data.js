@@ -60,7 +60,7 @@ export async function loadMe() {
   applyTheme(me.settings);
   // Times the AI reads from mail are local times; the server needs this device's zone, not its own (often UTC).
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (tz && !store.get().readOnly && me.settings?.calendar?.tzAuto !== false && me.settings?.calendar?.timezone !== tz) saveSettings({ calendar: { timezone: tz } }).catch(() => {});
+  if (tz && !store.get().readOnly && !me.acting && me.settings?.calendar?.tzAuto !== false && me.settings?.calendar?.timezone !== tz) saveSettings({ calendar: { timezone: tz } }).catch(() => {});
   return me;
 }
 // Folder counts are asked for by many events (sync, new mail, AI results, own actions): one request at a time, and at

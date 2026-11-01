@@ -22,6 +22,9 @@ const SECTIONS = [
 export default function SettingsView({ route }) {
   const section = route[1] || 'accounts';
   const user = store.use((s) => s.user);
+  const acting = store.use((s) => s.acting);
+  // In a shared space its settings are set once by its owners; one's own look, notifications and mail habits stay free.
+  const ownerOnly = acting && acting.role !== 'owner' && !['appearance', 'notifications', 'sharing', 'assistants', 'integrations', 'security', 'about', 'mail'].includes(section);
   const C = { accounts: Accounts, spaces: Spaces, sharing: Sharing, ai: AISettings, assistants: Assistants, integrations: Integrations, mail: MailPrefs, archives: Archives, notifications: Notifications, calendar: CalendarPrefs, calendars: CalendarsTasks, rules: Rules, labels: Labels, templates: Templates, appearance: Appearance, security: Security, diagnostics: Diagnostics, users: AdminUsers, about: About }[section] || Accounts;
   return (
     <div className="settings">
@@ -35,6 +38,8 @@ export default function SettingsView({ route }) {
         <select className="input mobile-only" style={{ marginBottom: 16, display: undefined }} value={section} onChange={(e) => navigate(`#/settings/${e.target.value}`)}>
           {SECTIONS.map(([id, , label]) => <option key={id} value={id}>{label}</option>)}
         </select>
+        {ownerOnly && <div className="notice" style={{ marginTop: 0 }}>These settings belong to the shared space “{acting.name}” and are set once by its owners for everyone in it — you can look, not change them.</div>}
+        {acting && section === 'mail' && <div className="notice" style={{ marginTop: 0 }}>In “{acting.name}”: undo send, remote images, marking as read, the compose format and reply-all are your own; the rest is set once by the space's owners.</div>}
         <C />
       </div>
     </div>

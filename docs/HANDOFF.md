@@ -942,6 +942,15 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - AI sees what the login sees: `aiSpacesOf` (spaces shown in My mail; a privacy-mode space only for a privacy-mode login) feeds the assistant, brief and semantic search. Inside a space, or with a space-limited view, only that.
 - Sharing takes any calendar, address book or task list: read-only ones too; those of a server go together; those synced through an account stay linked to it (sync finds them by url + account_id).
 - Sign in with Halcyon (`routes/sso.js`, HALCYON_SSO_SECRET / HALCYON_SSO_REDIRECTS): one-time code, exact callback; POST /api/sso/spaces gives a companion app the shared spaces and member ids.
+- Suite trust, set once by the administrator (no per-user tokens): Inkwell calls `/api/mcp` with `Authorization: Bearer <HALCYON_SSO_SECRET>`,
+  `X-Halcyon-Sub: <person id>` and `X-Halcyon-Target: <person or shared space id>` (`mcp/server.js` suiteGrant: members only, propose access,
+  a token row "Inkwell (through sign-in)" per person and target, listed in Settings → Assistants, can be turned off and on). Halcyon asks the
+  suite's Inkwell (HALCYON_INKWELL_URL, default: the first companion origin; HALCYON_INKWELL_CA) with the same secret and `X-Halcyon-Sub`
+  (`integrations.js` suiteInkwell); a person's own saved Inkwell still wins; a person Inkwell does not know (401) gets nothing, quietly.
+- Shared spaces are set up once by their owners (`auth.js` OWNER_ONLY + `routes/settings.js`): members cannot change the space's accounts,
+  AI providers / rules / learning, mail rules, categories, quick steps, calendar servers, archives or non-personal settings (403 owner-only).
+  Personal inside a space: ui, notifications and mail habits (undoSendSeconds, loadRemoteImages, markReadAfterMs, replyAllDefault,
+  composeFormat). The space's AI writes in its first owner's ui.language; its time zone never follows a member's device (tzAuto off).
 - The suite: same left menu order in Halcyon (App.jsx nav) and Inkwell (Rail.jsx); Home is `#/home` (home/HomeView.jsx); `components/SidePane.jsx` shows a second app in a frame (`?embed=1` hides its rail), allowed for origins in HALCYON_SSO_REDIRECTS (`config.companions`). Profile button signs out of both: GET /api/sso/logout and Inkwell /api/auth/halcyon/logout, each returning only to the other.
 - Reader: "Files" chip lists a conversation's files (`threadFiles`). Search: Results / AI tabs. Assistant: sources folded.
 - Spaces and Inkwell: MCP `list_spaces` ({ spaces }; a token with its own space: only that one). search_mail,

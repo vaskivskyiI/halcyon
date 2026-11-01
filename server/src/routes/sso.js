@@ -1,6 +1,7 @@
 // "Sign in with Halcyon" for a companion app (Inkwell) set up by the same administrator: HALCYON_SSO_SECRET on both, its
 // callback in HALCYON_SSO_REDIRECTS. An authorization-code exchange: the browser only carries a one-time code, the app
-// trades it for the login server to server. The same secret lets the app read who is in which shared space, nothing else.
+// trades it for the login server to server. The same secret lets the app read who is in which shared space, and reach
+// a person's mailboxes as they could themselves (mcp/server.js: "Inkwell (through sign-in)", which they can turn off).
 import crypto from 'node:crypto';
 import { all, get, run, now } from '../db/index.js';
 import { config } from '../config.js';
@@ -10,7 +11,7 @@ import { membersOf } from '../shared.js';
 const CODE_MS = 60e3;
 const codes = new Map();
 
-function trusted(req) {
+export function trusted(req) {
   const a = Buffer.from(crypto.createHash('sha256').update(String(req.headers.authorization || '')).digest());
   const b = Buffer.from(crypto.createHash('sha256').update(`Bearer ${config.ssoSecret}`).digest());
   return !!config.ssoSecret && crypto.timingSafeEqual(a, b);
