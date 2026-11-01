@@ -34,11 +34,14 @@ export default function App() {
   const boot = async () => {
     try {
       const st = await api.get('/api/auth/status');
-      setStatus(st);
       store.set({ readOnly: !!st.readOnly, acting: st.acting || null });
       setApiActing(st.acting?.id || null);
+      // Signed in: the sign-in form must not show for a moment while the user loads (its password field makes the
+      // browser offer saved passwords on every load and every switch of space, which reloads the page).
+      if (!st.user) setStatus(st);
       if (st.user) {
         await loadMe();
+        setStatus(st);
         await loadSpaces().catch(() => {});
         await loadShared();
         applyMergedSpaces();
