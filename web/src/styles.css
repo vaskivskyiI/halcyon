@@ -617,14 +617,43 @@ a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display
 .side-drag:hover { background: var(--accent-soft); }
 .app > .main { min-width: 0; }
 @media (max-width: 900px) { .side-pane { display: none; } }
-.home { flex: 1; overflow: auto; padding: 28px clamp(16px, 4vw, 48px); }
-.home h1 { margin: 0 0 20px; font-size: 24px; }
-.home-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 20px; }
-.home-tile { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 14px; cursor: pointer; }
-.home-tile:hover { border-color: var(--accent); }
-.home-tile .icon-btn { position: absolute; top: 6px; right: 6px; opacity: .6; }
-.home-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-.home-lists h3 { margin: 0 0 8px; font-size: 14px; }
-.home-row { display: flex; gap: 8px; padding: 4px 0; min-width: 0; color: inherit; text-decoration: none; font-size: 13.5px; }
-.home-row:hover { color: var(--accent); }
-.danger-text { color: var(--danger); }
+.home { flex: 1; min-width: 0; overflow: auto; }
+.home-inner { max-width: 1040px; margin: 0 auto; padding: clamp(24px, 5vh, 56px) clamp(16px, 4vw, 40px) 40px; display: flex; flex-direction: column; gap: 28px; }
+.home-date { font-size: 12.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+.home-head h1 { margin: 4px 0 0; font-size: clamp(26px, 3vw, 34px); font-weight: 650; letter-spacing: -.02em; }
+.home-head p { margin: 6px 0 0; color: var(--text-2); }
+.home-apps { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.home-app { --tint: var(--accent); display: flex; align-items: center; gap: 10px; min-width: 0; height: 50px; padding: 0 10px 0 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); cursor: pointer; font-weight: 550; transition: border-color .12s, box-shadow .12s, transform .12s; }
+.home-app:hover { border-color: color-mix(in srgb, var(--tint) 45%, var(--border)); box-shadow: 0 2px 10px color-mix(in srgb, var(--tint) 12%, transparent); transform: translateY(-1px); }
+.home-app:focus-visible { outline: 2px solid var(--tint); outline-offset: 1px; }
+.home-app-icon { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; color: var(--tint); background: color-mix(in srgb, var(--tint) 13%, transparent); }
+.home-app-n { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.home-app button { display: none; flex: none; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--text-2); cursor: pointer; }
+.home-app:hover button, .home-app:focus-within button { display: grid; }
+.home-app:hover .home-app-n { display: none; }
+.home-app button:hover { background: var(--hover); color: var(--text); }
+.app-mail { --tint: #2563eb; } .app-calendar { --tint: #dc2626; } .app-contacts { --tint: #0d9488; } .app-tasks { --tint: #16a34a; } .app-notes { --tint: #d97706; } .app-assistant { --tint: #7c3aed; }
+:root[data-theme="dark"] .app-mail { --tint: #60a5fa; } :root[data-theme="dark"] .app-calendar { --tint: #f87171; } :root[data-theme="dark"] .app-contacts { --tint: #2dd4bf; }
+:root[data-theme="dark"] .app-tasks { --tint: #4ade80; } :root[data-theme="dark"] .app-notes { --tint: #fbbf24; } :root[data-theme="dark"] .app-assistant { --tint: #a78bfa; }
+.home-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 32px; align-items: start; }
+.home-col { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+@media (max-width: 760px) { .home-grid { grid-template-columns: minmax(0, 1fr); } .home-inner { padding-bottom: 76px; } }
+.app:has(.side-pane) .home-grid { grid-template-columns: minmax(0, 1fr); }
+.home-panel { min-width: 0; }
+.home-panel-head { display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.home-panel h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.home-panel-head a { font-size: 12.5px; color: var(--text-2); text-decoration: none; }
+.home-panel-head a:hover { color: var(--accent); }
+.home-event, .home-task, .home-mail { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 6px; margin: 0 -6px; border-radius: 8px; color: inherit; text-decoration: none; }
+.home-event:hover, .home-task:hover, .home-mail:hover { background: var(--hover); }
+.home-event .bar { flex: none; align-self: stretch; width: 3px; border-radius: 2px; min-height: 20px; }
+.home-event .when { flex: none; width: 58px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.home-task .dot { flex: none; width: 13px; height: 13px; border: 1.5px solid var(--text-3); border-radius: 50%; }
+.home-task .dot.late { border-color: var(--danger); }
+.home-task .late { color: var(--danger); }
+.home-mail { align-items: flex-start; }
+.home-mail-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.home-mail-text .row { min-width: 0; font-size: 13.5px; }
+.home-mail-text b { font-weight: 500; }
+.home-mail.unread b { font-weight: 650; }
+.home-none { padding: 14px 0; font-size: 13.5px; color: var(--text-3); }

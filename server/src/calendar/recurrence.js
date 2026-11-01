@@ -2,10 +2,22 @@
 import rrulePkg from 'rrule';
 const { RRule } = rrulePkg;
 
+// Making a formatter is slow (about a millisecond) and a calendar view needs thousands: one per zone. null: unknown zone.
+const zones = new Map();
+function zoneFormat(tz) {
+  if (!zones.has(tz)) {
+    let dtf = null;
+    try { dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch { /* stays null */ }
+    zones.set(tz, dtf);
+  }
+  return zones.get(tz);
+}
+
 export function tzOffsetMs(tz, ms) {
   if (!tz) return -new Date(ms).getTimezoneOffset() * 60e3;
+  const dtf = zoneFormat(tz);
+  if (!dtf) return 0;
   try {
-    const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const p = Object.fromEntries(dtf.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
     return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(ms / 1000) * 1000;
   } catch { return 0; }
@@ -17,7 +29,25 @@ export function tzOffsetMs(tz, ms) {
  */
 export const allDayMs = (t) => Math.round(Number(t) / 864e5) * 864e5;
 
-const validZone = (tz) => { if (!tz) return false; try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; } };
+const validZone = (tz) => !!tz && !!zoneFormat(tz);
+
+/**
+ * The start moved forward by whole repeats, close to `limit`: walking a birthday from 1975 or a weekly meeting from 2015
+ * to today, for each of thousands of events, is what made calendars slow. Left alone where a jump could change the
+ * result: a counted rule, or a day that not every month or year has.
+ */
+function fastForward(opts, start, limit) {
+  const n = opts.interval || 1, gap = limit - start;
+  if (gap <= 0 || opts.count != null || opts.bysetpos != null) return start;
+  const d = new Date(start), jump = (k) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + k, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds());
+  const whole = (period) => Math.max(0, Math.floor(gap / (period * n)) - 1) * n;
+  if (opts.freq === RRule.DAILY) return start + whole(864e5) * 864e5;
+  if (opts.freq === RRule.WEEKLY) return start + whole(7 * 864e5) * 7 * 864e5;
+  if (d.getUTCDate() > 28) return start;
+  if (opts.freq === RRule.MONTHLY) return jump(whole(31 * 864e5));
+  if (opts.freq === RRule.YEARLY) return jump(whole(366 * 864e5) * 12);
+  return start;
+}
 
 /** Returns occurrences [{start, end, recurrenceId}] of event e in [from, to). */
 export function expand(e, from, to, tz) {
@@ -31,7 +61,8 @@ export function expand(e, from, to, tz) {
   let rule;
   try {
     const opts = RRule.parseString(e.rrule);
-    rule = new RRule({ ...opts, ...(opts.until ? { until: new Date(opts.until.getTime() + off(opts.until.getTime())) } : {}), dtstart: new Date(e.start + off(e.start)) });
+    const first = e.start + off(e.start);
+    rule = new RRule({ ...opts, ...(opts.until ? { until: new Date(opts.until.getTime() + off(opts.until.getTime())) } : {}), dtstart: new Date(fastForward(opts, first, from + off(from) - dur - 864e5)) });
   } catch { return [{ start: e.start, end: e.end, recurrenceId: null }]; }
   const ex = new Set((e.exdates || []).map((x) => (e.allDay ? allDayMs(x) : Number(x))));
   const out = [];
