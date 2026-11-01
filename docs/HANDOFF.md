@@ -957,3 +957,13 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   state: a repeating task stays open on its next date (`done: false`, `next_due`, `completed_id`). `list_tasks` takes
   `ids` (at most 200): exactly those tasks, done or not, past the 100 limit of the plain list.
   Each task from `list_tasks` also says `repeats`: Inkwell reads a moved due date of a repeating task as ticked.
+- "Busy only" sharing between logins (migration 52, round72): `freebusy_shares` (owner_id, calendar_id, grantee_id). A
+  person lets another login (email) or one of their shared spaces see when they are busy in chosen own calendars:
+  `/api/shared/busy` GET / POST { calendarId, email | sharedId } / DELETE :id (under `/api/shared`, so always as the person).
+  `repo.sharedBusy(viewerIds, from, to)` reads the owners' busy events (`includeInfo: false`, effective `busy`: busy,
+  tentative, oof) and returns only start / end / allDay as "Busy · <owner>" (`sharedBusy: true`, no id, calendar,
+  title, place or people); owners among the viewers are left out. Viewers = the person, and in a shared space the space.
+  Used by `/api/events` (both modes), `/api/calendar/check`, `findFreeSlots` (`viewers` option), the AI scheduling
+  context, the assistant's calendar and the brief's events. Web: share button on each calendar in Settings → Calendars
+  & tasks (hidden while working in a space). Gap: an owner's event change does not push `calendar:changed` to grantees
+  (they see it on their next load).

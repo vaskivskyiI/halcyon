@@ -8,7 +8,7 @@ import { chat } from './router.js';
 import { askPrompt, stripQuoted, userContext, localStamp } from './prompts.js';
 import { keywordSearch, embedQuery } from '../search.js';
 import { searchMemory, memoryText } from './memory.js';
-import { listRange, findFreeSlots } from '../calendar/repo.js';
+import { listRange, findFreeSlots, sharedBusy } from '../calendar/repo.js';
 import { mailAccounts } from '../accounts.js';
 import { scope, inIds, cleanSpace } from '../spaces.js';
 import { rememberFact, briefLive } from './tasks.js';
@@ -97,7 +97,7 @@ ${m.ai_summary ? `Summary: ${m.ai_summary}\n` : ''}${excerpt}`;
   let cal = '';
   if (/calendar|schedule|meeting|event|today|tomorrow|week|free|busy|available|appointment|when|koledar|sestan|termin|danes|jutri/i.test(question)) {
     const from = Date.now() - 12 * 3600e3;
-    const list = sc && !sc.calendarIds.length ? [] : listRange(userId, from, Date.now() + 21 * 864e5, sc?.calendarIds);
+    const list = [...(sc && !sc.calendarIds.length ? [] : listRange(userId, from, Date.now() + 21 * 864e5, sc?.calendarIds)), ...sharedBusy([userId], from, Date.now() + 21 * 864e5)].sort((x, y) => x.start - y.start);
     cal = `\nCALENDAR (from now until 3 weeks ahead):\n${list.map((e) => `- ${e.allDay ? `${localStamp(e.start, tz).slice(0, 14)} all day` : `${when(e.start)} → ${localStamp(e.end, tz).slice(-5)}`}${e.end < Date.now() ? ' [already over]' : ''}${e.showAs === 'info' ? ' [for information only — not the user\'s own commitment]' : e.showAs === 'free' ? ' [does not block time]' : e.showAs === 'elsewhere' ? ' [working elsewhere]' : e.showAs === 'oof' ? ' [away / out of office]' : e.showAs === 'tentative' ? ' [tentative]' : ''} ${e.title}${e.location ? ` @ ${e.location}` : ''}`).join('\n') || '(no events)'}`;
     if (/free|available|slot|when can|prost/i.test(question)) {
       // Busy time counts across all calendars (one person, one schedule); only the free slots are shown.

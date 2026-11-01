@@ -201,7 +201,8 @@ export default async function calendarRoutes(app) {
     const list = ids && !ids.length ? [] : repo.listRange(req.user.id, from, to, ids);
     if (!all) return withShared(req, [...list, ...blockedElsewhere(req, from, to, sc)], (uid) => repo.listRange(uid, from, to, null)).sort((a, b) => a.start - b.start);
     const spaces = spaceMap(req.user.id);
-    return withShared(req, list.map((e) => ({ ...e, space: spaces.calendars.get(e.calendarId) || '' })), (uid, sp) => repo.listRange(uid, from, to, null).map((e) => ({ ...e, space: sp.name })));
+    const shared = repo.sharedBusy(viewers(req), from, to).map((e) => ({ ...e, space: '' }));
+    return withShared(req, [...list.map((e) => ({ ...e, space: spaces.calendars.get(e.calendarId) || '' })), ...shared], (uid, sp) => repo.listRange(uid, from, to, null).map((e) => ({ ...e, space: sp.name })));
   });
 
   // ---- an event from a read-only / information / shared calendar added to one's own calendar (calendar/linked.js)
@@ -223,9 +224,12 @@ export default async function calendarRoutes(app) {
   });
   app.post('/api/events/:id/unlink', async (req) => { unlinkEvent(req.user.id, Number(req.params.id)); notify(req.user.id, 'calendar:changed', {}); return { ok: true }; });
 
+  // Whose busy-only shares (freebusy_shares) the request sees: the person's, and in a shared space the space's too.
+  const viewers = (req) => [req.person?.id, req.user.id];
   /**
    * One person, one schedule: while a space is shown, time the user is busy in their other spaces — and, in a shared
-   * space, in their own calendars — shows as "Blocked · <where>", without title, people or place.
+   * space, in their own calendars — shows as "Blocked · <where>", without title, people or place. Busy time others share
+   * with them shows as "Busy · <who>".
    */
   function blockedElsewhere(req, from, to, sc) {
     const out = [];
@@ -240,7 +244,7 @@ export default async function calendarRoutes(app) {
       const spaces = spaceMap(req.person.id);
       for (const e of repo.listRange(req.person.id, from, to, null, { includeInfo: false })) if (e.busy) out.push(mask(e, spaces.calendars.get(e.calendarId) || 'my calendar'));
     }
-    return out;
+    return [...out, ...repo.sharedBusy(viewers(req), from, to)];
   }
 
   app.get('/api/events/search', async (req) => {
@@ -311,7 +315,7 @@ export default async function calendarRoutes(app) {
       .filter((r) => r.start > 0 && r.end > r.start);
     if (!ranges.length) return [];
     const from = Math.min(...ranges.map((r) => r.start)), to = Math.max(...ranges.map((r) => r.end));
-    const busy = repo.listRange(req.user.id, from - 864e5, to + 864e5, null, { includeInfo: false }).filter((e) => e.busy);
+    const busy = [...repo.listRange(req.user.id, from - 864e5, to + 864e5, null, { includeInfo: false }), ...repo.sharedBusy(viewers(req), from - 864e5, to + 864e5)].filter((e) => e.busy);
     return ranges.map((r) => {
       const clash = busy.filter((e) => e.start < r.end && e.end > r.start);
       return { ...r, free: !clash.length, conflicts: clash.slice(0, 3).map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: !!e.allDay })) };
@@ -320,7 +324,7 @@ export default async function calendarRoutes(app) {
 
   app.get('/api/calendar/free-slots', async (req) => {
     const from = Number(req.query.from) || Date.now();
-    return repo.findFreeSlots(req.user.id, from, Number(req.query.to) || from + 7 * 864e5, Number(req.query.duration) || 30);
+    return repo.findFreeSlots(req.user.id, from, Number(req.query.to) || from + 7 * 864e5, Number(req.query.duration) || 30, { viewers: viewers(req) });
   });
 
   app.post('/api/messages/:id/invitation/respond', async (req, reply) => {

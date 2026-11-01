@@ -8,7 +8,7 @@ import { getSettings } from '../settings.js';
 import { embedQuery } from '../search.js';
 import { searchMemory, memoryText } from './memory.js';
 import { scope, spaceMap, inIds } from '../spaces.js';
-import { listRange, findFreeSlots } from '../calendar/repo.js';
+import { listRange, findFreeSlots, sharedBusy } from '../calendar/repo.js';
 import { profileText } from './profiles.js';
 import { ownAddresses, openReplySql, openActionSql } from './open-items.js';
 import { localStamp, stripQuoted } from './prompts.js';
@@ -130,7 +130,7 @@ export async function writingContext(userId, { people = [], query = '', threadId
   let cal = '';
   if (TIME_TALK.test(query)) {
     const t = now();
-    const busy = listRange(userId, t, t + 10 * DAY, null, { includeInfo: false }).filter((e) => e.busy).slice(0, 12);
+    const busy = [...listRange(userId, t, t + 10 * DAY, null, { includeInfo: false }), ...sharedBusy([userId], t, t + 10 * DAY)].filter((e) => e.busy).sort((x, y) => x.start - y.start).slice(0, 12);
     const slots = findFreeSlots(userId, t, t + 10 * DAY, 30).slice(0, 8);
     cal = `${busy.length ? `Busy:\n${busy.map((e) => `- ${e.allDay ? `${localStamp(e.start, tz).slice(0, 14)} all day` : `${localStamp(e.start, tz)}–${localStamp(e.end, tz).slice(-5)}`} ${clip(e.title, 60)}`).join('\n')}\n` : ''}Free 30-minute slots (working hours): ${slots.map((s) => localStamp(s.start, tz)).join('; ') || 'none found'}`;
   }
