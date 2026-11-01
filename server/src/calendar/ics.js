@@ -73,12 +73,16 @@ function parseIcsInner(text) {
       attendees: ve.getAllProperties('attendee').map(parseAttendee),
       organizer: org ? { email: String(org.getFirstValue()).replace(/^mailto:/i, '').toLowerCase(), name: org.getParameter('cn') || '' } : null,
       reminders: alarms, status: (ve.getFirstPropertyValue('status') || 'CONFIRMED').toLowerCase(),
-      busy: (ve.getFirstPropertyValue('transp') || 'OPAQUE') !== 'TRANSPARENT', url: ve.getFirstPropertyValue('url') || null,
+      busy: (ve.getFirstPropertyValue('transp') || 'OPAQUE') !== 'TRANSPARENT', showAs: busyStatus(ve), url: ve.getFirstPropertyValue('url') || null,
       onlineMeeting: meeting, sequence: Number(ve.getFirstPropertyValue('sequence') || 0),
     };
   });
   return { method, events };
 }
+
+// Outlook's busy status (also written by Exchange, Thunderbird and others); the intended status of an invitation first.
+const BUSY_STATUS = { FREE: 'free', WORKINGELSEWHERE: 'elsewhere', TENTATIVE: 'tentative', BUSY: 'busy', OOF: 'oof' };
+const busyStatus = (ve) => BUSY_STATUS[String(ve.getFirstPropertyValue('x-microsoft-cdo-intendedstatus') || ve.getFirstPropertyValue('x-microsoft-cdo-busystatus') || '').toUpperCase()];
 
 const esc = (s) => String(s ?? '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
 const utc = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -102,7 +106,9 @@ export function veventLines(e, { method, attendeeOverride, clientScheduling = fa
   if (e.url) L.push(`URL:${e.url}`);
   if (e.rrule && !e.recurrenceId) L.push(`RRULE:${e.rrule}`);
   for (const x of e.exdates || []) L.push(e.allDay ? `EXDATE;VALUE=DATE:${dateOnly(x)}` : `EXDATE:${utc(x)}`);
-  L.push(`STATUS:${(e.status || 'confirmed').toUpperCase()}`, `TRANSP:${e.busy === false ? 'TRANSPARENT' : 'OPAQUE'}`, `SEQUENCE:${e.sequence || 0}`);
+  const own = e.eventShowAs || (e.busy === false ? 'free' : 'busy');
+  L.push(`STATUS:${(e.status || 'confirmed').toUpperCase()}`, `TRANSP:${own === 'free' ? 'TRANSPARENT' : 'OPAQUE'}`, `SEQUENCE:${e.sequence || 0}`);
+  if (own !== 'free' && own !== 'busy' && method !== 'REPLY') L.push(`X-MICROSOFT-CDO-BUSYSTATUS:${Object.keys(BUSY_STATUS).find((k) => BUSY_STATUS[k] === own)}`);
   if (e.organizer?.email) L.push(`ORGANIZER;CN=${esc(e.organizer.name || e.organizer.email)}${agent}:mailto:${e.organizer.email}`);
   const attendees = attendeeOverride || e.attendees || [];
   for (const a of attendees) {

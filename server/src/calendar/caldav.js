@@ -15,7 +15,7 @@ function upsertFromIcs(calId, href, etag, ics) {
   try { parsed = parseIcs(ics); } catch (e) { log.warn(`bad ics at ${href}: ${e.message}`); return; }
   // Updated in place where the event is already known (same UID and occurrence), so its id stays the same for an open
   // editor, links and reminders; new ones are added, and what the server no longer has in this object is removed.
-  const cols = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty'];
+  const cols = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty', 'show_as'];
   const kept = new Set();
   for (const e of parsed.events) {
     const existing = get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND COALESCE(recurrence_id, 0) = ? AND deleted = 0 AND dirty = 0', calId, e.uid, e.recurrenceId || 0);
@@ -115,7 +115,7 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
   return { calendars: remoteCals.length, taskLists };
 }
 
-const IMPORT_COLS = ['title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting'];
+const IMPORT_COLS = ['title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'show_as'];
 
 /**
  * Events of an ICS text into a calendar, matched by UID (and occurrence). An event that did not change keeps its row

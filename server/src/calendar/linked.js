@@ -12,15 +12,15 @@ const FOLLOW = ['title', 'description', 'location', 'start', 'end', 'all_day', '
 const original = (calId, uid) => get('SELECT * FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL AND deleted = 0', calId, uid);
 
 /**
- * Adds the event `sourceId` (visible to `viewerId` — the user, or the shared space they act as) to `targetUserId`'s
- * calendar `calendarId` (default: their default calendar).
+ * Adds the event `sourceId` (visible to `viewerId` — the user, or the shared space they act as; or one of several, an
+ * array) to `targetUserId`'s calendar `calendarId` (default: their default calendar).
  */
 export function linkEvent(viewerId, sourceId, targetUserId, calendarId = null) {
   const src = get('SELECT e.*, c.user_id AS owner, c.readonly, c.show_as FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND e.deleted = 0', sourceId);
-  if (!src || src.owner !== viewerId) throw new Error('Event not found');
+  if (!src || ![].concat(viewerId).includes(src.owner)) throw new Error('Event not found');
   const master = src.recurrence_id ? original(src.calendar_id, src.uid) || src : src;
   const cal = (calendarId && userCalendar(targetUserId, calendarId)) || defaultCalendar(targetUserId);
-  if (!cal || cal.readonly) throw new Error('Choose one of your own calendars');
+  if (!cal || cal.readonly) throw new Error('Choose a calendar you can add to');
   if (cal.id === master.calendar_id) throw new Error('This event is already in that calendar');
   const had = get('SELECT e.id FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.linked_cal_id = ? AND e.linked_uid = ? AND e.deleted = 0', targetUserId, master.calendar_id, master.uid);
   if (had) return get('SELECT * FROM events WHERE id = ?', had.id);

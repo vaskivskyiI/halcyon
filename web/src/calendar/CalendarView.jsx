@@ -14,6 +14,10 @@ const SHOW_AS = [
   ['free', 'Free', 'shown, never blocks time'],
   ['info', 'Just for information', 'faint, no reminders'],
 ];
+// How one event shows the user's time (its own status; for free / informational / read-only calendars, the user's choice).
+export const EVENT_SHOW_AS = [['free', 'Free'], ['elsewhere', 'Working elsewhere'], ['tentative', 'Tentative'], ['busy', 'Busy'], ['oof', 'Away']];
+// The event's own status counts in a writable calendar shown as busy; elsewhere the user's choice (kept in Halcyon only).
+const ownStatus = (ev, cal) => !ev.myShowAs && !(cal?.readonly ?? ev.readonly) && (cal?.showAs || ev.calendarShowAs || 'busy') === 'busy';
 const VIEWS = [['day', 'Day'], ['workweek', 'Work week'], ['week', 'Week'], ['month', 'Month'], ['agenda', 'Agenda']];
 
 function rangeFor(view, date, weekStart) {
@@ -80,11 +84,25 @@ export default function CalendarView() {
 
   // Right-click on an event: move it to another (writable) calendar — the whole series for a recurring event.
   const [openEvMenu, evMenuNode] = useMenu();
+  const setShowAs = async (ev, v) => {
+    const cal = calendars.find((c) => c.id === ev.calendarId);
+    try {
+      if (ownStatus(ev, cal)) await api.patch(`/api/events/${ev.seriesId || ev.id}`, { showAs: v });
+      else await api.put(`/api/events/${ev.seriesId || ev.id}/my-show-as`, { showAs: v || null });
+      load();
+    } catch (err) { toastError(err); }
+  };
   const eventMenu = (e, ev) => {
-    if (ev.readonly || ev.blocked) return;
+    if (ev.blocked) return;
     e.preventDefault();
+    const own = ownStatus(ev, calendars.find((c) => c.id === ev.calendarId));
+    const showAs = [{ section: `Show as${ev.rrule ? ' (the whole series)' : ''}` },
+      ...(own ? [] : [{ label: `As the calendar (${ev.calendarShowAs === 'info' ? 'just for information' : ev.calendarShowAs || 'busy'})`, icon: !ev.myShowAs ? Check : undefined, onClick: () => setShowAs(ev, null) }]),
+      ...EVENT_SHOW_AS.map(([v, label]) => ({ label, icon: (own ? ev.eventShowAs : ev.myShowAs) === v ? Check : undefined, onClick: () => setShowAs(ev, v) }))];
+    if (ev.readonly) return openEvMenu(e, [{ label: 'Open', icon: Clock, onClick: () => setEditing(ev) }, ...showAs]);
     openEvMenu(e, [
       { label: 'Open', icon: Clock, onClick: () => setEditing(ev) },
+      ...showAs,
       { section: 'Move to calendar' },
       ...calendars.filter((c) => !c.readonly && c.id !== ev.calendarId).map((c) => ({
         label: c.name, hint: c.space || undefined,
@@ -524,8 +542,18 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   const cal = calendars.find((c) => c.id === ev.calendarId) || calendars.find((c) => c.id === spaceDef && !c.readonly)
     || (space && calendars.find((c) => c.space === space && !c.readonly && c.enabled)) || calendars.find((c) => c.isDefault) || calendars[0];
   const readonly = cal?.readonly;
-  // Events of read-only, "for information" or shared calendars can be added to one's own calendar (a linked copy).
-  const canLink = isExisting && !initial.linkedFrom && (readonly || initial.showAs === 'info' || cal?.showAs === 'info' || !!store.get().acting);
+  // How the event shows the user's time: its own status (saved with it, synced), or — in a free, informational or
+  // read-only calendar — the user's own choice, kept in Halcyon only.
+  const [status, setStatus] = useState(() => initial.eventShowAs || (initial.busy === false ? 'free' : 'busy'));
+  const [mine, setMine] = useState(initial.myShowAs || '');
+  const own = ownStatus({ ...initial, myShowAs: mine }, cal);
+  const applyMine = async (v) => {
+    setMine(v);
+    if (!isExisting) return;
+    try { await api.put(`/api/events/${initial.seriesId || initial.id}/my-show-as`, { showAs: v || null }); toast('Saved (in Halcyon only)'); } catch (e) { toastError(e); }
+  };
+  // Any event can be added to another calendar — one's own or a shared space's — as a linked copy that follows it.
+  const canLink = isExisting && !initial.linkedFrom;
   const baseRule = (ev.rrule || '').replace(/;?(COUNT|UNTIL)=[^;]*/g, '');
   const ruleExtra = (ev.rrule || '').match(/(COUNT|UNTIL)=([^;]*)/);
 
@@ -565,14 +593,17 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   const save = async (scope) => {
     if (!ev.title.trim()) return toast('Add a title', { kind: 'error' });
     const body = { calendarId: cal?.id, title: ev.title, location: ev.location, description: ev.description, start: ev.start, end: ev.end, allDay: ev.allDay,
-      rrule: ev.rrule || null, attendees: ev.attendees, reminders: ev.reminders, busy: ev.busy, onlineMeeting: ev.onlineMeeting || null, sourceMessageId: ev.sourceMessageId,
+      rrule: ev.rrule || null, attendees: ev.attendees, reminders: ev.reminders, ...(own ? { showAs: status } : {}), onlineMeeting: ev.onlineMeeting || null, sourceMessageId: ev.sourceMessageId,
       sendInvites: sendInvites && ev.attendees.length > 0 };
     try {
       if (isExisting) {
         const id = ev.id;
         if (ev.occurrence && !scope) return setScopeFor('save');
         await api.patch(`/api/events/${id}`, { ...body, scope, occurrence: ev.occurrence || undefined, rrule: scope === 'this' ? undefined : body.rrule });
-      } else await api.post('/api/events', body);
+      } else {
+        const e = await api.post('/api/events', body);
+        if (!own && mine) await api.put(`/api/events/${e.id}/my-show-as`, { showAs: mine });
+      }
       onSaved?.();
     } catch (e) { toastError(e); }
   };
@@ -650,7 +681,10 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
         <select className="input" style={{ width: 220 }} value={ev.reminders?.[0] ?? ''} onChange={(e) => set('reminders', e.target.value === '' ? [] : [Number(e.target.value)])}>
           <option value="">No reminder</option>{REMINDERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
-        <select className="input" style={{ width: 130 }} value={ev.busy ? '1' : '0'} onChange={(e) => set('busy', e.target.value === '1')}><option value="1">Busy</option><option value="0">Free</option></select>
+        {own ? <select className="input" style={{ width: 170 }} title="Show as" value={status} onChange={(e) => setStatus(e.target.value)}>{EVENT_SHOW_AS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          : <select className="input" style={{ width: 210 }} title="Show as — your own choice for this event, kept in Halcyon only" value={mine} onChange={(e) => applyMine(e.target.value)}>
+            <option value="">As the calendar ({(cal?.showAs || initial.calendarShowAs) === 'info' ? 'just for information' : cal?.showAs || initial.calendarShowAs || 'busy'})</option>
+            {EVENT_SHOW_AS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>}
         <select className="input" style={{ width: 200 }} value={cal?.id || ''} onChange={(e) => set('calendarId', Number(e.target.value))} disabled={isExisting && readonly}>
           {calendars.filter((c) => (!c.readonly || c.id === cal?.id) && (!initial?.id || (c.owner ?? null) === (cal?.owner ?? null))).map((c) => <option key={c.id} value={c.id}>{c.name}{c.ownerName ? ` · ${c.ownerName}` : ''}</option>)}
         </select>
@@ -665,7 +699,7 @@ export function EventEditor({ initial, calendars: cals, onClose, onSaved }) {
   );
 }
 
-/** "Add to my calendar": a copy in one of the user's own calendars that follows the original (calendar/linked.js). */
+/** "Add to calendar": a copy in one of the user's own or shared calendars that follows the original (calendar/linked.js). */
 function LinkToMine({ ev, onDone }) {
   const [openMenu, menuNode] = useMenu();
   const choose = async (e) => {
@@ -673,10 +707,11 @@ function LinkToMine({ ev, onDone }) {
     const add = async (c) => {
       try { await api.post(`/api/events/${ev.seriesId || ev.id}/link`, { calendarId: c?.id }); toast(`Added to “${c?.name || 'your calendar'}” — it follows the original${ev.rrule ? ' (the whole series)' : ''}`); onDone?.(); } catch (err) { toastError(err); }
     };
-    if (targets.length <= 1) return add(targets[0]);
-    openMenu(e, [{ section: 'Add to my calendar' }, ...targets.map((c) => ({ label: c.name, hint: c.isDefault ? 'default' : '', onClick: () => add(c) }))]);
+    const list = targets.filter((c) => c.id !== ev.calendarId);
+    if (list.length <= 1) return add(list[0]);
+    openMenu(e, [{ section: 'Add to calendar' }, ...list.map((c) => ({ label: c.name, hint: c.ownerName || (c.isDefault ? 'default' : ''), onClick: () => add(c) }))]);
   };
-  return <><button className="btn" title="A copy in your own calendar that follows this event when it moves or changes" onClick={(e) => { e.persist?.(); choose(e); }}><CalendarPlus size={15} /> Add to my calendar</button>{menuNode}</>;
+  return <><button className="btn" title="A copy in another calendar (yours or a shared one) that follows this event when it moves or changes" onClick={(e) => { e.persist?.(); choose(e); }}><CalendarPlus size={15} /> Add to calendar…</button>{menuNode}</>;
 }
 
 /** A briefing before the meeting, from recent mail with its participants and about its subject (streamed). */

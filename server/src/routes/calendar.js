@@ -7,7 +7,7 @@ import { importIcsInto, syncCalendarSource } from '../calendar/caldav.js';
 import { encrypt } from '../util/crypto.js';
 import { respondToInvitation, sendInvitations } from '../calendar/invites.js';
 import { notify } from '../util/events.js';
-import { withShared } from '../shared.js';
+import { withShared, sharedOf } from '../shared.js';
 import { syncDav } from '../scheduler.js';
 import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 import { linkEvent, unlinkEvent } from '../calendar/linked.js';
@@ -206,11 +206,18 @@ export default async function calendarRoutes(app) {
 
   // ---- an event from a read-only / information / shared calendar added to one's own calendar (calendar/linked.js)
   // In a shared space the copy goes to the person's own calendar.
-  app.get('/api/events/link-targets', async (req) => all('SELECT id, name, color, is_default AS isDefault FROM calendars WHERE user_id = ? AND readonly = 0 AND enabled = 1 ORDER BY is_default DESC, name', req.person?.id || req.user.id));
+  // Where an event can be added: the person's own writable calendars, then those of the shared spaces they are in.
+  const linkOwners = (req) => { const me = req.person || req.user; return [{ id: me.id, name: null }, ...sharedOf(me.id).map((s) => ({ id: s.id, name: s.name }))]; };
+  app.get('/api/events/link-targets', async (req) => linkOwners(req).flatMap((o) => all('SELECT id, name, color, is_default AS isDefault FROM calendars WHERE user_id = ? AND readonly = 0 AND enabled = 1 AND COALESCE(hidden, 0) = 0 ORDER BY is_default DESC, name', o.id)
+    .map((c) => ({ ...c, isDefault: !o.name && !!c.isDefault, owner: o.name ? o.id : null, ownerName: o.name }))));
   app.post('/api/events/:id/link', async (req, reply) => {
     try {
-      const e = linkEvent(req.user.id, Number(req.params.id), req.person?.id || req.user.id, req.body?.calendarId ? Number(req.body.calendarId) : null);
-      if (req.person) notify(req.person.id, 'calendar:changed', {});
+      const owners = linkOwners(req).map((o) => o.id);
+      const calId = req.body?.calendarId ? Number(req.body.calendarId) : null;
+      const target = calId ? all(`SELECT user_id FROM calendars WHERE id = ? AND user_id IN (${owners.map(() => '?').join(',')})`, calId, ...owners)[0]?.user_id : owners[0];
+      if (!target) return httpError(reply, 400, 'Choose a calendar you can add to');
+      const e = linkEvent([req.user.id, ...owners], Number(req.params.id), target, calId);
+      for (const u of new Set([req.user.id, target, ...(req.person ? [req.person.id] : [])])) notify(u, 'calendar:changed', {});
       return repo.serializeEvent(e);
     } catch (e) { return httpError(reply, 400, e.message); }
   });
@@ -278,6 +285,12 @@ export default async function calendarRoutes(app) {
       if (sendInvites) sendInvitations(req.user.id, e.id, { accountId });
       return repo.serializeEvent(e);
     } catch (err) { return httpError(reply, 400, err.message); }
+  });
+
+  // How one event shows the user's time, chosen by the user (also for read-only, free or informational calendars).
+  app.put('/api/events/:id/my-show-as', async (req, reply) => {
+    const e = repo.setMyShowAs(req.user.id, Number(req.params.id), req.body?.showAs);
+    return e ? repo.serializeEvent(e) : httpError(reply, 404, 'Not found');
   });
 
   app.delete('/api/events/:id', async (req, reply) => {

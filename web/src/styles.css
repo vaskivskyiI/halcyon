@@ -409,6 +409,12 @@ pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); p
 .ev-block.show-info:hover, .ev-pill.show-info:hover { opacity: 1; }
 .ev-pill.show-free { opacity: .8; }
 .ev-pill.show-info { background: transparent !important; color: var(--text-2) !important; border: 1px dashed var(--border); opacity: .7; }
+/* An event's own status: tentative = striped, working elsewhere = light with a dotted edge, away = a purple edge (as in Outlook). */
+.ev-block.show-tentative { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgb(255 255 255 / 30%) 6px 12px); }
+.ev-block.show-elsewhere { background: color-mix(in srgb, var(--ev) 22%, var(--panel)) !important; color: var(--text); border-left: 3px dotted var(--ev); }
+.ev-block.show-oof { box-shadow: inset 4px 0 0 #7c3aed, 0 0 0 1px var(--panel); }
+.ev-pill.show-tentative, .ev-pill.show-elsewhere { opacity: .85; font-style: italic; }
+.ev-pill.show-oof { box-shadow: inset 3px 0 0 #7c3aed; }
 .provider-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
 .provider { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
 .provider span { font-size: 12px; color: var(--text-2); }

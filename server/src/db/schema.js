@@ -544,4 +544,11 @@ export const migrations = [
   UPDATE task_lists SET account_id = (SELECT n.id FROM accounts n WHERE n.split_from = task_lists.account_id) WHERE account_id IN (SELECT split_from FROM accounts WHERE split_from IS NOT NULL);
   UPDATE accounts SET caldav_url = NULL, carddav_url = NULL, dav_user = NULL, dav_pass_enc = NULL WHERE id IN (SELECT split_from FROM accounts WHERE split_from IS NOT NULL);
   `,
+  // 50: how an event shows the user's time: its own status (free, working elsewhere, tentative, busy, away; synced as
+  // X-MICROSOFT-CDO-BUSYSTATUS) and the user's own choice for one event of a free / informational / read-only calendar
+  // (kept in Halcyon only, never written to the server).
+  `
+  ALTER TABLE events ADD COLUMN show_as TEXT;
+  ALTER TABLE events ADD COLUMN my_show_as TEXT;
+  `,
 ];

@@ -292,6 +292,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   (event busy AND calendar busy) and `showAs`; `{ includeInfo: false }` for the daily brief / live brief / reminders;
   the assistant sees info/free events labelled. Web: "Show events as" in the calendar's menu and when adding,
   free = light with coloured edge, info = faint dashed, "Show informational events" toggle (per device).
+- Per event (migration 50): `events.show_as` = the event's own status (free | elsewhere | tentative | busy | oof; read from
+  and written as X-MICROSOFT-CDO-BUSYSTATUS / INTENDEDSTATUS, TRANSP) and `events.my_show_as` = the user's choice for one
+  event (series), kept in Halcyon only (`PUT /api/events/:id/my-show-as`), also on read-only calendars. Effective status in
+  `listRange`: my_show_as, else the event's own in a busy calendar, else the calendar's; busy/tentative/oof block time.
+  Web: "Show as" in the event editor and in the event's context menu.
 - `findFreeSlots` works in the user's zone (it used the server's setHours/getDay) and offers starts every 30 min,
   at most 4 per day.
 

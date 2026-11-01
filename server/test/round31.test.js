@@ -81,3 +81,18 @@ test('context: per account by default; "everything" globally or for one account'
   await api('PATCH', `/api/accounts/${acc}`, { contextMode: 'global' });
   assert.equal((await api('GET', '/api/accounts')).find((a) => a.id === acc).contextMode, 'global');
 });
+
+test('an event can be added to a calendar of a shared space the user is in', async () => {
+  const sp = await api('POST', '/api/shared', { name: 'Lab' });
+  const spCal = Number(db.prepare("INSERT INTO calendars (user_id, name, source, created_at) VALUES (?, 'Lab calendar', 'local', ?)").run(sp.id, Date.now()).lastInsertRowid);
+  const def = db.prepare('SELECT id FROM calendars WHERE user_id = ? AND is_default = 1').get(uid).id;
+  const e = await api('POST', '/api/events', { calendarId: def, title: 'Seminar', start: Date.now() + 2 * 864e5, end: Date.now() + 2 * 864e5 + 3600e3 });
+  const targets = await api('GET', '/api/events/link-targets');
+  assert.deepEqual(targets.find((c) => c.id === spCal), { id: spCal, name: 'Lab calendar', color: targets.find((c) => c.id === spCal).color, isDefault: false, owner: sp.id, ownerName: 'Lab' });
+  const copy = await api('POST', `/api/events/${e.id}/link`, { calendarId: spCal });
+  assert.equal(db.prepare('SELECT calendar_id FROM events WHERE id = ?').get(copy.id).calendar_id, spCal);
+  assert.equal(copy.linkedFrom, def);
+  // Not a member: refused.
+  db.prepare('DELETE FROM shared_members WHERE shared_id = ?').run(sp.id);
+  await assert.rejects(api('POST', `/api/events/${e.id}/link`, { calendarId: spCal }), /calendar you can add to/);
+});

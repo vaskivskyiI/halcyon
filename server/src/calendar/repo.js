@@ -9,7 +9,12 @@ import { queueMemory } from '../ai/queue.js';
 
 const COLS = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id',
   'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty', 'deleted', 'source_message_id', 'updated_at',
-  'linked_cal_id', 'linked_uid', 'linked_at'];
+  'linked_cal_id', 'linked_uid', 'linked_at', 'show_as'];
+
+// How an event shows the user's time; busy, tentative and away block it, free and working elsewhere do not.
+export const EVENT_SHOW_AS = ['free', 'elsewhere', 'tentative', 'busy', 'oof'];
+export const blocksTime = (s) => s === 'busy' || s === 'tentative' || s === 'oof';
+const ownShowAs = (e) => (EVENT_SHOW_AS.includes(e.show_as) ? e.show_as : e.busy ? 'busy' : 'free');
 
 export function serializeEvent(e) {
   return {
@@ -17,7 +22,7 @@ export function serializeEvent(e) {
     start: e.start, end: e.end, allDay: !!e.all_day, timezone: e.timezone, rrule: e.rrule, exdates: json(e.exdates_json, []),
     recurrenceId: e.recurrence_id, attendees: json(e.attendees_json, []), organizer: json(e.organizer_json, null),
     reminders: json(e.reminders_json, []), status: e.status, busy: !!e.busy, url: e.url, onlineMeeting: e.online_meeting,
-    sourceMessageId: e.source_message_id, linkedFrom: e.linked_cal_id || null,
+    sourceMessageId: e.source_message_id, linkedFrom: e.linked_cal_id || null, eventShowAs: ownShowAs(e), myShowAs: e.my_show_as || null,
   };
 }
 
@@ -27,7 +32,10 @@ export function toRow(e) {
     all_day: e.allDay === undefined ? undefined : (e.allDay ? 1 : 0), timezone: e.timezone, rrule: e.rrule === '' ? null : e.rrule,
     exdates_json: e.exdates && JSON.stringify(e.exdates), recurrence_id: e.recurrenceId,
     attendees_json: e.attendees && JSON.stringify(e.attendees), organizer_json: e.organizer === undefined ? undefined : JSON.stringify(e.organizer),
-    reminders_json: e.reminders && JSON.stringify(e.reminders), status: e.status, busy: e.busy === undefined ? undefined : (e.busy ? 1 : 0),
+    reminders_json: e.reminders && JSON.stringify(e.reminders), status: e.status,
+    // showAs (the event's own status) wins over the older busy flag; busy alone resets it to plain busy / free.
+    busy: EVENT_SHOW_AS.includes(e.showAs) ? (e.showAs === 'free' ? 0 : 1) : e.busy === undefined ? undefined : (e.busy ? 1 : 0),
+    show_as: EVENT_SHOW_AS.includes(e.showAs) ? e.showAs : e.busy === undefined ? undefined : null,
     url: e.url, online_meeting: e.onlineMeeting, source_message_id: e.sourceMessageId,
   };
 }
@@ -143,13 +151,24 @@ export function editOccurrence(userId, id, occurrenceStart, patch, { remove = fa
     { href: master.href, etag: master.etag });
 }
 
+/**
+ * The user's own choice for one event (a series with all its occurrences): how it shows their time, also for events of
+ * read-only, free or informational calendars. Kept in Halcyon only; null goes back to what the calendar and event say.
+ */
+export function setMyShowAs(userId, id, showAs) {
+  const ev = eventOf(userId, id);
+  if (!ev) return null;
+  run('UPDATE events SET my_show_as = ? WHERE calendar_id = ? AND uid = ?', EVENT_SHOW_AS.includes(showAs) ? showAs : null, ev.calendar_id, ev.uid);
+  notify(userId, 'calendar:changed', {});
+  return get('SELECT * FROM events WHERE id = ?', id);
+}
+
 /** Expanded occurrences in [from, to) for the user's enabled calendars. */
-/** includeInfo: false leaves out calendars shown "just for information" (brief, reminders). */
+/** includeInfo: false leaves out events shown "just for information" (brief, reminders). */
 export function listRange(userId, from, to, calendarIds, { includeInfo = true } = {}) {
   const tz = getSettings(userId).calendar.timezone;
   let cals = all('SELECT * FROM calendars WHERE user_id = ? AND enabled = 1', userId);
   if (calendarIds?.length) cals = cals.filter((c) => calendarIds.includes(c.id));
-  if (!includeInfo) cals = cals.filter((c) => (c.show_as || 'busy') !== 'info');
   if (!cals.length) return [];
   const ph = cals.map(() => '?').join(',');
   const rows = all(`SELECT * FROM events WHERE deleted = 0 AND calendar_id IN (${ph}) AND (rrule IS NOT NULL OR (start < ? AND end >= ?))`, ...cals.map((c) => c.id), to, from);
@@ -160,14 +179,17 @@ export function listRange(userId, from, to, calendarIds, { includeInfo = true } 
   const overrides = new Map();
   for (const r of rows) if (r.recurrence_id) overrides.set(`${r.calendar_id}:${r.uid}:${r.recurrence_id}`, r);
   const calById = Object.fromEntries(cals.map((c) => [c.id, c]));
-  // What the calendar adds to each of its events: an event only blocks time when its calendar is shown as busy.
+  // What the calendar adds to each of its events: in a calendar shown as busy, the event's own status counts; in a free or
+  // informational one, the calendar's — unless the user chose otherwise for that event.
   const extra = (r) => {
     const c = calById[r.calendar_id];
-    const showAs = c.show_as || 'busy';
-    return { color: c.color, readonly: !!c.readonly, calendarName: c.name, showAs, busy: !!r.busy && showAs === 'busy', linkedFromName: r.linked_cal_id ? linkNames.get(r.linked_cal_id) || 'another calendar' : null };
+    const calendarShowAs = c.show_as || 'busy';
+    const showAs = (EVENT_SHOW_AS.includes(r.my_show_as) && r.my_show_as) || (calendarShowAs === 'busy' ? ownShowAs(r) : calendarShowAs);
+    return { color: c.color, readonly: !!c.readonly, calendarName: c.name, calendarShowAs, showAs, busy: blocksTime(showAs), linkedFromName: r.linked_cal_id ? linkNames.get(r.linked_cal_id) || 'another calendar' : null };
   };
   const out = [];
   for (const r of rows) {
+    if (!includeInfo && extra(r).showAs === 'info') continue;
     if (r.recurrence_id) {
       if (r.start < to && r.end >= from) out.push({ ...serializeEvent(r), instanceId: `${r.id}`, seriesId: get('SELECT id FROM events WHERE calendar_id = ? AND uid = ? AND recurrence_id IS NULL', r.calendar_id, r.uid)?.id, ...extra(r) });
       continue;
