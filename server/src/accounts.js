@@ -5,12 +5,20 @@ const COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777'
 
 export const userAccounts = (userId) => all('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort_order, id', userId);
 export const userAccount = (userId, id) => get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', id, userId);
+/** Accounts with mail (not calendar & contacts connections). */
+export const mailAccounts = (userId) => all('SELECT * FROM accounts WHERE user_id = ? AND mail != 0 ORDER BY sort_order, id', userId);
+/** A calendar & contacts connection: an account without mail, for CalDAV / CardDAV. */
+export const isConnection = (a) => !!a && a.mail === 0 && a.kind !== 'archive';
+const hostOf = (u) => { try { return new URL(u).host; } catch { return ''; } };
+/** What a connection is called: its name, else its server. */
+export const connectionLabel = (a) => a.name || hostOf(a.caldav_url || a.carddav_url) || a.email;
 
 export function serializeAccount(a) {
   return {
     id: a.id, kind: a.kind || 'mail', name: a.name, email: a.email, displayName: a.display_name, color: a.color,
     // What this account is used for: mail, calendar (CalDAV), contacts (CardDAV) — each added and removed on its own.
     services: { mail: a.mail !== 0, calendar: !!a.caldav_url, contacts: !!a.carddav_url },
+    connection: isConnection(a), label: isConnection(a) ? connectionLabel(a) : a.name || a.email,
     tls: { ca: a.tls_ca || '', insecure: !!a.tls_insecure },
     imap: { host: a.imap_host, port: a.imap_port, secure: !!a.imap_secure, user: a.imap_user },
     smtp: { host: a.smtp_host, port: a.smtp_port, secure: !!a.smtp_secure, user: a.smtp_user },

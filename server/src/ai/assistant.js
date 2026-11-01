@@ -9,7 +9,7 @@ import { askPrompt, stripQuoted, userContext, localStamp } from './prompts.js';
 import { keywordSearch, embedQuery } from '../search.js';
 import { searchMemory, memoryText } from './memory.js';
 import { listRange, findFreeSlots } from '../calendar/repo.js';
-import { userAccounts } from '../accounts.js';
+import { mailAccounts } from '../accounts.js';
 import { scope, inIds, cleanSpace } from '../spaces.js';
 import { rememberFact, briefLive } from './tasks.js';
 import { profileText, profilesMentioned, peopleMentioned } from './profiles.js';
@@ -188,7 +188,7 @@ export async function ask(userId, { chatId, question, space = '', author = null 
   onStatus?.(`Reading ${sources.length} email${sources.length === 1 ? '' : 's'}…`);
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const settings = getSettings(userId);
-  const accounts = userAccounts(userId).filter((a) => !sc || sc.accountIds.includes(a.id));
+  const accounts = mailAccounts(userId).filter((a) => !sc || sc.accountIds.includes(a.id));
   const ctx = userContext(user, settings, accounts) + (sc ? `\nThis conversation is limited to the user's "${sc.space}" space; you only see its mail, calendars and contacts.` : '')
     + (theirs.length ? `\nBesides their own, you see the shared space${theirs.length > 1 ? 's' : ''} ${theirs.map((t) => `"${t.space.name}"`).join(', ')}; say which an item belongs to when it matters.` : '');
   // A busy or stuck model server must not leave the user staring at a spinner: give up if no answer starts in time.

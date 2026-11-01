@@ -3,12 +3,16 @@ import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { listSpaces, spaceMap, cleanSpace, renameSpace } from '../spaces.js';
 import { notify } from '../util/events.js';
+import { isConnection, connectionLabel } from '../accounts.js';
 
 const TABLES = { account: 'accounts', calendar: 'calendars', addressBook: 'address_books', taskList: 'task_lists' };
 
 const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
 /** Where a calendar / address book / task list comes from (rows joined with their account's email and source). */
 export function originOf(x) {
+  // From a calendar & contacts connection: named by the connection (its name, else its server), not by a login.
+  const acc = (x.account_id ?? x.accountId) && get('SELECT * FROM accounts WHERE id = ?', x.account_id ?? x.accountId);
+  if (isConnection(acc)) return `${connectionLabel(acc)} · ${x.readonly ? 'read-only' : 'synced'}`;
   if (x.email) return `${x.email} · ${x.source === 'caldav' || x.source === 'carddav' ? 'synced' : 'from this account'}`;
   if (x.sourceName || x.sourceUrl) return `${x.sourceName || host(x.sourceUrl)} · ${x.readonly ? 'read-only' : 'synced'}`;
   if (x.url) return `${host(x.url)} · ${x.readonly ? 'subscribed (read-only)' : 'synced'}`;

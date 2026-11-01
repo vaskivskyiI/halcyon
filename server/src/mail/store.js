@@ -111,7 +111,7 @@ function resolveThreadId(userId, messageId, refs, bySubject) {
 }
 
 const SUBJECT_WINDOW = 45 * 864e5;
-export const ownAddresses = (userId) => new Set(all('SELECT email, aliases_json FROM accounts WHERE user_id = ?', userId)
+export const ownAddresses = (userId) => new Set(all('SELECT email, aliases_json FROM accounts WHERE user_id = ? AND mail != 0', userId)
   .flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => (typeof x === 'string' ? x : x?.address))]).filter(Boolean).map((x) => x.toLowerCase()));
 const people = (m) => [m.from_addr, ...json(m.to_json, []).map((a) => a.address), ...json(m.cc_json, []).map((a) => a.address)]
   .filter(Boolean).map((a) => String(a).toLowerCase());

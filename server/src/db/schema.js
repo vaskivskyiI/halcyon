@@ -527,4 +527,21 @@ export const migrations = [
   ALTER TABLE task_lists ADD COLUMN gone_at INTEGER;
   ALTER TABLE task_lists ADD COLUMN removed INTEGER DEFAULT 0;
   `,
+  // 49: calendars, tasks and contacts come from connections of their own (an account with mail = 0), not from a mail
+  // account: each mail account's CalDAV / CardDAV part becomes a connection with the same server, login (the mail login
+  // when it had none of its own), certificate and space; its calendars, task lists and address books move along.
+  `
+  ALTER TABLE accounts ADD COLUMN split_from INTEGER;
+  INSERT INTO accounts (user_id, name, email, auth_type, oauth_enc, color, sync_enabled, caldav_url, carddav_url, dav_user, dav_pass_enc,
+      sort_order, created_at, space, mail, tls_ca, tls_insecure, split_from)
+    SELECT user_id, CASE WHEN auth_type = 'oauth-google' THEN 'Google' ELSE (CASE WHEN instr(substr(COALESCE(caldav_url, carddav_url), instr(COALESCE(caldav_url, carddav_url), '://') + 3), '/') > 0 THEN substr(substr(COALESCE(caldav_url, carddav_url), instr(COALESCE(caldav_url, carddav_url), '://') + 3), 1, instr(substr(COALESCE(caldav_url, carddav_url), instr(COALESCE(caldav_url, carddav_url), '://') + 3), '/') - 1) ELSE substr(COALESCE(caldav_url, carddav_url), instr(COALESCE(caldav_url, carddav_url), '://') + 3) END) END,
+      COALESCE(NULLIF(dav_user, ''), email), auth_type, oauth_enc, color, 0, caldav_url, carddav_url,
+      COALESCE(NULLIF(dav_user, ''), NULLIF(imap_user, ''), email), COALESCE(dav_pass_enc, imap_pass_enc),
+      sort_order, created_at, space, 0, tls_ca, tls_insecure, id
+    FROM accounts WHERE COALESCE(mail, 1) != 0 AND COALESCE(kind, 'mail') != 'archive' AND (caldav_url IS NOT NULL OR carddav_url IS NOT NULL);
+  UPDATE calendars SET account_id = (SELECT n.id FROM accounts n WHERE n.split_from = calendars.account_id) WHERE account_id IN (SELECT split_from FROM accounts WHERE split_from IS NOT NULL);
+  UPDATE address_books SET account_id = (SELECT n.id FROM accounts n WHERE n.split_from = address_books.account_id) WHERE account_id IN (SELECT split_from FROM accounts WHERE split_from IS NOT NULL);
+  UPDATE task_lists SET account_id = (SELECT n.id FROM accounts n WHERE n.split_from = task_lists.account_id) WHERE account_id IN (SELECT split_from FROM accounts WHERE split_from IS NOT NULL);
+  UPDATE accounts SET caldav_url = NULL, carddav_url = NULL, dav_user = NULL, dav_pass_enc = NULL WHERE id IN (SELECT split_from FROM accounts WHERE split_from IS NOT NULL);
+  `,
 ];

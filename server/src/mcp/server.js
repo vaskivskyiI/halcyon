@@ -216,7 +216,7 @@ const PROPOSE_TOOLS = {
     required: ['body'],
     run: async (ctx, a) => {
       const orig = a.reply_to_message_id ? ownMessage(ctx, a.reply_to_message_id) : null;
-      const accounts = all(`SELECT * FROM accounts WHERE user_id = ? AND ${inIds('id', ctx.sc?.accountIds)} ORDER BY sort_order, id`, ctx.uid);
+      const accounts = all(`SELECT * FROM accounts WHERE user_id = ? AND mail != 0 AND ${inIds('id', ctx.sc?.accountIds)} ORDER BY sort_order, id`, ctx.uid);
       const acc = accounts.find((x) => x.id === orig?.account_id) || accounts.find((x) => x.id === getSettings(ctx.uid).mail.defaultAccountId) || accounts[0];
       if (!acc) throw new Error('No mail account here');
       const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).trim()).filter((x) => /^[^\s@]+@[^\s@]+$/.test(x)).map((address) => ({ name: '', address }));

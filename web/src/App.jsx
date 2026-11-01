@@ -131,7 +131,7 @@ function Shell() {
 
   useEffect(() => {
     // No mail account yet: set one up — unless there is a shared space to work in.
-    if (accountsLoaded && !accounts.length && section === 'mail' && !(store.get().shared || []).length) navigate('#/settings/accounts');
+    if (accountsLoaded && !accounts.some((a) => !a.connection) && section === 'mail' && !(store.get().shared || []).length) navigate('#/settings/accounts');
   }, [accountsLoaded, accounts.length]);
 
   const inkwell = store.use((s) => s.inkwell);

@@ -173,7 +173,8 @@ export function markGoneTaskLists(accountId, urls) {
 
 /** The task list for a CalDAV collection that holds tasks (made when first seen). */
 function listFor(account, remote, i, readonly) {
-  let list = get('SELECT * FROM task_lists WHERE url = ? AND (user_id = ? OR account_id = ?)', remote.url, account.user_id, account.id ?? -1);
+  // Always the same one when several have this address (older code could make a second): a removed one only when all are.
+  let list = get('SELECT * FROM task_lists WHERE url = ? AND (user_id = ? OR account_id = ?) ORDER BY COALESCE(removed, 0), id LIMIT 1', remote.url, account.user_id, account.id ?? -1);
   if (!list) {
     const name = typeof remote.displayName === 'string' && remote.displayName ? remote.displayName : 'Tasks';
     const color = typeof remote.calendarColor === 'string' ? remote.calendarColor.slice(0, 7) : PALETTE[i % PALETTE.length];
@@ -193,6 +194,9 @@ export async function syncTodoCollection(client, account, remote, i = 0, { reado
   // Removed by the user: not synced (kept so it is not made again). Offered by the server again: no longer gone.
   if (list.removed) return list;
   if (list.gone_at) run('UPDATE task_lists SET gone_at = NULL WHERE id = ?', list.id);
+  // A second list for the same collection is never synced: marked like one the server no longer offers, to be deleted.
+  run('UPDATE task_lists SET gone_at = COALESCE(gone_at, ?), sync_error = NULL WHERE url = ? AND id != ? AND (user_id = ? OR account_id = ?) AND COALESCE(removed, 0) = 0',
+    now(), remote.url, list.id, account.user_id, account.id ?? -1);
   const tz = userTz(account.user_id), workEnd = getSettings(account.user_id).calendar.workEnd || '17:00';
   const refused = (res, what) => {
     if (res && res.ok === false && res.status !== 404) throw new Error(`the server refused to ${what} it (${res.status} ${res.statusText || ''})`.trim());

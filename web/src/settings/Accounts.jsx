@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, RefreshCw, Trash2, Pencil, CheckCircle2, XCircle, AlertTriangle, Mail, Calendar as CalendarIcon, Users, X as XIcon } from 'lucide-react';
+import { Plus, RefreshCw, Trash2, Pencil, CheckCircle2, XCircle, AlertTriangle, Mail, Calendar as CalendarIcon, Users } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
 import { loadAccounts, loadFolders } from '../data.js';
@@ -31,16 +31,16 @@ export function oauthSignIn(provider, { services, accountId } = {}, onOk) {
   window.addEventListener('storage', onStorage);
 }
 
-const SERVICES = [['mail', Mail, 'Mail', 'IMAP / SMTP'], ['calendar', CalendarIcon, 'Calendar', 'CalDAV'], ['contacts', Users, 'Contacts', 'CardDAV']];
-const daveResult = (r) => { if (r?.dav?.error) toastError(new Error(r.dav.error)); else if (r?.dav?.pending) toast('Still syncing in the background…'); else if (r?.dav) toast(davFound(r.dav)); };
+// What a Google sign-in can add: mail here, calendar and contacts as a connection of their own.
+const SERVICES = [['mail', Mail, 'Mail'], ['calendar', CalendarIcon, 'Calendar'], ['contacts', Users, 'Contacts']];
 
 export default function Accounts() {
-  const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive'); // archives: Settings → Archives
+  // Archives: Settings → Archives; calendar & contacts connections: Settings → Calendars & tasks.
+  const accounts = store.use((s) => s.accounts).filter((a) => a.kind !== 'archive' && !a.connection);
   const user = store.use((s) => s.user);
   const oauth = store.use((s) => s.oauth);
   const [editing, setEditing] = useState(null);
   const [choose, setChoose] = useState(false);
-  const [dav, setDav] = useState(null); // { service, account? } — a calendar / contacts service to add or edit
   const [oauthSetup, setOauthSetup] = useState(null);
   const [status, setStatus] = useState({});
   const [tests, setTests] = useState({});
@@ -50,34 +50,15 @@ export default function Accounts() {
     setTests((t) => ({ ...t, [a.id]: { busy: true } }));
     try { const r = await api.post(`/api/accounts/${a.id}/test`); setTests((t) => ({ ...t, [a.id]: r })); loadStatus(); } catch (e) { setTests((t) => ({ ...t, [a.id]: { error: e.message } })); }
   };
-  // A service added to an account: Google signs in again for it (keeping what was granted); others ask for the address.
-  const addService = (a, service) => {
-    if (a.authType === 'oauth-google') return oauthSignIn('google', { services: [service], accountId: a.id }, () => toast(`${SERVICES.find(([k]) => k === service)[2]} added`));
-    if (service === 'mail') return setEditing({ addMailTo: a });
-    setDav({ service, account: a });
-  };
-  const removeService = async (a, service) => {
-    const what = { mail: `the mail of ${a.email}`, calendar: `the calendars of ${a.email}`, contacts: `the address books of ${a.email}` }[service];
-    const only = Object.entries(a.services || {}).filter(([, on]) => on).length === 1;
-    if (!confirm(`Remove ${what} from Halcyon?\n\nWhat Halcyon keeps of it is removed here${service === 'mail' ? ' (downloaded mail, its AI analysis)' : ''}; nothing is deleted on the server — you can add it again later.${only ? '\n\nIt is the last thing this account is used for, so the account is removed too.' : ''}`)) return;
-    try { await api.del(`/api/accounts/${a.id}/services/${service}`); toast('Removed'); loadAccounts(); loadFolders(); } catch (e) { toastError(e); }
-  };
   return (
     <div className="settings-section">
-      <div className="row"><div className="grow"><h2>Accounts</h2><div className="muted">Mail (IMAP/SMTP — Gmail, Microsoft 365, iCloud, Fastmail, your company server, …), calendars (CalDAV) and contacts (CardDAV) are added separately — from the same provider or from different ones — and each can be put in a space (Settings → Spaces).</div></div>
+      <div className="row"><div className="grow"><h2>Accounts</h2><div className="muted">Mail accounts (IMAP/SMTP — Gmail, Microsoft 365, iCloud, Fastmail, your company server, …); each can be put in a space (Settings → Spaces). Calendars, task lists and contacts come from connections of their own: <a href="#/settings/calendars">Settings → Calendars &amp; tasks</a>.</div></div>
         <button className="btn primary" onClick={() => setChoose(true)}><Plus size={15} /> Add account</button></div>
       {accounts.map((a) => (
         <div key={a.id} className="card item-card">
           <span className="status-dot" style={{ background: a.syncState === 'error' ? 'var(--danger)' : a.syncState === 'idle' ? 'var(--success)' : 'var(--warning)' }} />
           <div className="grow" style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>{a.displayName ? `${a.displayName} · ` : ''}{a.email}</div>
-            <div className="service-row">
-              {SERVICES.map(([k, Icon, label, proto]) => a.services?.[k]
-                ? <span key={k} className="chip service on" title={k === 'mail' ? `${a.imap.host}` : k === 'calendar' ? a.caldavUrl : a.carddavUrl}><Icon size={12} /> {label}
-                  {k !== 'mail' && a.authType !== 'oauth-google' && <button className="icon-btn" style={{ width: 18, height: 18 }} title={`Change the ${proto} address / login`} onClick={() => setDav({ service: k, account: a })}><Pencil size={11} /></button>}
-                  <button className="icon-btn" style={{ width: 18, height: 18 }} title={`Remove ${label.toLowerCase()} from this account`} onClick={() => removeService(a, k)}><XIcon size={11} /></button></span>
-                : <button key={k} className="chip service add" title={`Add ${label.toLowerCase()} (${proto}) to this account`} onClick={() => addService(a, k)}><Plus size={11} /> {label}</button>)}
-            </div>
             {a.services?.mail !== false && <>
             <div className="small muted truncate">{a.imap.host} · {a.authType.startsWith('oauth') ? 'OAuth' : 'password'} · {a.syncState}{a.lastSyncAt ? ` · last sync ${fmtListDate(a.lastSyncAt)}` : ''}</div>
             {a.syncError && <div className="small error-text"><AlertTriangle size={12} /> {a.syncError}</div>}
@@ -95,13 +76,12 @@ export default function Accounts() {
           {a.services?.mail !== false && <button className="btn sm" title="Log in to the IMAP and SMTP servers with the stored settings (nothing is changed or sent)" onClick={() => test(a)} disabled={tests[a.id]?.busy}>{tests[a.id]?.busy ? <Spinner size={13} /> : <CheckCircle2 size={13} />} Test connection</button>}
           <button className="icon-btn" title="Reconnect and sync now" onClick={() => api.post(`/api/accounts/${a.id}/sync`).then(() => { toast('Reconnecting and syncing…'); setTimeout(loadStatus, 2000); })}><RefreshCw size={16} /></button>
           {a.services?.mail !== false && <button className="icon-btn" title="Edit" onClick={() => setEditing(a)}><Pencil size={16} /></button>}
-          <button className="icon-btn" title="Remove the account (mail, calendars and contacts stay on the server)" onClick={async () => { if (confirm(`Remove ${a.email} from Halcyon? Its mail, calendars and contacts stay on the server.`)) { await api.del(`/api/accounts/${a.id}`); loadAccounts(); loadFolders(); } }}><Trash2 size={16} /></button>
+          <button className="icon-btn" title="Remove the account (its mail stays on the server)" onClick={async () => { if (confirm(`Remove ${a.email} from Halcyon? Its mail stays on the server.`)) { await api.del(`/api/accounts/${a.id}`); loadAccounts(); loadFolders(); } }}><Trash2 size={16} /></button>
         </div>
       ))}
-      {!accounts.length && <div className="card empty">No accounts yet. Add your first mailbox, calendar or address book to get started.</div>}
+      {!accounts.length && <div className="card empty">No mail accounts yet. Add your first mailbox to get started.</div>}
       {user?.isAdmin && <OAuthStatus onSetup={setOauthSetup} />}
-      {choose && <AddChooser oauth={oauth} onClose={() => setChoose(false)} onPick={(k) => { setChoose(false); if (k === 'mail') setEditing({}); else if (k === 'google') setEditing({ google: true }); else setDav({ service: k }); }} />}
-      {dav && <DavService {...dav} onClose={() => setDav(null)} onDone={(r) => { daveResult(r); setDav(null); loadAccounts(); }} />}
+      {choose && <AddChooser oauth={oauth} onClose={() => setChoose(false)} onPick={(k) => { setChoose(false); if (k === 'mail') setEditing({}); else setEditing({ google: true }); }} />}
       {editing && <AccountEditor account={editing.id ? editing : null} startGoogle={!!editing.google} addMailTo={editing.addMailTo || null} onClose={() => setEditing(null)} onSetupOAuth={(p) => { setEditing(null); setOauthSetup(p); }} />}
       {oauthSetup && <OAuthSetup provider={oauthSetup} onClose={() => setOauthSetup(null)} />}
     </div>
@@ -177,47 +157,15 @@ async function certText(file) {
 }
 export const tlsBody = (t) => (t ? { ca: t.insecure ? (t.ca || '') : (t.ca || ''), insecure: !!t.insecure } : undefined);
 
-/** What to add: mail, a calendar, an address book, or (Google) any of them. */
+/** What to add: a mailbox, or Google (its calendar and contacts become a connection of their own). */
 function AddChooser({ oauth, onPick, onClose }) {
   return (
-    <Modal title="Add an account" onClose={onClose}>
+    <Modal title="Add a mail account" onClose={onClose}>
       <div className="provider-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <button className="provider" onClick={() => onPick('mail')}><b><Mail size={14} /> Mail</b><span>any IMAP/SMTP mailbox, Microsoft 365, Gmail with an app password</span></button>
-        <button className="provider" onClick={() => onPick('google')}><b>Google</b><span>choose mail, calendar and/or contacts{oauth?.google ? '' : ' (mail only until sign-in with Google is set up)'}</span></button>
-        <button className="provider" onClick={() => onPick('calendar')}><b><CalendarIcon size={14} /> Calendar</b><span>CalDAV — Nextcloud, iCloud, Fastmail, Radicale, your company server, …</span></button>
-        <button className="provider" onClick={() => onPick('contacts')}><b><Users size={14} /> Contacts</b><span>CardDAV — Nextcloud, iCloud, Fastmail, Radicale, …</span></button>
+        <button className="provider" onClick={() => onPick('google')}><b>Google</b><span>mail, and calendar and/or contacts as a separate connection{oauth?.google ? '' : ' (mail only until sign-in with Google is set up)'}</span></button>
       </div>
-      <div className="small faint">Each can be added to an account later too, or removed (Settings → Accounts), and put in a space.</div>
-    </Modal>
-  );
-}
-
-/** A calendar (CalDAV) or contacts (CardDAV) service: a new account, or added to / changed on an existing one. */
-function DavService({ service, account, onClose, onDone }) {
-  const cal = service === 'calendar';
-  const [f, setF] = useState({ url: (cal ? account?.caldavUrl : account?.carddavUrl) || '', davUser: account?.davUser || '', davPassword: '', name: '', tls: account?.tls || null });
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    setBusy(true);
-    try {
-      const r = account
-        ? await api.post(`/api/accounts/${account.id}/services/${service}`, { url: f.url.trim(), davUser: f.davUser.trim() || undefined, davPassword: f.davPassword || undefined, tls: tlsBody(f.tls) })
-        : await api.post('/api/accounts', { services: [service], [cal ? 'caldavUrl' : 'carddavUrl']: f.url.trim(), davUser: f.davUser.trim(), davPassword: f.davPassword, name: f.name.trim() || undefined, email: f.name.trim() || undefined, tls: tlsBody(f.tls) });
-      if (r?.dav?.error) { toastError(new Error(r.dav.error)); setBusy(false); if (!account) onDone(null); return; }
-      onDone(r);
-    } catch (e) { toastError(e); setBusy(false); }
-  };
-  return (
-    <Modal title={`${account ? (account.services?.[service] ? 'Change' : 'Add') : 'Add'} ${cal ? 'calendars (CalDAV)' : 'contacts (CardDAV)'}${account ? ` — ${account.email}` : ''}`} onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !/^https?:\/\//.test(f.url.trim()) || (!account && !f.davUser.trim())} onClick={save}>{busy && <Spinner size={14} />} {account ? 'Save' : 'Add'}</button></>}>
-      <div className="form-grid">
-        <label className="field full">{cal ? 'CalDAV' : 'CardDAV'} address<input className="input" autoFocus placeholder="https://cloud.example.com/remote.php/dav" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
-        <label className="field">Username{account && <span className="faint"> (empty: {account.davUser || account.email})</span>}<input className="input" value={f.davUser} onChange={(e) => setF({ ...f, davUser: e.target.value })} autoComplete="username" /></label>
-        <label className="field">Password{account && <span className="faint"> (empty: keep)</span>}<input className="input" type="password" value={f.davPassword} onChange={(e) => setF({ ...f, davPassword: e.target.value })} autoComplete="new-password" /></label>
-        {!account && <label className="field full">Name <span className="faint">— optional, e.g. “Family calendar” (default: the username)</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>}
-        <CertField value={f.tls} onChange={(tls) => setF({ ...f, tls })} />
-      </div>
-      <div className="small faint">Nextcloud: https://your-cloud/remote.php/dav · iCloud: https://caldav.icloud.com (contacts: https://contacts.icloud.com) with an app-specific password · Fastmail: https://caldav.fastmail.com (contacts: https://carddav.fastmail.com). Halcyon looks for the calendars / address books there and says what it found.</div>
+      <div className="small faint">Calendars, task lists and contacts from a CalDAV / CardDAV server: Settings → Calendars &amp; tasks → Add connection.</div>
     </Modal>
   );
 }
@@ -228,8 +176,7 @@ function AccountEditor({ account, startGoogle = false, addMailTo = null, onClose
   const [gServices, setGServices] = useState({ mail: true, calendar: true, contacts: true });
   const [f, setF] = useState(() => account ? {
     email: account.email, displayName: account.displayName || '', name: account.name || '', signatureHtml: account.signatureHtml || '',
-    imap: { ...account.imap, password: '' }, smtp: { ...account.smtp, password: '' }, caldavUrl: account.caldavUrl || '', carddavUrl: account.carddavUrl || '',
-    davUser: account.davUser || '', davPassword: '', syncEnabled: account.syncEnabled, aliases: account.aliases || [], inviteCalendarId: account.inviteCalendarId || null,
+    imap: { ...account.imap, password: '' }, smtp: { ...account.smtp, password: '' }, syncEnabled: account.syncEnabled, aliases: account.aliases || [], inviteCalendarId: account.inviteCalendarId || null,
     aboutMe: account.aboutMe || '', contextMode: account.contextMode || '', tls: account.tls || null,
   } : { email: addMailTo?.email || '', displayName: '', password: '', imap: { host: '', port: 993, secure: true, user: '' }, smtp: { host: '', port: 465, secure: true, user: '' }, signatureHtml: '' });
   const [disc, setDisc] = useState(null);

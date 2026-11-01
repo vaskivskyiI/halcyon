@@ -4,8 +4,9 @@ import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, Spinner } from '../components/common.jsx';
 import { listRemoval } from '../tasks/TasksView.jsx';
+import Connections from './Connections.jsx';
 
-// Every calendar, task list and address book in one place — of all spaces, hidden ones too: show again, hide, rename,
+// Where they come from (connections), then every calendar, task list and address book in one place, grouped by origin — of all spaces, hidden ones too: show again, hide, rename,
 // make default, move everything from one kept in Halcyon to a synced one, delete what is kept in Halcyon.
 const KINDS = {
   calendar: { title: 'Calendars', icon: CalendarIcon, url: '/api/calendars', move: 'move-events', items: 'events', count: (x) => x.events, event: 'calendar' },
@@ -22,6 +23,10 @@ export default function CalendarsTasks() {
   useEffect(() => { load(); return onEvent((e) => { if (['calendar:changed', 'tasks:changed', 'contacts:changed'].includes(e.type)) load(); }); }, []);
   if (!data) return <div className="settings-section"><Spinner /></div>;
 
+  // What each connection brought in (for the connections list).
+  const counts = {};
+  const tally = (items, key) => items.forEach((x) => { if (x.accountId) { counts[x.accountId] ||= {}; counts[x.accountId][key] = (counts[x.accountId][key] || 0) + 1; } });
+  tally(data.calendar, 'calendars'); tally(data.taskList.filter((l) => !l.removed), 'taskLists'); tally(data.addressBook, 'books');
   const act = async (fn, msg) => { try { const r = await fn(); if (msg) toast(typeof msg === 'function' ? msg(r) : msg); await load(); } catch (e) { toastError(e); } };
   const path = (kind, x) => `${KINDS[kind].url}/${x.id}`;
   const rename = (kind, x) => { const n = prompt('Name', x.name); if (n?.trim() && n.trim() !== x.name) act(() => api.patch(path(kind, x), { name: n.trim() })); };
@@ -37,9 +42,13 @@ export default function CalendarsTasks() {
   const Section = ({ kind }) => {
     const k = KINDS[kind], list = data[kind];
     const writable = list.filter((x) => !x.readonly && !x.hidden);
+    // Grouped by where they come from (a connection, a read-only server, Halcyon itself).
+    const groups = [...list.reduce((g, x) => g.set(x.origin, [...(g.get(x.origin) || []), x]), new Map())];
     return (<>
       <h3 className="row" style={{ gap: 6 }}><k.icon size={16} /> {k.title}</h3>
-      {list.map((x) => {
+      {groups.map(([origin, items]) => <div key={origin} style={{ display: 'grid', gap: 6 }}>
+      {groups.length > 1 && <div className="small faint" style={{ marginTop: 4 }}>{origin}</div>}
+      {items.map((x) => {
         const n = k.count(x) || 0;
         const targets = writable.filter((t) => t.id !== x.id && fromServer(t));
         return (
@@ -64,6 +73,7 @@ export default function CalendarsTasks() {
             {kind === 'taskList' && fromServer(x) && !x.removed && <button className="icon-btn danger" title={x.gone ? 'Delete (its server no longer offers it)' : 'Remove from Halcyon (it stays on the server)'} onClick={() => remove(kind, x)}><Trash2 size={14} /></button>}
           </div>);
       })}
+      </div>)}
     </>);
   };
 
@@ -87,8 +97,9 @@ export default function CalendarsTasks() {
   return (
     <div className="settings-section">
       <div><h2>Calendars &amp; tasks</h2>
-        <div className="muted">All calendars, task lists and address books, of every space. Ones from a server (<Cloud size={12} style={{ verticalAlign: -1 }} /> synced) can be hidden and shown again — they stay on the server.
+        <div className="muted">Connections to calendar and contact servers, then all calendars, task lists and address books of every space, grouped by where they come from. Ones from a server (<Cloud size={12} style={{ verticalAlign: -1 }} /> synced) can be hidden and shown again — they stay on the server.
           Ones kept in Halcyon only (<HardDrive size={12} style={{ verticalAlign: -1 }} />) can be moved to a synced one and deleted. Which space each belongs to: <a href="#/settings/spaces" onClick={(e) => { e.preventDefault(); navigate('#/settings/spaces'); }}>Spaces</a>.</div></div>
+      <Connections counts={counts} />
       <Section kind="calendar" />
       <Section kind="taskList" />
       <Section kind="addressBook" />

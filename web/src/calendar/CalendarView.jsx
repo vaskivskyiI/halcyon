@@ -250,7 +250,7 @@ function NewCalendarModal({ onClose, onDone }) {
       <div className="small muted" style={{ marginBottom: 8 }}>
         All calendars found there are added <b>read-only</b> (nothing on that server is ever changed) and refreshed every 30 minutes.
         Nextcloud: https://your-server/remote.php/dav · iCloud: https://caldav.icloud.com (with an app-specific password) · Fastmail: https://caldav.fastmail.com.
-        For a calendar you want to edit, add its CalDAV address to the mail account in Settings → Accounts instead.
+        For calendars you want to edit, add a connection in Settings → Calendars &amp; tasks instead.
       </div>
     </>}
     <label className="field">Name{kind === 'caldav' ? ' (optional)' : ''}<input className="input" value={f.name} onChange={set('name')} autoFocus={kind === 'local'} /></label>

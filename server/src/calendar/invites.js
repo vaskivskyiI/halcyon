@@ -4,7 +4,7 @@ import { getSettings } from '../settings.js';
 import { parseIcs, buildIcs } from './ics.js';
 import { createEvent, updateEvent, serializeEvent, defaultCalendar } from './repo.js';
 import { queueSend } from '../mail/send.js';
-import { userAccounts } from '../accounts.js';
+import { mailAccounts } from '../accounts.js';
 import { calendarForAccount, spaceMap } from '../spaces.js';
 
 const writable = (userId) => all('SELECT * FROM calendars WHERE user_id = ? AND readonly = 0 AND enabled = 1 ORDER BY name', userId);
@@ -33,7 +33,7 @@ export function invitationFor(userId, messageId) {
   try { parsed = parseIcs(m.calendar_ics, getSettings(userId).calendar.timezone); } catch (e) { return { error: `The calendar data in this email could not be read (${e.message})` }; }
   const ev = parsed.events.find((x) => x.start) || parsed.events[0];
   if (!ev) return { error: 'This email contains calendar data without an event' };
-  const mine = userAccounts(userId).map((a) => a.email.toLowerCase());
+  const mine = mailAccounts(userId).map((a) => a.email.toLowerCase());
   const me = ev.attendees.find((a) => mine.includes(a.email));
   const local = get('SELECT e.* FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.uid = ? AND e.recurrence_id IS NULL', userId, ev.uid);
   const spaces = spaceMap(userId);
@@ -104,7 +104,7 @@ export function sendInvitations(userId, eventId, { method = 'REQUEST', accountId
   const ev = get('SELECT * FROM events WHERE id = ?', eventId);
   if (!ev) return;
   const e = serializeEvent(ev);
-  const account = (accountId && get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', accountId, userId)) || userAccounts(userId)[0];
+  const account = (accountId && get('SELECT * FROM accounts WHERE id = ? AND user_id = ?', accountId, userId)) || mailAccounts(userId)[0];
   if (!account) throw new Error('No mail account to send invitations from');
   const organizer = e.organizer?.email ? e.organizer : { email: account.email, name: account.display_name || '' };
   if (!e.organizer?.email) run('UPDATE events SET organizer_json = ? WHERE id = ?', JSON.stringify(organizer), eventId);

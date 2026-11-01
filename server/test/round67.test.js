@@ -66,6 +66,20 @@ test('a list its server no longer offers is marked, and can be deleted with its 
   assert.equal(byUrl(OLD.url), undefined, 'not made again: the server does not offer it');
 });
 
+test('a second list for the same collection is not synced, is marked, and can be deleted', async () => {
+  const URL3 = 'https://dav.example/cal/twin/';
+  const ins = (name) => Number(db.prepare("INSERT INTO task_lists (user_id, account_id, name, source, url, created_at) VALUES (?, ?, ?, 'caldav', ?, ?)").run(account.user_id, account.id, name, URL3, Date.now()).lastInsertRowid);
+  const first = ins('Work'), twin = ins('Work (2)');
+  await sync([NEW, { ...NEW, url: URL3, ctag: 'c1' }]);
+  const all = await lists();
+  assert.equal(all.find((l) => l.id === first).gone, false);
+  assert.equal(all.find((l) => l.id === first).total, 1, 'the first one is synced');
+  assert.equal(all.find((l) => l.id === twin).gone, true);
+  assert.equal(all.find((l) => l.id === twin).total, 0);
+  assert.equal((await call('DELETE', `/api/task-lists/${twin}`)).data.removed, undefined);
+  assert.equal(db.prepare('SELECT COUNT(*) FROM task_lists WHERE id = ?').pluck().get(twin), 0, 'deleted');
+});
+
 test('a list still on the server is removed from Halcyon only, stays removed, and can be brought back', async () => {
   const live = byUrl(NEW.url);
   assert.equal((await call('DELETE', `/api/task-lists/${live.id}`)).data.removed, true);

@@ -9,7 +9,7 @@ import { storeMemory, removeMemory, searchMemory, chunkText } from './memory.js'
 import { applyRules } from '../rules.js';
 import { parseIcs } from '../calendar/ics.js';
 import { listRange } from '../calendar/repo.js';
-import { userAccounts } from '../accounts.js';
+import { mailAccounts } from '../accounts.js';
 import { contactByEmail } from '../contacts/service.js';
 import { scope, inIds } from '../spaces.js';
 import { localToEpoch, normalizeEvent } from '../util/time.js';
@@ -37,7 +37,7 @@ const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
 export function ctxFor(userId, accountId = null) {
   const user = get('SELECT * FROM users WHERE id = ?', userId);
   const settings = getSettings(userId);
-  const accounts = userAccounts(userId);
+  const accounts = mailAccounts(userId);
   // The account's own context, unless it (or the general setting) asks for the whole picture of the user.
   const acc = accountId ? accounts.find((a) => a.id === Number(accountId)) || null : null;
   const account = acc && (acc.context_mode || settings.ai.contextMode || 'account') !== 'global' ? acc : null;

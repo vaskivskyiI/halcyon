@@ -4,12 +4,12 @@ import { get, all, run, json, now } from '../db/index.js';
 import { getSettings, saveSettings } from '../settings.js';
 import { chatJSON, chat } from './router.js';
 import { registerHandler, enqueue } from './queue.js';
-import { userAccounts } from '../accounts.js';
+import { mailAccounts } from '../accounts.js';
 import * as P from './prompts.js';
 
 const skip = (msg) => Object.assign(new Error(msg), { code: 'SKIP' });
 const NOREPLY = /(^|[-_.+])(no-?reply|donotreply|notifications?|mailer-daemon|bounces?|newsletter|news|info|marketing|support|billing|alerts?)([-_.+@]|$)/i;
-const own = (userId) => new Set(userAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
+const own = (userId) => new Set(mailAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
 const sentFolderIds = (userId) => all("SELECT f.id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE a.user_id = ? AND f.special_use = '\\Sent'", userId).map((r) => r.id);
 
 /** Mail exchanged with one person (theirs to the user and the user's to them), newest first. */
@@ -41,7 +41,7 @@ export async function profileJob(userId, email) {
     : all('SELECT text FROM facts WHERE user_id = ? AND lower(text) LIKE ? ORDER BY created_at DESC LIMIT 10', userId, `%${email}%`)).map((f) => f.text);
   const prev = get('SELECT profile_json, user_notes FROM contact_profiles WHERE user_id = ? AND email = ?', userId, email);
   const { data } = await chatJSON(userId, 'background', {
-    ...P.contactProfilePrompt({ ctx: P.userContext(get('SELECT * FROM users WHERE id = ?', userId), settings, userAccounts(userId)), name, email, transcript, facts, notes: prev?.user_notes || '',
+    ...P.contactProfilePrompt({ ctx: P.userContext(get('SELECT * FROM users WHERE id = ?', userId), settings, mailAccounts(userId)), name, email, transcript, facts, notes: prev?.user_notes || '',
       language: P.LANG_NAMES[settings.ui.language] || 'English' }),
     temperature: 0.2, maxTokens: 700,
   });
@@ -163,7 +163,7 @@ export async function aboutMeJob(userId) {
   const res = await chat(userId, 'background', { ...P.aboutMePrompt({ name: user.name, samples: rows, facts, language: P.LANG_NAMES[settings.ui.language] || 'English' }), temperature: 0.2, maxTokens: 600 });
   saveSettings(userId, { ai: { learnedAboutMe: res.text.trim().slice(0, 2000), learnedAboutMeAt: now() } });
   // And per account, from that account's sent mail only (used for its mail instead of the whole picture).
-  for (const a of all('SELECT id, email FROM accounts WHERE user_id = ?', userId)) {
+  for (const a of all('SELECT id, email FROM accounts WHERE user_id = ? AND mail != 0', userId)) {
     const sentA = all("SELECT id FROM folders WHERE account_id = ? AND special_use = '\\Sent'", a.id).map((r) => r.id);
     if (!sentA.length) continue;
     const samples = all(`SELECT subject, body_text, to_json FROM messages WHERE folder_id IN (${sentA.join(',')}) ORDER BY date DESC LIMIT 60`)

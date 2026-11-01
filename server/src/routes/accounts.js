@@ -1,7 +1,7 @@
 import { get, all, run, update, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
-import { userAccounts, userAccount, serializeAccount, accountFields, createAccount, ACCOUNT_COLS } from '../accounts.js';
+import { userAccounts, userAccount, serializeAccount, accountFields, createAccount, ACCOUNT_COLS, isConnection, connectionLabel } from '../accounts.js';
 import { discover } from '../mail/autoconfig.js';
 import { testAccount } from '../mail/connection.js';
 import { syncManager } from '../mail/sync.js';
@@ -69,6 +69,8 @@ export default async function accountRoutes(app) {
       (SELECT COUNT(*) FROM messages m JOIN folders f2 ON f2.id = m.folder_id WHERE f2.account_id = ? AND f2.sync_enabled = 1) AS downloaded
       FROM folders WHERE account_id = ? AND sync_enabled = 1`, a.id, a.id),
     history: a.sync_history || '90',
+    // Calendars / contacts of a connection: the last sync (when, what was found, or why not).
+    dav: (a.caldav_url || a.carddav_url) ? (({ at, calendars, books, taskLists, error }) => ({ at, calendars, books, taskLists, error }))(davStatus.get(a.id) || {}) : null,
     historyFolders: all("SELECT name FROM folders WHERE account_id = ? AND sync_enabled = 1 AND history_done = 0 AND last_synced_at IS NOT NULL AND COALESCE(special_use, '') NOT IN ('\\Trash', '\\Junk') LIMIT 5", a.id).map((f) => f.name),
   })));
 
@@ -141,7 +143,7 @@ export default async function accountRoutes(app) {
       // A passing failure is tried again quickly a few times before it is shown (scheduler.js DAV_RETRY).
       if (d?.error && (a.caldav_url || a.carddav_url) && !(d.retry && d.retry <= DAV_QUIET && !d.asked)) {
         const again = d.retryAt && d.retryAt > t ? ` — trying again at ${new Date(d.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '';
-        out.push({ key: `dav:${a.id}`, level: again ? 'warn' : 'error', accountId: a.id, title: `${a.email}: calendars / contacts are not synced`, text: d.error + again, at: d.at, actions: ['retry-dav'] });
+        out.push({ key: `dav:${a.id}`, level: again ? 'warn' : 'error', accountId: a.id, title: `${connectionLabel(a)}: calendars / contacts are not synced`, text: d.error + again, at: d.at, actions: ['retry-dav'] });
       }
     }
     for (const c of all('SELECT id, name, source, sync_error FROM calendars WHERE user_id = ? AND sync_error IS NOT NULL', userId)) {
@@ -194,12 +196,16 @@ export default async function accountRoutes(app) {
     // A calendar / contacts account is named by its login (or server) when it has no email address.
     const email = String(b.email || b.davUser || (() => { try { return new URL(b.caldavUrl || b.carddavUrl).host; } catch { return 'Calendar'; } })()).trim();
     if (mail && all('SELECT id FROM accounts WHERE user_id = ? AND lower(email) = lower(?) AND mail != 0', req.user.id, email).length) return httpError(reply, 400, 'This account already exists');
-    const a = createAccount(req.user.id, {
-      ...b, email, caldavUrl: services.includes('calendar') ? b.caldavUrl : undefined, carddavUrl: services.includes('contacts') ? b.carddavUrl : undefined,
-    }, mail ? {} : { mail: 0, sync_enabled: 0 });
+    // Mail and calendars / contacts are separate: a mail account never has CalDAV / CardDAV; those are a connection
+    // of their own (asked for together, both are made).
+    const davFields = { caldavUrl: services.includes('calendar') ? b.caldavUrl : undefined, carddavUrl: services.includes('contacts') ? b.carddavUrl : undefined };
+    const conn = davFields.caldavUrl || davFields.carddavUrl
+      ? createAccount(req.user.id, { email, name: b.connectionName ?? (mail ? undefined : b.name), davUser: b.davUser || (mail ? b.imap?.user || email : undefined), davPassword: b.davPassword || (mail ? b.imap?.password : undefined), tls: b.tls, space: b.space, ...davFields }, { mail: 0, sync_enabled: 0 })
+      : null;
+    const a = mail ? createAccount(req.user.id, { ...b, email, caldavUrl: undefined, carddavUrl: undefined, davUser: undefined, davPassword: undefined }) : conn;
     if (mail) syncManager.start(a.id);
     let dav = null;
-    if (a.caldav_url || a.carddav_url) dav = mail ? (syncDav(a), null) : await Promise.race([syncDav(a, { asked: true }), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
+    if (conn) dav = mail ? (syncDav(conn), null) : await Promise.race([syncDav(conn, { asked: true }), new Promise((r) => setTimeout(() => r({ pending: true }), 30e3))]);
     return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };
   });
 
@@ -212,6 +218,7 @@ export default async function accountRoutes(app) {
     const google = a.auth_type === 'oauth-google';
     const { service } = req.params;
     if (service === 'calendar' || service === 'contacts') {
+      if (!isConnection(a)) return httpError(reply, 400, 'Calendars and contacts are added as a connection of their own (Settings → Calendars & tasks)');
       const url = String(b.url || (google ? PROVIDERS.google[service === 'calendar' ? 'caldav' : 'carddav'] : '')).trim();
       if (!/^https?:\/\//.test(url)) return httpError(reply, 400, `Enter the ${service === 'calendar' ? 'CalDAV' : 'CardDAV'} address`);
       update('accounts', a.id, accountFields({ [service === 'calendar' ? 'caldavUrl' : 'carddavUrl']: url, davUser: b.davUser, davPassword: b.davPassword, tls: b.tls }), ACCOUNT_COLS);
@@ -220,6 +227,7 @@ export default async function accountRoutes(app) {
       return { ...serializeAccount(userAccount(req.user.id, a.id)), dav };
     }
     if (service === 'mail') {
+      if (isConnection(a)) return httpError(reply, 400, 'Mail is added as an account of its own (Settings → Accounts)');
       if (!google && (!b.imap?.host || !b.smtp?.host)) return httpError(reply, 400, 'IMAP and SMTP settings are required');
       update('accounts', a.id, { ...accountFields(google ? { imap: { ...PROVIDERS.google.imap, user: a.email }, smtp: { ...PROVIDERS.google.smtp, user: a.email } } : b), mail: 1, sync_enabled: 1 }, [...ACCOUNT_COLS, 'mail']);
       await syncManager.restart(a.id);
@@ -359,24 +367,26 @@ setTimeout(() => { window.close(); setTimeout(() => { document.getElementById('c
       const prov = PROVIDERS[p.provider];
       const want = new Set(p.services || providerServices(p.provider));
       const fields = { auth_type: `oauth-${p.provider}`, oauth_enc: encrypt(JSON.stringify(tokens)) };
-      let account = p.accountId ? userAccount(p.userId, p.accountId) : get("SELECT * FROM accounts WHERE user_id = ? AND lower(email) = lower(?) AND COALESCE(kind, 'mail') != 'archive'", p.userId, email);
-      // Only the services chosen are added; an existing account keeps the ones it has.
-      const add = {
-        ...(want.has('mail') ? { mail: 1, sync_enabled: 1 } : {}),
+      // Mail goes to the mail account, calendar / contacts to a connection of their own; each keeps its own copy of the
+      // sign-in, so removing one leaves the other working. The one signed in again (accountId) is found first.
+      const given = p.accountId ? userAccount(p.userId, p.accountId) : null;
+      const find = (conn) => (given && isConnection(given) === conn ? given
+        : get(`SELECT * FROM accounts WHERE user_id = ? AND lower(email) = lower(?) AND COALESCE(kind, 'mail') != 'archive' AND ${conn ? 'mail = 0' : 'mail != 0'} ORDER BY id LIMIT 1`, p.userId, email));
+      if (want.has('mail')) {
+        const m = find(false);
+        if (m) { update('accounts', m.id, fields, ACCOUNT_COLS); await syncManager.restart(m.id); }
+        else syncManager.start(createAccount(p.userId, { email, name: email, displayName: name || '', imap: { ...prov.imap, user: email }, smtp: { ...prov.smtp, user: email } }, fields).id);
+      }
+      const dav = {
         ...(want.has('calendar') && prov.caldav ? { caldav_url: prov.caldav } : {}),
         ...(want.has('contacts') && prov.carddav ? { carddav_url: prov.carddav } : {}),
       };
-      if (account) {
-        update('accounts', account.id, { ...fields, ...add }, [...ACCOUNT_COLS, 'mail']);
-        if (userAccount(p.userId, account.id).mail !== 0) await syncManager.restart(account.id);
-      } else {
-        account = createAccount(p.userId, {
-          email, name: email, displayName: name || '', imap: { ...prov.imap, user: email }, smtp: { ...prov.smtp, user: email },
-        }, { ...fields, ...add, ...(want.has('mail') ? {} : { mail: 0, sync_enabled: 0 }) });
-        if (want.has('mail')) syncManager.start(account.id);
-      }
-      const fresh = userAccount(p.userId, account.id);
-      if ((want.has('calendar') || want.has('contacts')) && (fresh.caldav_url || fresh.carddav_url)) syncDav(fresh);
+      if (Object.keys(dav).length) {
+        let c = find(true);
+        if (c) update('accounts', c.id, { ...fields, ...dav }, ACCOUNT_COLS);
+        else c = createAccount(p.userId, { email, name: p.provider === 'google' ? 'Google' : email }, { ...fields, ...dav, mail: 0, sync_enabled: 0 });
+        syncDav(userAccount(p.userId, c.id));
+      } else if (given && isConnection(given)) update('accounts', given.id, fields, ACCOUNT_COLS);
       return done(`Connected ${String(email).replace(/[<>]/g, '')}.`, true);
     } catch (e) {
       return done(`Sign-in failed: ${String(e.message).replace(/[<>]/g, '')}`);

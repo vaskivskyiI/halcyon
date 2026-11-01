@@ -6,7 +6,7 @@ import { all, get, run, now, json } from '../db/index.js';
 import { getSettings } from '../settings.js';
 import { setFlags } from '../mail/actions.js';
 import { notify } from '../util/events.js';
-import { userAccounts } from '../accounts.js';
+import { mailAccounts } from '../accounts.js';
 
 /** Categories of mail that is rarely personal (newsletters, ads, social networks, automated notices). */
 export const NOISE_LIST = ['newsletter', 'promotion', 'social', 'notification'];
@@ -100,7 +100,7 @@ export function suggestedActionSql(userId, i = 'i', m = 'm') {
 }
 
 /** The user's own addresses (accounts and their aliases), lower-case. */
-export const ownAddresses = (userId) => new Set(userAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
+export const ownAddresses = (userId) => new Set(mailAccounts(userId).flatMap((a) => [a.email, ...json(a.aliases_json, []).map((x) => x?.address || x)]).filter(Boolean).map((x) => String(x).toLowerCase()));
 
 /**
  * The user wrote in a conversation (sent from here, from the phone, from webmail or from another account): earlier
