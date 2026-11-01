@@ -551,4 +551,8 @@ export const migrations = [
   ALTER TABLE events ADD COLUMN show_as TEXT;
   ALTER TABLE events ADD COLUMN my_show_as TEXT;
   `,
+  // 51: points of the daily brief the user set aside ("Ignore"), by item key; the next rewrite leaves them out too.
+  `
+  ALTER TABLE briefs ADD COLUMN ignored_json TEXT DEFAULT '[]';
+  `,
 ];

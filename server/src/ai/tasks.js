@@ -1,8 +1,9 @@
 // AI features. Background handlers precompute insights, thread summaries, embeddings, reply drafts and the
 // daily brief; on-demand functions reuse those results when available and stream otherwise.
+import crypto from 'node:crypto';
 import { get, all, run, json, now } from '../db/index.js';
 import { getSettings, saveSettings } from '../settings.js';
-import { chat, chatJSON, embed } from './router.js';
+import { chat, chatJSON, embed, parseJSON } from './router.js';
 import { registerHandler, enqueue, notifyAI, queueMemory } from './queue.js';
 import * as P from './prompts.js';
 import { storeMemory, removeMemory, searchMemory, chunkText } from './memory.js';
@@ -833,12 +834,54 @@ export async function extractEvent(userId, messageId) {
 }
 
 /** cacheOnly: return the stored overview or queue it for the background (never makes the caller wait for the AI). */
+// A point of the brief is known by its words (an index changes when the brief is rewritten).
+const briefKey = (text) => crypto.createHash('sha1').update(String(text || '').trim().toLowerCase()).digest('hex').slice(0, 12);
+const idList = (v) => (Array.isArray(v) ? [...new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 8) : []);
+
+/** The brief as stored (JSON since structured briefs; Markdown before) → overview and points with their sources resolved. */
+export function briefOut(userId, row) {
+  let b = null;
+  try { b = JSON.parse(row.content_json); } catch { /* an older brief: Markdown */ }
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return { content: row.content_json, items: null };
+  const ignored = new Set(json(row.ignored_json, []));
+  const mail = (id) => get(`SELECT m.id, m.from_name, m.from_addr, m.subject, i.dismissed_at FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id
+    WHERE m.id = ? AND (m.user_id = ? OR m.user_id IN (SELECT shared_id FROM shared_members WHERE user_id = ?))`, id, userId, userId);
+  const ev = (id) => get(`SELECT e.id, e.title, e.start, e.all_day FROM events e JOIN calendars c ON c.id = e.calendar_id
+    WHERE e.id = ? AND (c.user_id = ? OR c.user_id IN (SELECT shared_id FROM shared_members WHERE user_id = ?))`, id, userId, userId);
+  const task = (id) => get('SELECT id, title, done FROM tasks WHERE id = ? AND (user_id = ? OR user_id IN (SELECT shared_id FROM shared_members WHERE user_id = ?))', id, userId, userId);
+  const point = (x) => {
+    const key = briefKey(x.text);
+    return {
+      key, text: x.text, task: x.task || null, due: /^\d{4}-\d{2}-\d{2}$/.test(x.due || '') ? x.due : null,
+      emails: idList(x.emails).map(mail).filter(Boolean).map((m) => ({ id: m.id, from: m.from_name || m.from_addr, subject: m.subject, handled: !!m.dismissed_at })),
+      events: idList(x.events).map(ev).filter(Boolean).map((e) => ({ id: e.id, title: e.title, start: e.start, allDay: !!e.all_day })),
+      tasks: idList(x.tasks).map(task).filter(Boolean).map((t) => ({ id: t.id, title: t.title, done: !!t.done })),
+    };
+  };
+  const list = (v) => (Array.isArray(v) ? v : []).filter((x) => x?.text).map(point).filter((x) => !ignored.has(x.key));
+  const items = { overview: String(b.overview || ''), headsUp: list(b.headsUp), fyi: list(b.fyi) };
+  // Markdown of the same, for assistants (MCP) and anything that shows text only.
+  const md = (x) => `- ${x.text}${x.emails.map((m) => ` [open](msg:${m.id})`).join('')}`;
+  const content = [items.overview, items.headsUp.length ? `## Heads-up\n${items.headsUp.map(md).join('\n')}` : '', items.fyi.length ? `## FYI\n${items.fyi.map(md).join('\n')}` : ''].filter(Boolean).join('\n\n');
+  return { content, items };
+}
+
+/** Sets a point of the brief aside (or back, with ignored = false). */
+export function ignoreBriefPoint(userId, dayKey, key, ignored = true) {
+  const row = get('SELECT ignored_json FROM briefs WHERE user_id = ? AND day = ?', userId, dayKey);
+  if (!row) return false;
+  const set = new Set(json(row.ignored_json, []));
+  if (ignored) set.add(String(key)); else set.delete(String(key));
+  run('UPDATE briefs SET ignored_json = ? WHERE user_id = ? AND day = ?', JSON.stringify([...set].slice(-200)), userId, dayKey);
+  return true;
+}
+
 export async function dailyBrief(userId, { day, force = false, space = '', interactive = false, cacheOnly = false } = {}) {
   const today = day || new Date().toISOString().slice(0, 10);
   const sc = scope(userId, space);
   const key = sc ? `${today}@${sc.space}` : today; // one brief per day and space
   const cached = get('SELECT * FROM briefs WHERE user_id = ? AND day = ?', userId, key);
-  if (cached && !force) return { day: today, space: sc?.space || '', content: cached.content_json, createdAt: cached.created_at, model: cached.model };
+  if (cached && !force) return { day: today, key, space: sc?.space || '', ...briefOut(userId, cached), createdAt: cached.created_at, model: cached.model };
   if (cacheOnly) { enqueue(userId, 'brief', key, 60); return { day: today, space: sc?.space || '', content: null, pending: true }; }
   const { ctx, uiLanguage, settings } = ctxFor(userId);
   const tz = getSettings(userId).calendar.timezone;
@@ -854,10 +897,10 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
     const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, i.summary FROM messages m JOIN ai_insights i ON i.message_id = m.id
       WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, uid, now() - 7 * 864e5);
     const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
-    const events = (sc && !sc.calendarIds.length ? [] : listRange(uid, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
-    const tasks = all(`SELECT title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
+    const events = (sc && !sc.calendarIds.length ? [] : listRange(uid, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ ID: e.seriesId || e.id, title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
+    const tasks = all(`SELECT id, title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
       AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn})) ORDER BY due LIMIT 15`, uid, end.getTime(), uid)
-      .map((t) => ({ title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));
+      .map((t) => ({ ID: t.id, title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));
     return { important, awaiting, events, tasks, space };
   };
   const parts = [gather(userId, sc), ...(sc ? [] : aiSpacesOf(userId).map((sp) => gather(sp.id, null, sp.name)))];
@@ -868,8 +911,17 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
     awaitingYourReply: parts.flatMap((p) => p.awaiting.map((m) => inSpace({ ID: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: m.summary, receivedDaysAgo: Math.round((now() - m.date) / 864e5) }, p))),
     events: parts.flatMap((p) => p.events.map((e) => inSpace(e, p))), tasks: parts.flatMap((p) => p.tasks.map((x) => inSpace(x, p))),
   };
-  const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: summaryLanguage(settings, uiLanguage, 'brief'), data }), temperature: 0.3, maxTokens: 1200, interactive });
-  run('INSERT OR REPLACE INTO briefs (user_id, day, content_json, model, created_at) VALUES (?, ?, ?, ?, ?)', userId, key, res.text.trim(), res.model, now());
+  // Points the user set aside stay out of the rewrite (their words; the keys are kept with the new brief).
+  const ignored = json(cached?.ignored_json, []);
+  if (ignored.length && cached) {
+    const old = (() => { try { const b = JSON.parse(cached.content_json); return [...(b.headsUp || []), ...(b.fyi || [])]; } catch { return []; } })();
+    data.setAsideByUser = old.filter((x) => ignored.includes(briefKey(x?.text))).map((x) => x.text);
+  }
+  const res = await chat(userId, 'background', { ...P.briefPrompt({ ctx, language: summaryLanguage(settings, uiLanguage, 'brief'), data }), temperature: 0.3, maxTokens: 1500, interactive, json: true });
+  let stored;
+  try { const b = parseJSON(res.text); stored = JSON.stringify({ overview: b.overview || '', headsUp: b.headsUp || [], fyi: b.fyi || [] }); } catch { stored = res.text.trim(); } // a model that answered in prose: shown as it is
+  run('INSERT OR REPLACE INTO briefs (user_id, day, content_json, model, created_at, ignored_json) VALUES (?, ?, ?, ?, ?, ?)', userId, key, stored, res.model, now(), JSON.stringify(ignored));
   notifyAI(userId, 'ai:brief', { day: today, space: sc?.space || '' });
-  return { day: today, space: sc?.space || '', content: res.text.trim(), createdAt: now(), model: res.model };
+  const row = get('SELECT * FROM briefs WHERE user_id = ? AND day = ?', userId, key);
+  return { day: today, key, space: sc?.space || '', ...briefOut(userId, row), createdAt: row.created_at, model: res.model };
 }

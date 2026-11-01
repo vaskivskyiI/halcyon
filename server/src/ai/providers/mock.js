@@ -20,6 +20,12 @@ export function mock() {
         const ids = last.split(/\n(?=\[\d+\])/).filter((e) => e.toLowerCase().includes(name)).map((e) => Number((e.match(/^\[(\d+)\]/) || [])[1])).filter(Boolean);
         return { text: JSON.stringify({ ids }), usage: { input: 1, output: 1 } };
       }
+      // Daily brief: one point per email given (with its id), and what the user set aside left out, so tests can check both.
+      if (json && /preparing the user's daily briefing/.test(system)) {
+        const d = JSON.parse(last); const aside = new Set(d.setAsideByUser || []);
+        const headsUp = (d.recentEmails || []).slice(0, 3).map((m) => ({ text: `About ${m.subject}`, emails: [m.ID], events: [], tasks: [], task: `Answer ${m.from}`, due: null })).filter((x) => !aside.has(x.text));
+        return { text: JSON.stringify({ overview: `A day with ${(d.recentEmails || []).length} recent emails.`, headsUp, fyi: (d.tasks || []).slice(0, 1).map((t) => ({ text: `Task ${t.title}`, emails: [], events: [], tasks: [t.ID] })) }), usage: { input: 1, output: 1 } };
+      }
       // Meeting briefing: one bullet per email it was given (tests check which emails reach the prompt).
       if (!json && /Prepare the user for the meeting/.test(system)) {
         const title = (last.match(/^MEETING: ([^·\n]+)/m) || [])[1]?.trim() || '';

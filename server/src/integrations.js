@@ -71,6 +71,22 @@ function noteUrl(base, item) {
   return `${base}/#/n/${encodeURIComponent(item.id)}`;
 }
 
+/** The pages edited last in the person's Inkwell (Home shows them next to the day's mail and calendar). */
+export async function inkwellRecent(userId, limit = 6) {
+  const c = inkwellConfig(userId);
+  if (!c?.url || !c.token) return null;
+  const r = await inkFetch(c)(`${c.url}/api/recent?limit=${Math.min(Math.max(Number(limit) || 6, 1), 20)}`, {
+    headers: { authorization: `Bearer ${c.token}`, accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!r.ok) throw new Error(r.status === 401 || r.status === 403 ? 'Inkwell did not accept the token' : `Inkwell answered ${r.status}`);
+  const data = await r.json();
+  if (!Array.isArray(data)) throw new Error('Inkwell sent an unexpected answer');
+  return data.filter((x) => x && x.id != null).map((x) => ({
+    id: String(x.id), title: String(x.title || '').slice(0, 300), icon: x.icon ? String(x.icon).slice(0, 16) : null, kind: x.kind ? String(x.kind) : null,
+    snippet: x.snippet ? String(x.snippet).slice(0, 200) : '', updatedAt: Number(x.updatedAt) || null, url: noteUrl(c.url, { id: x.id }),
+  }));
+}
+
 /**
  * Pages linked to Halcyon items of one kind (refs: their ids). Throws when Inkwell cannot be asked; the caller
  * decides how quiet to be about it.

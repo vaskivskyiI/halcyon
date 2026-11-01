@@ -4,6 +4,7 @@ import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { Markdown, Spinner } from '../components/common.jsx';
 import { navigate, toast, toastError, fmtListDate } from '../util.js';
+import BriefPoints from '../components/BriefPoints.jsx';
 
 const SUGGESTIONS = [
   'What needs my attention today?',
@@ -122,9 +123,9 @@ function Brief() {
     <div className="chat"><div className="chat-scroll"><div className="brief" style={{ width: '100%' }}>
       <div className="row"><h2 className="grow" style={{ margin: 0 }}>{hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'}, {user.name?.split(' ')[0]}{space && <span className="chip" style={{ marginLeft: 10, verticalAlign: 'middle' }}>{space}</span>}</h2>
         <button className="btn" onClick={() => load(true)} disabled={busy} title="Re-write the AI overview now">{busy ? <Spinner size={14} /> : <RefreshCw size={15} />} Refresh</button></div>
-      <div className="small faint" style={{ marginBottom: 16 }}>{brief?.content ? `Overview written ${fmtListDate(brief.createdAt)} · ${brief.model || ''} · lists below are live` : 'The overview is prepared in the background; the lists below are always current.'}</div>
+      <div className="small faint" style={{ marginBottom: 16 }}>{brief?.items || brief?.content ? `Overview written ${fmtListDate(brief.createdAt)} · ${brief.model || ''} · lists below are live` : 'The overview is prepared in the background; the lists below are always current.'}</div>
       {err && <div className="notice warn" style={{ margin: '0 0 12px' }}>AI overview unavailable: {err}</div>}
-      {brief?.content && <div className="card" style={{ padding: '14px 18px' }}><Markdown text={brief.content} onOpenMessage={(id) => navigate(`#/mail/unified/${id}`)} /></div>}
+      {(brief?.items || brief?.content) && <div className="card" style={{ padding: '14px 18px' }}><BriefPoints key={brief.createdAt} brief={brief} /></div>}
       {!brief && <div className="empty"><Spinner size={22} /> Loading…</div>}
 
       {live && <>

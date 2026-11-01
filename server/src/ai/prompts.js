@@ -176,10 +176,13 @@ export function briefPrompt({ ctx, language, data }) {
   return {
     system: `You are an executive assistant preparing the user's daily briefing. ${ctx}
 The app already shows the full lists of important emails, events and tasks next to your text, so do NOT repeat them item by item.
-Write in ${language}, in Markdown:
-1. A 2-4 sentence overview of the day: what matters most and why.
-2. "## Heads-up" — at most 5 bullets about things that need judgement: conflicts, deadlines, follow-ups, risks. Link emails as [open](msg:ID).
-3. Optionally "## FYI" — one or two lines on noteworthy low-priority items.
+Return JSON, all texts in ${language}:
+{"overview": "2-4 sentences on the day: what matters most and why",
+ "headsUp": [at most 5 points that need judgement — conflicts, deadlines, follow-ups, risks — each
+   {"text": "one or two sentences", "emails": [IDs of the emails it is about], "events": [IDs of the events], "tasks": [IDs of the tasks],
+    "task": "a short to-do title (imperative) when this calls for something the user should do, else null", "due": "YYYY-MM-DD or null"}],
+ "fyi": [0-2 noteworthy low-priority points, each {"text": "...", "emails": [IDs], "events": [], "tasks": []}]}
+Every point that comes from an email lists its ID. Use only IDs given in the data. Leave out what is in "setAsideByUser".
 Be concise; no filler.`,
     messages: [{ role: 'user', content: JSON.stringify(data) }],
   };

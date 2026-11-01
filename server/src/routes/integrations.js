@@ -1,5 +1,5 @@
 import { requireUser } from '../auth.js';
-import { inkwellPublic, saveInkwell, inkwellLookup, inkwellError } from '../integrations.js';
+import { inkwellPublic, saveInkwell, inkwellLookup, inkwellError, inkwellRecent } from '../integrations.js';
 
 export default async function integrationRoutes(app) {
   app.get('/api/integrations/inkwell', { preHandler: requireUser }, async (req) => inkwellPublic(req.user.id));
@@ -9,6 +9,13 @@ export default async function integrationRoutes(app) {
   // "Test connection": asks Inkwell once with a ref nothing links to.
   app.post('/api/integrations/inkwell/test', { preHandler: requireUser }, async (req) => {
     try { const r = await inkwellLookup(req.user.id, 'email', ['0']); return r ? { ok: true } : { ok: false, error: 'Add the address and a token first' }; } catch (e) { return { ok: false, error: inkwellError(e) }; }
+  });
+  // Home with Inkwell: the pages edited last. Not set up or not reachable: no url, so Home looks as it does without it.
+  app.get('/api/integrations/inkwell/home', { preHandler: requireUser }, async (req) => {
+    try {
+      const recent = await inkwellRecent(req.user.id, req.query.limit);
+      return recent ? { url: inkwellPublic(req.user.id).url, recent } : { url: null, recent: [] };
+    } catch (e) { req.log.warn({ err: e.message }, 'inkwell recent failed'); return { url: inkwellPublic(req.user.id).url, recent: [], error: inkwellError(e) }; }
   });
   // Pages linked to mail / events / tasks (?kind=event&ref=1,2,3 — several at once for lists). Inkwell not set up or
   // not reachable: no url and no links, so the views look as they do without it.

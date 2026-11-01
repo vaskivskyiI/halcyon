@@ -222,8 +222,20 @@ export default async function aiRoutes(app) {
     try { return await T.extractEvent(req.user.id, Number(req.body.messageId)); } catch (e) { return httpError(reply, 400, e.message); }
   });
 
-  // Home: what today holds, without the AI overview.
-  app.get('/api/ai/today', async (req) => T.briefLive(req.user.id, reqSpace(req), { light: true }));
+  // Home: what today holds, with the brief's overview and points when today's is written (never waits for the AI).
+  app.get('/api/ai/today', async (req) => {
+    const live = T.briefLive(req.user.id, reqSpace(req));
+    const s = getSettings(req.user.id).ai;
+    let brief = null;
+    if (s.enabled && s.dailyBrief) try { brief = await T.dailyBrief(req.user.id, { cacheOnly: true, space: reqSpace(req) }); } catch { /* no brief: the lists only */ }
+    return { ...live, brief };
+  });
+
+  // A point of the brief set aside ("Ignore"), or back (ignored: false).
+  app.post('/api/ai/brief/ignore', async (req, reply) => {
+    const { key, day, ignored = true } = req.body || {};
+    return T.ignoreBriefPoint(req.user.id, String(day || ''), String(key || ''), ignored !== false) ? { ok: true } : httpError(reply, 404, 'No such brief');
+  });
 
   app.get('/api/ai/brief', async (req, reply) => {
     // The live lists never depend on the AI; the overview text may fail (e.g. AI server busy) without hiding them.

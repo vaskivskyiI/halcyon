@@ -671,3 +671,25 @@ a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display
 .activity-row > svg, .activity-row > .spinner { flex: none; margin-top: 3px; }
 .activity-row .grow { display: flex; flex-direction: column; min-width: 0; }
 @media (max-width: 768px) { .activity-panel { left: 8px; right: 8px; bottom: 64px; width: auto; max-width: none; } }
+/* The brief's AI points: text, what it is about (chips), then what can be done with it. */
+.brief-points h4 { margin: 14px 0 4px; font-size: 13px; font-weight: 650; color: var(--text-2); text-transform: uppercase; letter-spacing: .03em; }
+.brief-overview { margin: 0; line-height: 1.55; }
+.brief-point { display: grid; gap: 5px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.brief-point:last-child { border-bottom: 0; }
+.brief-point-text { line-height: 1.45; }
+.brief-point-refs { display: flex; flex-wrap: wrap; gap: 4px; }
+.brief-point-refs .chip { max-width: 100%; }
+.brief-point-refs .chip .truncate { max-width: 300px; }
+.brief-point-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-left: -8px; }
+.brief-point-actions .btn { color: var(--text-2); }
+.brief-point-actions .btn:hover { color: var(--text); }
+.brief-points.compact .brief-point-actions { opacity: .75; }
+.brief-points.compact .brief-point:hover .brief-point-actions { opacity: 1; }
+.home-brief { padding: 14px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.home-brief .ai-tag { display: inline-flex; align-items: center; gap: 4px; color: var(--ai); font-size: 12px; font-weight: 600; }
+.home-event .note-link, .home-notes-quick a { color: var(--text-2); }
+.home-event .note-link { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; }
+.home-event .note-link:hover { background: var(--hover); color: var(--accent); }
+.home-notes-quick { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+.home-note { display: flex; flex-direction: column; min-width: 0; padding: 7px 6px; margin: 0 -6px; border-radius: 8px; color: inherit; text-decoration: none; }
+.home-note:hover { background: var(--hover); }
