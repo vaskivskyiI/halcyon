@@ -11,6 +11,8 @@ import { notify } from '../util/events.js';
 
 const log = logger('sync');
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\Junk', '\\Trash'];
+const DEEP_EVERY = 3600e3; // every folder read through at least this often, in case a quick check missed something
+const RECENT_FLAGS = 2000; // flags compared between those, on a server that cannot say what changed
 const HISTORY_BATCH = Number(process.env.HALCYON_HISTORY_BATCH || 300); // older messages per folder per round
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -128,8 +130,10 @@ export class AccountSync {
         this.dirtyFolders.clear();
         for (const p of paths) {
           const f = get('SELECT * FROM folders WHERE account_id = ? AND path = ?', this.accountId, p);
+          this.doing('Checking mail', f?.name || p);
           if (f) await this.syncFolder(f);
         }
+        this.doing(null);
         this.setState('idle');
       } else if (history) {
         await this.backfillHistory();
@@ -137,24 +141,40 @@ export class AccountSync {
     }
   }
 
+  /** What the worker is doing right now, for the activity panel. */
+  doing(phase, folder = null, done = null, total = null) { this.status.doing = phase ? { phase, folder, done, total, since: this.status.doing?.phase === phase && this.status.doing?.folder === folder ? this.status.doing.since : now() } : null; }
+
+  /** The listing says nothing changed in this folder, so it need not be opened. */
+  unchanged(f, s) {
+    if (!s || !f.last_synced_at || !f.last_uid || f.special_use === '\\Inbox') return false;
+    if (Number(s.messages) !== f.server_total || (s.uidNext != null && Number(s.uidNext) - 1 > f.last_uid)) return false;
+    return s.highestModseq == null || !f.highest_modseq || String(s.highestModseq) === f.highest_modseq;
+  }
+
   async fullCycle() {
     const t0 = now();
     this.setState('syncing');
+    this.doing('Sending changes to the server');
     await this.processOps();
-    await this.syncFolderList();
-    const folders = all('SELECT * FROM folders WHERE account_id = ? AND sync_enabled = 1', this.accountId);
+    this.doing('Checking folders');
+    const listed = await this.syncFolderList();
+    const deep = t0 - (this.lastDeep || 0) >= DEEP_EVERY;
+    const folders = all('SELECT * FROM folders WHERE account_id = ? AND sync_enabled = 1', this.accountId).filter((f) => deep || !this.unchanged(f, listed.get(f.path)));
     folders.sort((a, b) => rank(a) - rank(b));
-    for (const f of folders) {
+    for (const [i, f] of folders.entries()) {
       if (this.stopped || !this.client) return;
-      try { await this.syncFolder(f); delete this.status.folderErrors[f.path]; } catch (e) {
+      this.doing('Checking mail', f.name, i, folders.length);
+      try { await this.syncFolder(f, { deep }); delete this.status.folderErrors[f.path]; } catch (e) {
         if (!this.client?.usable) throw e;
         log.warn(`folder ${f.path}: ${e.responseText || e.message}`);
         this.status.folderErrors[f.path] = e.responseText || e.message;
       }
     }
+    if (deep) this.lastDeep = t0;
     this.dirtyFolders.clear();
     this.reconcileOrphans();
-    this.status.lastFullAt = now(); this.status.lastFullMs = now() - t0;
+    this.status.lastFullAt = now(); this.status.lastFullMs = now() - t0; this.status.lastFolders = folders.length;
+    this.doing(null);
     this.setState('idle');
   }
 
@@ -171,8 +191,10 @@ export class AccountSync {
 
   async syncFolderList() {
     const account = this.account;
-    const list = await this.client.list();
+    // Message counts come with the listing (one request for all folders where the server can do that).
+    const list = await this.client.list({ statusQuery: { messages: true, uidNext: true, highestModseq: true } }).catch(() => this.client.list());
     const seen = new Set();
+    let changed = false;
     tx(() => {
       for (const box of list) {
         if (box.flags?.has('\\Noselect') || box.flags?.has('\\NonExistent')) continue;
@@ -187,6 +209,7 @@ export class AccountSync {
           const syncEnabled = special === '\\All' || special === '\\Flagged' || special === '\\Important' ? 0 : 1;
           run('INSERT INTO folders (account_id, path, name, delimiter, special_use, parent_path, subscribed, sync_enabled) VALUES (?,?,?,?,?,?,?,?)',
             account.id, box.path, box.name, box.delimiter, special, box.parentPath || null, box.subscribed ? 1 : 0, syncEnabled);
+          changed = true;
         }
       }
       // A folder missing from one listing may be a server hiccup: only drop it (and its local mail) the second time.
@@ -199,16 +222,19 @@ export class AccountSync {
         deleteMessages(all('SELECT id FROM messages WHERE folder_id = ?', f.id).map((r) => r.id), { keepAnalysis: true });
         run('DELETE FROM folders WHERE id = ?', f.id);
         missing.delete(f.id);
+        changed = true;
       }
     });
-    notify(account.user_id, 'folders:changed', { accountId: account.id });
+    if (changed) notify(account.user_id, 'folders:changed', { accountId: account.id });
+    return new Map(list.map((b) => [b.path, b.status]));
   }
 
-  async syncFolder(folder) {
+  /** deep: every flag and every UID compared; otherwise only what can have changed. */
+  async syncFolder(folder, { deep = false } = {}) {
     const account = this.account;
     const client = this.client;
     const lock = await client.getMailboxLock(folder.path);
-    let newIds = [];
+    let newIds = [], changes = 0;
     try {
       const box = client.mailbox;
       const uidValidity = String(box.uidValidity);
@@ -259,7 +285,9 @@ export class AccountSync {
           const opts = { uid: true };
           if (useModseq) opts.changedSince = BigInt(folder.highest_modseq);
           const updates = [];
-          for await (const msg of client.fetch(`1:${folder.last_uid}`, { uid: true, flags: true }, opts)) updates.push(msg);
+          // A server without CONDSTORE lists every message: only the recent ones, except in the hourly pass.
+          const first = useModseq || deep ? 1 : Math.max(1, folder.last_uid - RECENT_FLAGS);
+          for await (const msg of client.fetch(`${first}:${folder.last_uid}`, { uid: true, flags: true }, opts)) updates.push(msg);
           // Changes made here that have not reached the server yet win over what the server reported a moment ago
           // (otherwise a conversation marked read during a sync shows unread again until the next one).
           const pending = new Set(all("SELECT payload_json FROM pending_ops WHERE account_id = ? AND op = 'flags'", this.accountId)
@@ -268,18 +296,22 @@ export class AccountSync {
             for (const msg of updates) {
               if (pending.has(msg.uid)) continue;
               const f = flagsToCols([...(msg.flags || [])]);
-              run('UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ?, is_forwarded = ? WHERE folder_id = ? AND uid = ?',
-                f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, folder.id, msg.uid);
+              changes += run(`UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ?, is_forwarded = ? WHERE folder_id = ? AND uid = ?
+                AND (is_read != ? OR is_flagged != ? OR is_answered != ? OR is_draft != ? OR is_forwarded != ?)`, f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, folder.id, msg.uid,
+              f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded).changes;
             }
           });
         }
         // 3) Expunged messages. Only when the server's answer is complete: an empty or short list during a glitch
         //    would otherwise remove mail here that is still on the server (and would not be fetched again).
-        const serverUids = new Set((await client.search({ all: true }, { uid: true })) || []);
-        const complete = box.exists == null ? serverUids.size > 0 : serverUids.size >= box.exists && (serverUids.size > 0 || box.exists === 0);
-        const gone = complete ? all('SELECT id, uid FROM messages WHERE folder_id = ? AND uid IS NOT NULL', folder.id).filter((m) => !serverUids.has(m.uid)).map((m) => m.id) : [];
-        if (!complete) log.warn(`${folder.path}: incomplete message list from the server (${serverUids.size} of ${box.exists}) — nothing removed this time`);
-        if (gone.length) deleteMessages(gone, { keepAnalysis: true });
+        //    The same count as last time and nothing new means nothing left: no need to ask for every UID.
+        if (deep || uids.length || box.exists == null || box.exists !== folder.server_total) {
+          const serverUids = new Set((await client.search({ all: true }, { uid: true })) || []);
+          const complete = box.exists == null ? serverUids.size > 0 : serverUids.size >= box.exists && (serverUids.size > 0 || box.exists === 0);
+          const gone = complete ? all('SELECT id, uid FROM messages WHERE folder_id = ? AND uid IS NOT NULL', folder.id).filter((m) => !serverUids.has(m.uid)).map((m) => m.id) : [];
+          if (!complete) log.warn(`${folder.path}: incomplete message list from the server (${serverUids.size} of ${box.exists}) — nothing removed this time`);
+          if (gone.length) { deleteMessages(gone, { keepAnalysis: true }); changes += gone.length; }
+        }
       }
 
       if (failedMin != null) maxUid = Math.max(folder.last_uid || 0, failedMin - 1);
@@ -290,6 +322,8 @@ export class AccountSync {
     } finally {
       lock.release();
     }
+    // Nothing changed: no recount, and no event that makes every open window ask for the folder list again.
+    if (!newIds.length && !changes && folder.last_synced_at) return;
     recountFolder(folder.id);
     if (newIds.length) {
       const fresh = get('SELECT * FROM folders WHERE id = ?', folder.id);
@@ -325,6 +359,7 @@ export class AccountSync {
       }
       const newIds = [];
       let oldest = folder.oldest_uid, newest = 0, done = 0;
+      this.doing('Downloading older mail', folder.name);
       try {
         const below = oldest || (client.mailbox.uidNext ? Number(client.mailbox.uidNext) : 0);
         if (!client.mailbox.exists || below <= 1) done = 1;
@@ -339,9 +374,14 @@ export class AccountSync {
             cache.set(folder.id, hit);
           }
           const older = hit.uids.filter((u) => u < below);
-          const batch = older.slice(0, HISTORY_BATCH);
+          const batch = older.slice(0, HISTORY_BATCH), got = [];
           for (let i = 0; i < batch.length; i += 25) {
-            for await (const msg of client.fetch(batch.slice(i, i + 25), { uid: true, flags: true, source: true, internalDate: true }, { uid: true })) {
+            // Sync now and new mail do not wait for the rest of the batch.
+            if (this.hasPendingWork || this.stopped) break;
+            this.doing('Downloading older mail', folder.name, i, batch.length);
+            const part = batch.slice(i, i + 25);
+            got.push(...part);
+            for await (const msg of client.fetch(part, { uid: true, flags: true, source: true, internalDate: true }, { uid: true })) {
               if (!msg.source) continue;
               try {
                 const r = await ingestMessage({ account, folder, uid: msg.uid, flags: [...(msg.flags || [])], raw: msg.source, internalDate: msg.internalDate });
@@ -349,8 +389,8 @@ export class AccountSync {
               } catch (e) { log.warn(`history ${folder.path}/${msg.uid}: ${e.message}`); }
             }
           }
-          if (batch.length) { oldest = Math.min(...batch); newest = Math.max(...batch); }
-          if (older.length <= HISTORY_BATCH) done = 1;
+          if (got.length) { oldest = Math.min(...got); newest = Math.max(...got); }
+          if (older.length <= HISTORY_BATCH && got.length === batch.length) done = 1;
         }
         // last_uid only grows (a folder with no recent mail gets its first last_uid here, so new-mail checks start above it).
         if (done) this.historyCache?.delete(folder.id);
@@ -361,6 +401,7 @@ export class AccountSync {
         log.warn(`history ${folder.path}: ${e.responseText || e.message}${fails >= 3 ? ' (giving up)' : ''}`);
         if (fails >= 3) run('UPDATE folders SET history_done = 1 WHERE id = ?', folder.id);
       } finally { lock.release(); }
+      this.doing(null);
       recountFolder(folder.id);
       // Old mail: indexed for search/memory; analysed only within the analysis window (as on first sync).
       if (newIds.length) await afterIngest(account, get('SELECT * FROM folders WHERE id = ?', folder.id), newIds, { initial: true });

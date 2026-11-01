@@ -57,7 +57,9 @@ function listItem(r, open) {
   });
 }
 
-const FOCUSED = `(i.message_id IS NULL OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE}) OR i.priority >= 70)`;
+// Mail the AI is about to read waits in Other, visible, and moves when the analysis says so. Mail it will not read stays in Focused.
+const ANALYSING = "EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = m.user_id AND j.type = 'analyze' AND j.ref_id = CAST(m.id AS TEXT) AND j.status IN ('queued', 'running'))";
+const FOCUSED = `((i.message_id IS NULL AND NOT ${ANALYSING}) OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE}) OR i.priority >= 70)`;
 
 function scopeFor(userId, q, sc) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
@@ -92,7 +94,7 @@ function scopeFor(userId, q, sc) {
     case 'flagged': where.push('m.is_flagged = 1'); break;
     case 'attachments': where.push('m.has_attachments = 1'); break;
     case 'focused': where.push(FOCUSED); break;
-    case 'other': where.push(`i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${OPEN_NOISE})`); break;
+    case 'other': where.push(`((i.message_id IS NULL AND ${ANALYSING}) OR (i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${OPEN_NOISE})))`); break;
     default: break;
   }
   if (q.category && view !== 'category') { where.push('i.category = ?'); params.push(q.category); }
@@ -239,8 +241,29 @@ export default async function mailRoutes(app) {
   });
 
   app.post('/api/sync', async (req) => {
-    for (const a of userAccounts(req.user.id)) syncManager.trigger(a.id);
+    for (const a of userAccounts(req.user.id)) if (a.kind !== 'archive' && a.sync_enabled) syncManager.trigger(a.id);
     return { ok: true };
+  });
+
+  // What is running right now: mail sync per account, AI work, archive jobs. For the activity panel.
+  app.get('/api/activity', async (req) => {
+    const uids = [req.user.id, ...mergedSpaces(req).map((s) => s.id)];
+    const accounts = uids.flatMap((u) => userAccounts(u)).filter((a) => a.kind !== 'archive' && a.sync_enabled);
+    const list = uids.join(',');
+    const name = { analyze: 'Analysing email', embed: 'Indexing for search', memory: 'Indexing for search', thread: 'Summarising a conversation', brief: 'Writing the daily brief', draft: 'Drafting a reply', settled: 'Updating a summary', profile: 'Updating a contact profile' };
+    const running = all(`SELECT type, ref_id, updated_at FROM ai_jobs WHERE user_id IN (${list}) AND status = 'running' ORDER BY updated_at`);
+    return {
+      mail: accounts.map((a) => {
+        const s = syncManager.status(a.id);
+        return { id: a.id, email: a.email, state: a.sync_state, error: a.sync_error, connected: !!s?.connected, doing: s?.doing || null, lastFullAt: s?.lastFullAt || null, lastFullMs: s?.lastFullMs ?? null, lastFolders: s?.lastFolders ?? null };
+      }),
+      ai: {
+        running: running.map((j) => ({ type: j.type, label: name[j.type] || j.type, since: j.updated_at, subject: j.type === 'analyze' ? get('SELECT subject FROM messages WHERE id = ?', Number(j.ref_id))?.subject || '' : '' })),
+        queued: all(`SELECT type, COUNT(*) AS n FROM ai_jobs WHERE user_id IN (${list}) AND status = 'queued' GROUP BY type ORDER BY n DESC`).map((q) => ({ type: q.type, label: name[q.type] || q.type, n: q.n })),
+        waiting: get(`SELECT COUNT(*) AS n FROM ai_jobs WHERE user_id IN (${list}) AND status = 'waiting'`).n,
+      },
+      archives: all(`SELECT j.type, j.file_name AS file, j.done, j.total, j.status, a.name FROM archive_jobs j JOIN accounts a ON a.id = j.account_id WHERE j.user_id IN (${list}) AND j.status IN ('queued', 'running')`),
+    };
   });
 
   // ---- message lists
@@ -251,7 +274,7 @@ export default async function mailRoutes(app) {
     const { where, params } = scopeFor(uid, { ...query, filter: undefined }, sc);
     where.push('m.is_read = 0');
     const unit = threaded ? 'm.thread_id' : 'm.id';
-    const r = get(`SELECT COUNT(DISTINCT ${unit}) AS a, COUNT(DISTINCT CASE WHEN ${FOCUSED} THEN ${unit} END) AS f, COUNT(DISTINCT CASE WHEN NOT ${FOCUSED} THEN ${unit} END) AS o
+    const r = get(`SELECT COUNT(DISTINCT ${unit}) AS a, COUNT(DISTINCT CASE WHEN ${FOCUSED} THEN ${unit} END) AS f, COUNT(DISTINCT CASE WHEN NOT COALESCE(${FOCUSED}, 0) THEN ${unit} END) AS o
       FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params);
     return { focused: r.f, other: r.o, all: r.a };
   }

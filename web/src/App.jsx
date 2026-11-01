@@ -21,6 +21,7 @@ import CommandPalette from './components/CommandPalette.jsx';
 import { openComposer } from './mail/Composer.jsx';
 import AssistantView from './assistant/AssistantView.jsx';
 import HomeView from './home/HomeView.jsx';
+import { Activity } from './components/Activity.jsx';
 import { SidePane, embedUrl, openBeside } from './components/SidePane.jsx';
 import SettingsView from './settings/SettingsView.jsx';
 
@@ -225,8 +226,7 @@ function Shell() {
         <div className="spacer" />
         <Problems />
         <SpaceSwitcher />
-        <button title={connected ? 'Sync now' : 'Sync now — live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'}
-          aria-label="Sync now" onClick={syncNow} className={connected ? '' : 'offline'}>{syncing ? <Spinner size={18} /> : <RefreshCw size={19} />}{!connected && <span className="offline-dot" />}</button>
+        <Activity syncing={syncing} onSync={syncNow} />
         {/* Light → dark → automatic (follows the device) → light … */}
         <button className="desk-only" title={`Theme: ${{ light: 'light', dark: 'dark', system: 'automatic (as the device)' }[theme]} — click for ${{ light: 'dark', dark: 'automatic', system: 'light' }[theme]}`} aria-label="Change theme"
           onClick={() => saveSettings({ ui: { theme: { light: 'dark', dark: 'system', system: 'light' }[theme] } })}>{theme === 'system' ? <SunMoon size={19} /> : dark ? <Moon size={19} /> : <Sun size={19} />}</button>
