@@ -3,6 +3,7 @@ import { Calendar as CalendarIcon, ListTodo, Users, Eye, EyeOff, Pencil, Star, T
 import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Modal, Spinner } from '../components/common.jsx';
+import { listRemoval } from '../tasks/TasksView.jsx';
 
 // Every calendar, task list and address book in one place — of all spaces, hidden ones too: show again, hide, rename,
 // make default, move everything from one kept in Halcyon to a synced one, delete what is kept in Halcyon.
@@ -24,8 +25,9 @@ export default function CalendarsTasks() {
   const act = async (fn, msg) => { try { const r = await fn(); if (msg) toast(typeof msg === 'function' ? msg(r) : msg); await load(); } catch (e) { toastError(e); } };
   const path = (kind, x) => `${KINDS[kind].url}/${x.id}`;
   const rename = (kind, x) => { const n = prompt('Name', x.name); if (n?.trim() && n.trim() !== x.name) act(() => api.patch(path(kind, x), { name: n.trim() })); };
-  const setHidden = (kind, x, hidden) => act(() => api.patch(path(kind, x), { hidden }), hidden ? `“${x.name}” hidden — it stays on its server and can be shown again here` : `“${x.name}” is shown again`);
+  const setHidden = (kind, x, hidden) => act(() => api.patch(path(kind, x), { hidden }), hidden ? `“${x.name}” hidden — it stays on its server and can be shown again here` : x.removed ? `“${x.name}” is synced again` : `“${x.name}” is shown again`);
   const remove = (kind, x) => {
+    if (kind === 'taskList') { if (confirm(listRemoval(x))) act(() => api.del(path(kind, x)), (r) => (r?.removed ? `“${x.name}” removed from Halcyon` : `“${x.name}” deleted`)); return; }
     const k = KINDS[kind], n = k.count(x) || 0;
     const text = x.source === 'subscription' ? `Unsubscribe from “${x.name}”? You can subscribe again with its link.`
       : `Delete “${x.name}”${n ? ` and its ${n} ${k.items}` : ''}? It is kept in Halcyon only, so ${n ? 'they are' : 'it is'} not anywhere else.${n && k.move ? '\n\nTo keep them, use “Move all to…” first.' : ''}`;
@@ -46,7 +48,8 @@ export default function CalendarsTasks() {
             <div className="grow" style={{ minWidth: 0 }}>
               <div className="truncate">{x.name}
                 {x.isDefault && <span className="chip" style={{ marginLeft: 6 }}>default</span>}
-                {x.hidden && <span className="chip" style={{ marginLeft: 6 }}>hidden</span>}</div>
+                {x.removed ? <span className="chip" style={{ marginLeft: 6 }}>removed</span> : x.hidden && <span className="chip" style={{ marginLeft: 6 }}>hidden</span>}
+                {x.gone && <span className="chip" style={{ marginLeft: 6 }} title="Its server no longer offers it: not synced any more">not on the server</span>}</div>
               <div className="small faint truncate">
                 {fromServer(x) ? <Cloud size={11} /> : x.source === 'local' ? <HardDrive size={11} /> : <Link2 size={11} />} {x.origin}
                 {x.readonly && <> · <Lock size={10} /> read-only</>} · {n} {k.items}{x.space ? ` · space ${x.space}` : ''}</div>
@@ -58,6 +61,7 @@ export default function CalendarsTasks() {
               ? <button className="btn sm ghost" title={x.hidden ? 'Show it again in Halcyon' : 'Hide it in Halcyon — it stays on its server and keeps syncing'} onClick={() => setHidden(kind, x, !x.hidden)}>
                 {x.hidden ? <><Eye size={13} /> Show</> : <><EyeOff size={13} /> Hide</>}</button>
               : <button className="icon-btn danger" title={x.source === 'subscription' ? 'Unsubscribe' : 'Delete (kept in Halcyon only)'} onClick={() => remove(kind, x)}><Trash2 size={14} /></button>}
+            {kind === 'taskList' && fromServer(x) && !x.removed && <button className="icon-btn danger" title={x.gone ? 'Delete (its server no longer offers it)' : 'Remove from Halcyon (it stays on the server)'} onClick={() => remove(kind, x)}><Trash2 size={14} /></button>}
           </div>);
       })}
     </>);

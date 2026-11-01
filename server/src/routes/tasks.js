@@ -1,4 +1,4 @@
-import { get, all, run, now, json } from '../db/index.js';
+import { get, all, run, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
 import { notify as notifyRaw } from '../util/events.js';
@@ -21,7 +21,8 @@ const out = (t) => ({ id: t.id, title: t.title, notes: t.notes, due: t.due, dueA
   list: t.list_name || t.list, listId: t.list_id, rrule: t.rrule || null, readonly: !!t.list_readonly, sourceMessageId: t.source_message_id, createdAt: t.created_at });
 const one = (id) => get('SELECT t.*, l.name AS list_name, l.readonly AS list_readonly FROM tasks t LEFT JOIN task_lists l ON l.id = t.list_id WHERE t.id = ?', id);
 const listOut = (l, m) => ({ id: l.id, name: l.name, color: l.color, source: l.source, accountId: l.account_id, readonly: !!l.readonly, isDefault: !!l.is_default,
-  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0, total: l.total, origin: originOf(l), hidden: !!l.hidden });
+  space: m.taskLists.get(l.id) ?? '', syncError: l.sync_error || null, open: l.open || 0, total: l.total, origin: originOf(l), hidden: !!l.hidden,
+  gone: !!l.gone_at, removed: !!l.removed });
 
 /** A change in a synced list goes to the server at once (in the background; a refusal shows in the problems panel). */
 function pushList(listId) {
@@ -33,7 +34,7 @@ function pushList(listId) {
 }
 const isDav = (listId) => !!get("SELECT 1 FROM task_lists WHERE id = ? AND source = 'caldav'", listId);
 /** A list of the user that tasks can be written to, or null. */
-const writableList = (userId, id) => (id ? get('SELECT * FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0', Number(id), userId) : null);
+const writableList = (userId, id) => (id ? get('SELECT * FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0 AND COALESCE(removed, 0) = 0', Number(id), userId) : null);
 
 /**
  * Ticking or unticking a task from outside the app (MCP), as the tick in Tasks does. Returns the task as it is now:
@@ -86,9 +87,12 @@ export default async function taskRoutes(app) {
         run('UPDATE task_lists SET is_default = 1 WHERE id = ?', next.id);
       }
       run('UPDATE task_lists SET hidden = ? WHERE id = ?', b.hidden ? 1 : 0, l.id);
+      // Shown again after it was removed: synced again from the start.
+      if (!b.hidden && l.removed) { run('UPDATE task_lists SET removed = 0, ctag = NULL WHERE id = ?', l.id); pushList(l.id); }
     }
     if (b.isDefault) {
       if (l.readonly) return httpError(reply, 400, 'A read-only list cannot be the default');
+      if (l.removed) return httpError(reply, 400, 'Show this list again first');
       run('UPDATE task_lists SET is_default = 0 WHERE user_id = ?', req.user.id);
       run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', l.id);
     }
@@ -113,23 +117,24 @@ export default async function taskRoutes(app) {
     return { moved: move.length, skipped: rows.length - move.length };
   });
 
-  // Only lists kept in Halcyon are deleted here (with their tasks); a synced one goes with its account's calendar service.
+  // A list kept in Halcyon, or a synced one its server no longer offers, is deleted with its tasks. One the server still
+  // offers is removed from Halcyon only: its tasks here go, it stays on the server, and the row is kept (removed, not
+  // synced) so the next sync does not bring it back; showing it again in Settings syncs it anew.
   app.delete('/api/task-lists/:id', async (req, reply) => {
     const l = get('SELECT * FROM task_lists WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
     if (!l) return httpError(reply, 404, 'Not found');
-    // One from a server is only hidden (it would come back with the next sync; it stays on the server).
-    const next = get('SELECT id FROM task_lists WHERE user_id = ? AND id != ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', req.user.id, l.id);
-    if (!next) return httpError(reply, 400, 'This is your only task list');
-    if (l.source !== 'local') {
-      run('UPDATE task_lists SET hidden = 1, is_default = 0 WHERE id = ?', l.id);
-      if (l.is_default) run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', next.id);
-      notify(req.user.id, 'tasks:changed', {});
-      return { ok: true, hidden: true };
-    }
-    run('DELETE FROM tasks WHERE list_id = ?', l.id);
-    run('DELETE FROM task_lists WHERE id = ?', l.id);
-    if (l.is_default) run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', next.id);
+    const next = get('SELECT id FROM task_lists WHERE user_id = ? AND id != ? AND readonly = 0 AND COALESCE(removed, 0) = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', req.user.id, l.id);
+    if (!next && l.source === 'local') return httpError(reply, 400, 'This is your only task list');
+    const keep = l.source === 'caldav' && !l.gone_at;
+    tx(() => {
+      run('DELETE FROM tasks WHERE list_id = ?', l.id);
+      run('DELETE FROM task_deletions WHERE list_id = ?', l.id);
+      if (keep) run('UPDATE task_lists SET removed = 1, hidden = 1, is_default = 0, ctag = NULL, sync_error = NULL WHERE id = ?', l.id);
+      else run('DELETE FROM task_lists WHERE id = ?', l.id);
+      if (l.is_default && next) run('UPDATE task_lists SET is_default = 1, hidden = 0 WHERE id = ?', next.id);
+    });
     ensureTaskLists(req.user.id);
+    if (keep) { notify(req.user.id, 'tasks:changed', {}); return { ok: true, removed: true }; }
     notify(req.user.id, 'tasks:changed', {});
     return { ok: true };
   });

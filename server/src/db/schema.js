@@ -521,4 +521,10 @@ export const migrations = [
   `
   ALTER TABLE ai_insights ADD COLUMN action_user INTEGER;
   `,
+  // 48: synced task lists the server no longer offers (gone_at: since when), and ones the user removed from Halcyon
+  // (removed: not synced, kept only so the next sync does not bring them back).
+  `
+  ALTER TABLE task_lists ADD COLUMN gone_at INTEGER;
+  ALTER TABLE task_lists ADD COLUMN removed INTEGER DEFAULT 0;
+  `,
 ];

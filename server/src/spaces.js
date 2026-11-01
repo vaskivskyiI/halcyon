@@ -48,7 +48,7 @@ const DEFAULT_SQL = {
   accountId: "SELECT id FROM accounts WHERE id = ? AND user_id = ? AND mail != 0 AND COALESCE(kind, 'mail') != 'archive'",
   calendarId: 'SELECT id FROM calendars WHERE id = ? AND user_id = ? AND readonly = 0',
   bookId: 'SELECT id FROM address_books WHERE id = ? AND user_id = ? AND readonly = 0',
-  taskListId: 'SELECT id FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0',
+  taskListId: 'SELECT id FROM task_lists WHERE id = ? AND user_id = ? AND readonly = 0 AND COALESCE(removed, 0) = 0',
 };
 /** The default chosen for a space (Settings → Spaces): kind 'accountId' | 'calendarId' | 'bookId' | 'taskListId'; null if none (or gone). */
 export function spaceDefault(userId, space, kind) {

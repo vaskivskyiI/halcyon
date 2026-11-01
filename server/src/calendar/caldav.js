@@ -5,7 +5,7 @@ import { parseIcs, buildIcs } from './ics.js';
 import { serializeEvent, toRow } from './repo.js';
 import { update } from '../db/index.js';
 import { logger } from '../util/log.js';
-import { syncTodoCollection } from './todos.js';
+import { syncTodoCollection, markGoneTaskLists } from './todos.js';
 
 const log = logger('caldav');
 const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
@@ -106,9 +106,11 @@ export async function syncCalDav(account, { sourceId = null, readonly = false } 
   // Task lists: the collections that hold tasks (often the same ones as the calendars). Not for read-only sources.
   let taskLists = 0;
   if (!readonly) {
-    for (const [i, remote] of collections.filter((c) => c.components?.includes('VTODO')).entries()) {
+    const todoCols = collections.filter((c) => c.components?.includes('VTODO'));
+    for (const [i, remote] of todoCols.entries()) {
       try { await syncTodoCollection(client, account, remote, i); taskLists++; } catch (e) { log.warn(`tasks ${remote.url}: ${e.message}`); }
     }
+    markGoneTaskLists(account.id, todoCols.map((c) => c.url));
   }
   return { calendars: remoteCals.length, taskLists };
 }

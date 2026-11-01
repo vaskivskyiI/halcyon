@@ -22,9 +22,9 @@ const userTz = (userId) => getSettings(userId).calendar.timezone || Intl.DateTim
  * server when that list syncs.
  */
 export function ensureTaskLists(userId) {
-  if (!get('SELECT 1 FROM task_lists WHERE user_id = ?', userId)) run("INSERT INTO task_lists (user_id, name, source, is_default, created_at) VALUES (?, 'Tasks', 'local', 1, ?)", userId, now());
+  if (!get('SELECT 1 FROM task_lists WHERE user_id = ? AND COALESCE(removed, 0) = 0', userId)) run("INSERT INTO task_lists (user_id, name, source, is_default, created_at) VALUES (?, 'Tasks', 'local', 1, ?)", userId, now());
   if (!get('SELECT 1 FROM task_lists WHERE user_id = ? AND is_default = 1', userId)) {
-    run('UPDATE task_lists SET is_default = 1 WHERE id = (SELECT id FROM task_lists WHERE user_id = ? ORDER BY readonly, COALESCE(hidden, 0), id LIMIT 1)', userId);
+    run('UPDATE task_lists SET is_default = 1 WHERE id = (SELECT id FROM task_lists WHERE user_id = ? AND COALESCE(removed, 0) = 0 ORDER BY readonly, COALESCE(hidden, 0), id LIMIT 1)', userId);
   }
   const loose = all('SELECT id, list_id FROM tasks WHERE user_id = ? AND (uid IS NULL OR list_id IS NULL OR list_id NOT IN (SELECT id FROM task_lists WHERE user_id = ?))', userId, userId);
   if (!loose.length) return;
@@ -50,8 +50,8 @@ export function defaultTaskList(userId, space = '') {
     const l = ids.length && get(`SELECT * FROM task_lists WHERE id IN (${ids.join(',')}) AND readonly = 0 AND COALESCE(hidden, 0) = 0 ORDER BY is_default DESC, id LIMIT 1`);
     if (l) return l;
   }
-  return get('SELECT * FROM task_lists WHERE user_id = ? AND is_default = 1 AND readonly = 0', userId)
-    || get('SELECT * FROM task_lists WHERE user_id = ? AND readonly = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', userId);
+  return get('SELECT * FROM task_lists WHERE user_id = ? AND is_default = 1 AND readonly = 0 AND COALESCE(removed, 0) = 0', userId)
+    || get('SELECT * FROM task_lists WHERE user_id = ? AND readonly = 0 AND COALESCE(removed, 0) = 0 ORDER BY COALESCE(hidden, 0), id LIMIT 1', userId);
 }
 
 /** A repeat rule as stored: RRULE value without the prefix, understood by the rrule library; null for none, false if invalid. */
@@ -162,6 +162,15 @@ export function todoIcs(t, tz) {
   return comp.toString();
 }
 
+/**
+ * Synced lists of an account its server no longer offers (renamed, deleted, or reached at another address now) are
+ * marked as gone: they are no longer synced, and the user can delete them. Only after a listing that found task lists.
+ */
+export function markGoneTaskLists(accountId, urls) {
+  if (!accountId || !urls.length) return;
+  run(`UPDATE task_lists SET gone_at = COALESCE(gone_at, ?), sync_error = NULL WHERE account_id = ? AND source = 'caldav' AND url NOT IN (${urls.map(() => '?').join(',')})`, now(), accountId, ...urls);
+}
+
 /** The task list for a CalDAV collection that holds tasks (made when first seen). */
 function listFor(account, remote, i, readonly) {
   let list = get('SELECT * FROM task_lists WHERE url = ? AND (user_id = ? OR account_id = ?)', remote.url, account.user_id, account.id ?? -1);
@@ -181,6 +190,9 @@ function listFor(account, remote, i, readonly) {
  */
 export async function syncTodoCollection(client, account, remote, i = 0, { readonly = false } = {}) {
   const list = listFor(account, remote, i, readonly);
+  // Removed by the user: not synced (kept so it is not made again). Offered by the server again: no longer gone.
+  if (list.removed) return list;
+  if (list.gone_at) run('UPDATE task_lists SET gone_at = NULL WHERE id = ?', list.id);
   const tz = userTz(account.user_id), workEnd = getSettings(account.user_id).calendar.workEnd || '17:00';
   const refused = (res, what) => {
     if (res && res.ok === false && res.status !== 404) throw new Error(`the server refused to ${what} it (${res.status} ${res.statusText || ''})`.trim());

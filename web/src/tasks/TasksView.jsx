@@ -12,6 +12,14 @@ import { dueOptions, fmtDue, DueField, RepeatField, ListField, repeatLabel } fro
 // The list shown (null = all lists of the active space), remembered on this device.
 const savedList = () => { try { return Number(localStorage.getItem('halcyon.taskList')) || null; } catch { return null; } };
 
+/** What deleting or removing a task list does, as a question to confirm. */
+export const listRemoval = (l) => {
+  const n = l.total ?? l.open ?? 0, tasks = `${n} task${n === 1 ? '' : 's'}`;
+  if (l.source === 'local') return `Delete the list “${l.name}” and its ${tasks}? It is kept in Halcyon only, so they are not anywhere else.`;
+  if (l.gone) return `Delete “${l.name}” and its ${tasks} from Halcyon? Its server no longer offers this list, so it is not synced any more.`;
+  return `Remove “${l.name}” from Halcyon? Its ${tasks} are removed here only — they stay on the server, and the list is no longer synced. Changes not yet sent to the server are lost.\n\nTo bring it back: Settings → Calendars & tasks → Show.`;
+};
+
 export default function TasksView() {
   const [tasks, setTasks] = useState([]);
   const [showDone, setShowDone] = useState(false);
@@ -97,9 +105,9 @@ export default function TasksView() {
       try { await api.patch(`/api/task-lists/${l.id}`, { hidden: true }); if (shown === l.id) setListId(null); toast(`“${l.name}” hidden — show it again in Settings → Calendars & tasks`); loadLists(); load(); } catch (err) { toastError(err); }
     } },
     { label: 'Manage all lists…', icon: Settings2, onClick: () => navigate('#/settings/calendars') },
-    l.source === 'local' && 'sep',
-    l.source === 'local' && { label: 'Delete list and its tasks', icon: Trash2, danger: true, onClick: async () => {
-      if (!confirm(`Delete the list “${l.name}” and its ${l.open} open task${l.open === 1 ? '' : 's'}? It is kept in Halcyon only, so they are not anywhere else.`)) return;
+    'sep',
+    { label: l.source === 'local' || l.gone ? 'Delete list and its tasks' : 'Remove from Halcyon', icon: Trash2, danger: true, onClick: async () => {
+      if (!confirm(listRemoval(l))) return;
       try { await api.del(`/api/task-lists/${l.id}`); if (shown === l.id) setListId(null); loadLists(); load(); } catch (err) { toastError(err); }
     } },
   ]);
@@ -127,8 +135,8 @@ export default function TasksView() {
           <button className={`chip clickable ${!shown ? 'on' : ''}`} onClick={() => setListId(null)}>All lists</button>
           {lists.map((l) => (
             <button key={l.id} className={`chip clickable ${shown === l.id ? 'on' : ''}`} onClick={() => setListId(l.id)} onContextMenu={(e) => listMenu(e, l)}
-              title={`${l.name} — ${l.origin || (l.source === 'caldav' ? 'synced' : 'kept in Halcyon only')}${l.space ? ` · space ${l.space}` : ''}${l.syncError ? `\n${l.syncError}` : ''}`}>
-              <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.ownerName && <span className="faint"> · {l.ownerName}</span>}{l.source === 'caldav' && <Cloud size={11} className="faint" />}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}
+              title={`${l.name} — ${l.origin || (l.source === 'caldav' ? 'synced' : 'kept in Halcyon only')}${l.space ? ` · space ${l.space}` : ''}${l.gone ? '\nIts server no longer offers this list: it is not synced any more and can be deleted' : ''}${l.syncError ? `\n${l.syncError}` : ''}`}>
+              <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.ownerName && <span className="faint"> · {l.ownerName}</span>}{l.source === 'caldav' && <Cloud size={11} className="faint" />}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}{l.gone && <span className="faint"> · not on the server</span>}
               {l.open > 0 && <span className="faint"> {l.open}</span>}
             </button>))}
           {shownList && <button className="icon-btn" title="List options" onClick={(e) => listMenu(e, shownList)}><MoreHorizontal size={15} /></button>}

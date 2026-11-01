@@ -63,12 +63,11 @@ test('a synced calendar is hidden, not deleted, and shown again; a local one is 
   assert.ok(!db.prepare("SELECT 1 FROM events WHERE uid = 'l1'").get(), 'its events went with it');
 });
 
-test('task lists: a synced one is hidden with its tasks out of view; a local one is deleted', async () => {
+test('task lists: a synced one is hidden with its tasks out of view, or removed from Halcyon; a local one is deleted', async () => {
   const [def] = await api('GET', '/api/task-lists');
   const dav = db.prepare("INSERT INTO task_lists (user_id, account_id, name, source, url, created_at) VALUES (?, ?, 'Server tasks', 'caldav', 'https://dav.example/w/', ?)").run(uid, acc, Date.now()).lastInsertRowid;
   await api('POST', '/api/tasks', { title: 'On the server', listId: dav });
-  await api('DELETE', `/api/task-lists/${dav}`);
-  assert.ok(db.prepare('SELECT 1 FROM task_lists WHERE id = ?').get(dav));
+  await api('PATCH', `/api/task-lists/${dav}`, { hidden: true });
   assert.ok(!(await api('GET', '/api/tasks')).some((t) => t.title === 'On the server'));
   assert.ok(!(await api('GET', '/api/task-lists')).some((l) => l.id === dav));
   assert.equal((await api('GET', '/api/task-lists?all=1')).find((l) => l.id === dav).total, 1);
@@ -76,6 +75,11 @@ test('task lists: a synced one is hidden with its tasks out of view; a local one
   assert.ok((await api('GET', '/api/tasks')).some((t) => t.title === 'On the server'));
   await api('DELETE', `/api/task-lists/${def.id}`);
   assert.ok(!db.prepare('SELECT 1 FROM task_lists WHERE id = ?').get(def.id));
+  // Removed: its tasks go from Halcyon (they stay on the server), the list is kept as removed so a sync does not add it again.
+  await api('DELETE', `/api/task-lists/${dav}`);
+  assert.equal(db.prepare('SELECT removed FROM task_lists WHERE id = ?').get(dav).removed, 1);
+  assert.equal((await api('GET', '/api/task-lists?all=1')).find((l) => l.id === dav).total, 0);
+  assert.ok(!(await api('GET', '/api/tasks')).some((t) => t.title === 'On the server'));
 });
 
 test('address books: a local one is deleted with its contacts, a synced one hidden', async () => {
