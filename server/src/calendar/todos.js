@@ -197,11 +197,16 @@ export async function syncTodoCollection(client, account, remote, i = 0, { reado
         if (href) refused(await client.updateCalendarObject({ calendarObject: { url: href, data, etag: t.etag || undefined } }), 'update');
         else {
           const filename = `${t.uid.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 120)}.ics`;
-          refused(await client.createCalendarObject({ calendar: remote, filename, iCalString: data }), 'save');
           href = new URL(filename, remote.url).href;
+          const res = await client.createCalendarObject({ calendar: remote, filename, iCalString: data });
+          // 412: already there (saved before, its address not kept) — then it is overwritten with this version.
+          if (res?.status === 412) refused(await client.updateCalendarObject({ calendarObject: { url: href, data } }), 'update');
+          else refused(res, 'save');
         }
-        // Only when it was not changed again meanwhile; the server's etag is learned with the next listing.
-        run('UPDATE tasks SET dirty = 0, href = ?, etag = NULL, ics = ? WHERE id = ? AND updated_at = ?', href, data, t.id, t.updated_at);
+        // The address is kept in any case (the server has the task now); still marked to be saved when it was changed
+        // again meanwhile. The server's etag is learned with the next listing.
+        run('UPDATE tasks SET href = ?, etag = NULL, ics = ? WHERE id = ?', href, data, t.id);
+        run('UPDATE tasks SET dirty = 0 WHERE id = ? AND updated_at = ?', t.id, t.updated_at);
       } catch (e) {
         log.warn(`push task ${t.id}: ${e.message}`);
         error = `“${t.title}” could not be saved in the server's task list: ${e.message}`;
