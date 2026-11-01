@@ -1,7 +1,8 @@
 // Shared spaces (see shared.js): create, members, moving an account / calendar / address book / tasks in and out, and
 // entering one (the halcyon_as cookie). Always act as the person (auth.js PERSON_ONLY).
 import { requireUser, AS_COOKIE } from '../auth.js';
-import { get, all } from '../db/index.js';
+import { get, all, run, now } from '../db/index.js';
+import { notify } from '../util/events.js';
 import { httpError } from './util.js';
 import { config } from '../config.js';
 import * as S from '../shared.js';
@@ -38,6 +39,38 @@ export default async function sharedRoutes(app) {
     return { ok: true };
   });
   app.post('/api/shared/leave', async (req, reply) => { reply.clearCookie(AS_COOKIE, { path: '/' }); return { ok: true }; });
+
+  // "Busy only": the person lets another login (by email) or one of their shared spaces see when they are busy in one of
+  // their own calendars — only the times (calendar/repo.js sharedBusy).
+  const busyOut = (r) => ({ id: r.id, calendarId: r.calendar_id, calendarName: r.calendar_name, granteeId: r.grantee_id, grantee: r.grantee_name || r.grantee_email,
+    email: r.grantee_kind === 'shared' ? null : r.grantee_email, space: r.grantee_kind === 'shared', createdAt: r.created_at });
+  app.get('/api/shared/busy', async (req) => all(`SELECT f.*, c.name AS calendar_name, u.name AS grantee_name, u.email AS grantee_email, u.kind AS grantee_kind
+    FROM freebusy_shares f JOIN calendars c ON c.id = f.calendar_id AND c.user_id = f.owner_id JOIN users u ON u.id = f.grantee_id
+    WHERE f.owner_id = ? ORDER BY c.name, u.name`, req.user.id).map(busyOut));
+  app.post('/api/shared/busy', async (req, reply) => guard(reply, () => {
+    const b = req.body || {};
+    const cal = get('SELECT id FROM calendars WHERE id = ? AND user_id = ?', Number(b.calendarId), req.user.id);
+    if (!cal) throw new Error('Choose one of your own calendars');
+    let grantee;
+    if (b.sharedId) {
+      if (!S.membership(Number(b.sharedId), req.user.id)) throw new Error('You are not a member of this shared space');
+      grantee = Number(b.sharedId);
+    } else {
+      const u = get('SELECT id, kind FROM users WHERE email = ?', String(b.email || '').toLowerCase().trim());
+      if (!u || u.kind === 'shared') throw new Error('No Halcyon login with this email on this server');
+      if (u.id === req.user.id) throw new Error('Your own calendars already show your time');
+      grantee = u.id;
+    }
+    run('INSERT OR IGNORE INTO freebusy_shares (owner_id, calendar_id, grantee_id, created_at) VALUES (?, ?, ?, ?)', req.user.id, cal.id, grantee, now());
+    notify(grantee, 'calendar:changed', {});
+    return busyOut(get(`SELECT f.*, c.name AS calendar_name, u.name AS grantee_name, u.email AS grantee_email, u.kind AS grantee_kind
+      FROM freebusy_shares f JOIN calendars c ON c.id = f.calendar_id JOIN users u ON u.id = f.grantee_id WHERE f.calendar_id = ? AND f.grantee_id = ?`, cal.id, grantee));
+  }));
+  app.delete('/api/shared/busy/:id', async (req) => {
+    const g = get('SELECT grantee_id FROM freebusy_shares WHERE id = ? AND owner_id = ?', Number(req.params.id), req.user.id);
+    if (g) { run('DELETE FROM freebusy_shares WHERE id = ? AND owner_id = ?', Number(req.params.id), req.user.id); notify(g.grantee_id, 'calendar:changed', {}); }
+    return { ok: true };
+  });
 
   app.post('/api/shared/:id/members', async (req, reply) => { const id = member(req, reply, true); return id && guard(reply, () => ({ id: S.addMember(id, req.body?.email) })); });
   app.delete('/api/shared/:id/members/:userId', async (req, reply) => {

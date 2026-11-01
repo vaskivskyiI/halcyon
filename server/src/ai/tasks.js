@@ -9,7 +9,7 @@ import * as P from './prompts.js';
 import { storeMemory, removeMemory, searchMemory, chunkText } from './memory.js';
 import { applyRules } from '../rules.js';
 import { parseIcs } from '../calendar/ics.js';
-import { listRange } from '../calendar/repo.js';
+import { listRange, sharedBusy } from '../calendar/repo.js';
 import { mailAccounts } from '../accounts.js';
 import { contactByEmail } from '../contacts/service.js';
 import { scope, inIds } from '../spaces.js';
@@ -897,7 +897,9 @@ export async function dailyBrief(userId, { day, force = false, space = '', inter
     const awaiting = all(`SELECT m.id, m.from_name, m.from_addr, m.subject, m.date, i.summary FROM messages m JOIN ai_insights i ON i.message_id = m.id
       WHERE m.user_id = ? AND ${accIn} AND i.needs_reply = 1 AND i.dismissed_at IS NULL AND m.is_answered = 0 AND m.date >= ? ORDER BY i.priority DESC LIMIT 10`, uid, now() - 7 * 864e5);
     const start = new Date(today + 'T00:00:00'); const end = new Date(start.getTime() + 864e5);
-    const events = (sc && !sc.calendarIds.length ? [] : listRange(uid, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ ID: e.seriesId || e.id, title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }));
+    const events = (sc && !sc.calendarIds.length ? [] : listRange(uid, start.getTime(), end.getTime(), sc?.calendarIds, { includeInfo: false })).map((e) => ({ ID: e.seriesId || e.id, title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay, location: e.location }))
+      // Busy time others share (no ID: nothing of those events is known but the time).
+      .concat(sharedBusy([uid], start.getTime(), end.getTime()).map((e) => ({ title: e.title, start: P.localStamp(e.start, tz), end: P.localStamp(e.end, tz), allDay: e.allDay })));
     const tasks = all(`SELECT id, title, due FROM tasks WHERE user_id = ? AND done = 0 AND (due IS NULL OR due < ?)
       AND (source_message_id IS NULL OR source_message_id IN (SELECT m.id FROM messages m WHERE m.user_id = ? AND ${accIn})) ORDER BY due LIMIT 15`, uid, end.getTime(), uid)
       .map((t) => ({ ID: t.id, title: t.title, due: t.due ? new Date(t.due).toDateString() : null, overdue: t.due && t.due < start.getTime() }));

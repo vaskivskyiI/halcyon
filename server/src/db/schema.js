@@ -555,4 +555,14 @@ export const migrations = [
   `
   ALTER TABLE briefs ADD COLUMN ignored_json TEXT DEFAULT '[]';
   `,
+  // 52: "busy only" sharing: a person lets another login or a shared space (grantee) see when they are busy in one of
+  // their calendars — only start, end and all-day of busy events, never what they are (calendar/repo.js sharedBusy).
+  `
+  CREATE TABLE freebusy_shares (
+    id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    calendar_id INTEGER NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+    grantee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at INTEGER, UNIQUE (calendar_id, grantee_id)
+  );
+  CREATE INDEX idx_freebusy_grantee ON freebusy_shares(grantee_id);
+  `,
 ];

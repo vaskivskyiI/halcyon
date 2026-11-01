@@ -203,13 +203,39 @@ export function listRange(userId, from, to, calendarIds, { includeInfo = true } 
   return out.sort((a, b) => a.start - b.start);
 }
 
-/** Free/busy slot finder used by the AI scheduler and "suggest times". */
-export function findFreeSlots(userId, from, to, durationMin, { workStart, workEnd } = {}) {
+/**
+ * Busy time other people share with these users ("busy only", freebusy_shares): of each busy event of the shared calendars
+ * only start, end and all-day leave the owner's side, as "Busy · <owner>". Owners among the viewers are left out (their
+ * own time already shows as theirs).
+ */
+export function sharedBusy(viewerIds, from, to) {
+  const ids = [...new Set(viewerIds.filter(Boolean).map(Number))];
+  if (!ids.length) return [];
+  const ph = ids.map(() => '?').join(',');
+  const grants = all(`SELECT DISTINCT f.owner_id, f.calendar_id, COALESCE(NULLIF(u.name, ''), u.email) AS owner FROM freebusy_shares f
+    JOIN users u ON u.id = f.owner_id JOIN calendars c ON c.id = f.calendar_id AND c.user_id = f.owner_id
+    WHERE f.grantee_id IN (${ph}) AND f.owner_id NOT IN (${ph})`, ...ids, ...ids);
+  const byOwner = new Map();
+  for (const g of grants) byOwner.set(g.owner_id, { owner: g.owner, cals: [...(byOwner.get(g.owner_id)?.cals || []), g.calendar_id] });
+  const out = new Map();
+  for (const [ownerId, { owner, cals }] of byOwner) {
+    for (const e of listRange(ownerId, from, to, cals, { includeInfo: false })) {
+      if (!e.busy) continue;
+      const key = `fb:${ownerId}:${e.start}:${e.end}:${e.allDay ? 1 : 0}`;
+      out.set(key, { instanceId: key, id: null, calendarId: null, start: e.start, end: e.end, allDay: !!e.allDay, title: `Busy · ${owner}`,
+        blocked: true, busy: true, readonly: true, showAs: 'busy', color: '#9ca3af', calendarName: owner, sharedBusy: true });
+    }
+  }
+  return [...out.values()].sort((a, b) => a.start - b.start);
+}
+
+/** Free/busy slot finder used by the AI scheduler and "suggest times". viewers: whose busy-only shares count too (default: the user's). */
+export function findFreeSlots(userId, from, to, durationMin, { workStart, workEnd, viewers = [userId] } = {}) {
   const s = getSettings(userId).calendar;
   const tz = s.timezone;
   // Working hours and weekends are the user's (their zone), not the server's.
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
-  const busy = listRange(userId, from, to).filter((e) => e.busy && !e.allDay).map((e) => [e.start, e.end]).sort((a, b) => a[0] - b[0]);
+  const busy = [...listRange(userId, from, to), ...sharedBusy(viewers, from, to)].filter((e) => e.busy && !e.allDay).map((e) => [e.start, e.end]).sort((a, b) => a[0] - b[0]);
   const dur = durationMin * 60e3, step = 30 * 60e3, perDay = 4;
   const slots = [];
   const seen = new Set();
