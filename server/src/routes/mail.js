@@ -375,17 +375,19 @@ export default async function mailRoutes(app) {
     if (cleaned.size > 300) cleaned.delete(cleaned.keys().next().value);
     return out;
   }
-  function fullMessage(userId, m, allowRemote) {
+  const OPEN_UNREAD = 20;
+  // lite: without its body (a folded message of a conversation; the reader asks for it when it is unfolded).
+  function fullMessage(userId, m, allowRemote, lite = false) {
     const settings = getSettings(userId);
     const sender = contactByEmail(userId, m.from_addr);
     const trusted = allowRemote || settings.mail.loadRemoteImages || !!sender;
-    const { html, blockedRemote } = m.body_html ? cleanHtml(m, trusted) : { html: null, blockedRemote: 0 };
+    const { html, blockedRemote } = m.body_html && !lite ? cleanHtml(m, trusted) : { html: null, blockedRemote: 0 };
     const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
     const folder = get('SELECT id, name, special_use FROM folders WHERE id = ?', m.folder_id);
     return serializeMessage(m, {
       html, text: m.body_text || (!m.body_html && m.calendar_ics ? inviteText(m.calendar_ics) : m.body_text), blockedRemote, attachments: json(m.attachments_json, []).filter((a) => !a.inline),
       listUnsubscribe: m.list_unsubscribe, insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
-      senderContactId: sender?.id || null,
+      senderContactId: sender?.id || null, ...(lite ? { text: null, partial: true } : {}),
       myCategories: all("SELECT category_id AS id FROM message_tags WHERE message_id = ? AND source IN ('ai', 'user')", m.id).map((x) => x.id),
     });
   }
@@ -468,8 +470,13 @@ export default async function mailRoutes(app) {
     }
     const msgs = [...kept.values()];
     const summary = get('SELECT summary, message_count FROM thread_summaries WHERE user_id = ? AND thread_id = ?', req.user.id, req.params.threadId);
-    for (const m of msgs) { await senderOf(m); await icsOf(m); }
-    return { messages: msgs.map((m) => asLinks(req, fullMessage(req.user.id, m, req.query.images === '1'))), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
+    // A long conversation is sent with the bodies of only what the reader shows open (?full=ids: the message opened and
+    // those unfolded; also the last two, drafts, and the unread among the last OPEN_UNREAD) — cleaning and sending
+    // hundreds of bodies took minutes. Without ?full every body is sent.
+    const want = req.query.full != null && new Set(String(req.query.full).split(',').map(Number));
+    const whole = (m, i) => !want || want.has(m.id) || m.is_draft || i >= msgs.length - 2 || (!m.is_read && i >= msgs.length - OPEN_UNREAD);
+    for (const [i, m] of msgs.entries()) if (whole(m, i)) { await senderOf(m); await icsOf(m); }
+    return { messages: msgs.map((m, i) => asLinks(req, fullMessage(req.user.id, m, req.query.images === '1', !whole(m, i)))), summary: summary?.summary || null, related: relatedTo(req.user.id, rows.map((m) => m.id)) };
   });
 
   // Other recent conversations with the person of this email (its sender; for the user's own email, its first

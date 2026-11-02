@@ -541,6 +541,9 @@ function MessageList({ view, openId, onMenu }) {
   // Live updates: the first page is asked again and merged with what is shown (rows further down stay).
   const reloadTimer = useRef();
   const refresh = (ms = 300) => {
+    // Search results are not searched again on every change (a message read, a sync): they stay as found; what is
+    // done to them here updates the rows directly.
+    if (activeQuery) return;
     clearTimeout(reloadTimer.current);
     reloadTimer.current = setTimeout(async () => {
       loadPinned();

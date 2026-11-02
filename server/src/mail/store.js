@@ -63,10 +63,15 @@ export async function findIcs(parsed, depth = 0) {
 }
 
 /** Invitations in older mail (stored before detection improved): looked for once when the message is opened. */
+// Parts findIcs looks in; mail with none of them (and no calendar data in its text) is not read from disk and parsed.
+const ICS_PART = /^(text\/|application\/(ics|x-ics|octet-stream)|message\/rfc822)|\.(ics|vcs)$/i;
+const mayHoldIcs = (m) => /BEGIN:VCALENDAR/.test(`${m.body_text || ''}${m.body_html || ''}`)
+  || json(m.attachments_json, []).some((a) => ICS_PART.test(a.contentType || '') || ICS_PART.test(a.filename || ''));
+
 export async function icsOf(m) {
   if (m.calendar_ics != null) return m.calendar_ics;
   let ics = '';
-  const raw = readRaw(m);
+  const raw = mayHoldIcs(m) ? readRaw(m) : null;
   if (raw) { try { ics = (await findIcs(await parseRaw(raw))) || ''; } catch { /* unreadable */ } }
   run('UPDATE messages SET calendar_ics = ? WHERE id = ?', ics, m.id);
   m.calendar_ics = ics;

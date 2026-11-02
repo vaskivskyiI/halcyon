@@ -22,6 +22,9 @@ import { topicView, categoryView } from './MailView.jsx';
 // Recently opened conversations (per page load), shown instantly when reopened.
 const threadCache = new Map();
 
+// The server sends the unread messages among the last 20 of a conversation with their bodies (routes/mail.js).
+const OPEN_UNREAD = 20;
+
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
   // Pin and note state of the open conversation (hooks stay above the early returns below).
@@ -61,6 +64,8 @@ export default function Reader({ id, view }) {
   const openId = useRef(id);
   openId.current = id;
   const loadSeq = useRef(0);
+  const expandedNow = useRef(expanded);
+  expandedNow.current = expanded;
   const load = useCallback(async (images = allowImages, quiet = false) => {
     const seq = ++loadSeq.current;
     const stale = () => seq !== loadSeq.current || openId.current !== id;
@@ -72,7 +77,7 @@ export default function Reader({ id, view }) {
       let data = { messages: [m], summary: null };
       const tid = m.threadId && encodeURIComponent(m.threadId);
       const [th, mu] = await Promise.all([
-        conv && tid ? api.get(`/api/threads/${tid}${images ? '?images=1' : ''}`) : null,
+        conv && tid ? api.get(`/api/threads/${tid}?full=${[id, ...(quiet ? expandedNow.current : [])].join(',')}${images ? '&images=1' : ''}`) : null,
         tid ? api.get(`/api/threads/${tid}/muted`).catch(() => ({})) : {},
       ]);
       if (th?.messages.length) data = th;
@@ -82,8 +87,10 @@ export default function Reader({ id, view }) {
       setThread(quiet ? (cur) => ({ ...t, translations: cur?.translations }) : t);
       store.set({ focusAccountId: m.accountId }); // new mail defaults to the account of the message being read
       const last = data.messages[data.messages.length - 1];
-      const ex = new Set([m.id, last.id, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]);
-      setExpanded(quiet ? (cur) => new Set([...cur, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]) : ex);
+      // Unread messages open unfolded — in a very long conversation only those among the last ones (OPEN_UNREAD).
+      const unreadIds = data.messages.slice(-OPEN_UNREAD).filter((x) => !x.isRead).map((x) => x.id);
+      const ex = new Set([m.id, last.id, ...unreadIds]);
+      setExpanded(quiet ? (cur) => new Set([...cur, ...unreadIds]) : ex);
       if (!images) { threadCache.delete(id); threadCache.set(id, { thread: t, expanded: ex }); if (threadCache.size > 40) threadCache.delete(threadCache.keys().next().value); }
     } catch (e) {
       if (stale() || (quiet && e.status !== 404)) return;
@@ -97,7 +104,7 @@ export default function Reader({ id, view }) {
   useEffect(() => {
     if (!thread || thread.current?.id !== Number(id) || placedFor.current === id) return;
     placedFor.current = id;
-    const unread = thread.messages.find((m) => !m.isRead && !m.isDraft);
+    const unread = thread.messages.slice(-OPEN_UNREAD).find((m) => !m.isRead && !m.isDraft);
     firstUnread.current = unread?.id || null;
     // All read but a reply is being written (a draft in Drafts, a Halcyon draft, an unfinished quick reply): go there.
     // Drafts open asynchronously, so look for a few frames.
@@ -138,6 +145,18 @@ export default function Reader({ id, view }) {
     };
     requestAnimationFrame(place);
   }, [thread, id]);
+
+  // A folded message of a long conversation comes without its body: asked for when it is unfolded.
+  const fetchingBody = useRef(new Set());
+  const fullOf = (m) => api.get(`/api/messages/${m.id}${allowImages ? '?images=1' : ''}`).then((f) => ({ ...f, isRead: m.isRead }));
+  useEffect(() => {
+    for (const m of thread?.messages || []) {
+      if (!m.partial || !expanded.has(m.id) || fetchingBody.current.has(m.id)) continue;
+      fetchingBody.current.add(m.id);
+      fullOf(m).then((f) => setThread((t) => t && { ...t, messages: t.messages.map((x) => (x.id === m.id ? f : x)) }))
+        .catch(() => {}).finally(() => fetchingBody.current.delete(m.id));
+    }
+  }, [expanded, thread]);
 
   // Opened = read (after the configured delay, if it is still the message shown): every unread message shown here.
   // Runs again whenever what is unread changes (a cached copy is shown first, then the fresh one), and always includes
@@ -219,6 +238,7 @@ export default function Reader({ id, view }) {
   };
   // Reply / Reply all: continue an existing draft for that message instead of starting a second one.
   async function reply(mode, msg = latest, extra = {}) {
+    if (msg.partial) msg = await fullOf(msg).catch(() => msg);
     const inline = mode !== 'forward' && !extra.aiIntent && drafts.find((d) => d.inReplyToId === msg.id);
     const el = inline && document.querySelector(`[data-draft="${inline.id}"]`);
     if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.querySelector('.editor')?.focus(); return; }
@@ -348,7 +368,7 @@ export default function Reader({ id, view }) {
     { label: latest.insight?.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply', icon: CornerUpLeft, onClick: () => setNeedsReply(!latest.insight?.needsReply) },
     settings.ai.enabled && { label: 'Mark as important', icon: ThumbsUp, hint: 'AI learns', onClick: () => feedback('important') },
     settings.ai.enabled && { label: 'Mark as not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => feedback('unimportant') },
-    { label: 'Print', icon: Printer, onClick: () => printThread(msgs) },
+    { label: 'Print', icon: Printer, onClick: async () => printThread(await Promise.all(msgs.map((m) => (m.partial ? fullOf(m).catch(() => m) : m)))) },
     { label: 'Download .eml', icon: FileCode, onClick: () => window.open(api.url(`/api/messages/${target.id}/raw`)) },
     target.folder?.specialUse === '\\Junk' ? { label: 'Not spam', icon: AlertOctagon, onClick: () => act('notspam') } : { label: 'Report spam', icon: AlertOctagon, onClick: () => act('spam') },
     { label: 'Delete permanently', icon: Trash2, danger: true, onClick: () => confirm('Delete permanently?') && act('delete') },
@@ -947,7 +967,7 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
         {m.hasInvite && <Invitation messageId={m.id} onChanged={onInviteChanged} onExtract={onExtractEvent} />}
         {m.blockedRemote > 0 && <div className="notice"><ImageIcon size={15} /> Remote images were blocked to protect your privacy.<span className="grow" /><button className="btn sm" onClick={onShowImages}>Show images</button></div>}
         {translation && <div className="notice" style={{ display: 'block' }}><div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Languages size={13} /> Translation</div><div style={{ whiteSpace: 'pre-wrap' }}>{translation}</div></div>}
-        <div className="msg-body">{m.html ? <HtmlFrame html={m.html} /> : <PlainBody text={m.text} />}</div>
+        <div className="msg-body">{m.partial ? <Spinner size={16} /> : m.html ? <HtmlFrame html={m.html} /> : <PlainBody text={m.text} />}</div>
         {m.attachments?.length > 0 && <div className="attachments">{m.attachments.map((a) => (
           <a key={a.index} className="attachment" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title="Open — or drag to a folder (Explorer, desktop) to save it there" {...dragOut(m, a)}>
             <Paperclip size={15} /><span className="truncate grow">{a.filename}</span><span className="faint small">{fmtSize(a.size || 0)}</span>
