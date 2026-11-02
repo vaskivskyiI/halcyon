@@ -1,0 +1,47 @@
+name: Windows app
+# Builds the lightweight Halcyon Windows app (windows/: your Halcyon server in WebView2, with tray, toasts and mailto:
+# links; ~1.5 MB, needs the .NET 8 Desktop Runtime). Actions → "Windows app" → Run workflow. See windows/README.md.
+# The Electron app (desktop/, desktop.yml) stays the one with a local server and an offline copy.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0)'
+        default: '1.0.0'
+  push:
+    tags: ['v*']
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    env:
+      VERSION: ${{ inputs.version || '1.0.0' }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+      - name: Publish (framework-dependent, single file)
+        shell: pwsh
+        run: |
+          dotnet publish windows/Halcyon/Halcyon.csproj -c Release -r "win-$env:ARCH" --self-contained false `
+            -p:Version=$env:VERSION -o windows/Halcyon/bin/publish
+          Get-ChildItem windows/Halcyon/bin/publish | Format-Table Name, Length
+      - name: Zip (unpack anywhere and run Halcyon.exe)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force windows/out | Out-Null
+          Compress-Archive -Path windows/Halcyon/bin/publish/Halcyon.exe -DestinationPath "windows/out/Halcyon-Windows-$env:VERSION-$env:ARCH.zip"
+      - name: Installer (Inno Setup, per user)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DVersion=$env:VERSION" "/DArch=$env:ARCH" "/DSource=Halcyon\bin\publish" windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Halcyon-Windows-app-${{ matrix.arch }}
+          path: windows/out/*

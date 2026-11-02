@@ -1014,3 +1014,50 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   for each slow request its handler's own synchronous time (`timeHandler` onRoute hook) and how long it waited for
   other work (`requestStart`/`recordRequest`: event-loop stalls measured by a 10 ms timer, including one that ended just
   before the request was read).
+
+### Lightweight Windows app (no migration)
+- `windows/`: C# .NET 8 WinForms + WebView2 app (~1.3 MB single `Halcyon.exe`, framework-dependent: needs the .NET 8
+  Desktop Runtime and the WebView2 Runtime) that shows the user's Halcyon server, the Windows counterpart of the Android
+  app. Remote servers only (no local server, no offline copy: that stays the Electron app's, which keeps its own
+  `%APPDATA%\Halcyon\config.json`; this app uses `%APPDATA%\Halcyon\windows\config.json`, `%LOCALAPPDATA%\Halcyon\windows`
+  for the WebView2 profile, the log and the toast icons, AppUserModelID `Halcyon.Windows`, Run value `HalcyonWindows`).
+- ConnectForm: address checked with `/api/health` (must answer JSON) before saving; CA certificates added there
+  (`%APPDATA%\Halcyon\windows\ca`) are accepted in `ServerCertificateErrorDetected` and the health check only for the
+  configured host, only when the chain builds to one of them and the name matches (Trust.cs). Tray → Change server.
+- MainForm: cold start always at `#/mail/unified` (a toast click or mailto: that starts the app opens its place);
+  bounds/maximised remembered; single instance (mutex + a current-user-only named pipe; the second start calls
+  AllowSetForegroundWindow and hands its arguments over); close → tray (once a balloon says so); `--hidden` (Start at
+  login, HKCU Run) loads the page without showing the window. Main-frame navigation off the server → default browser;
+  window.open/target=_blank: server `/api/` files are downloaded by the page itself (`<a download>`, session cookie,
+  no navigation; `?inline=1` → temp file opened in its default app), server pages, `about:blank` (print) and OAuth get
+  a PopupForm on the same WebView2 environment (opener kept), other http(s) → browser, mailto: → compose. Downloads →
+  the Downloads folder (free name). Unreachable server / untrusted certificate → a page with Try again / Change server.
+- Bridge (Bridge.js, injected at document creation, top frame of the server origin only; host checks the message
+  origin): `window.halcyonDesktop` with the Electron preload's surface (isDesktop, platform, setBadge, show, info,
+  saveConnection) + `shell: 'windows'`, `changeServer()`, `closeNotification(tag)`; not `prepareDrag`/`dragFile`
+  (attachments drag out through the browser's DownloadURL) or `pickFile` (local server only). `window.Notification` is
+  a shim (permission granted) and `PushManager` is removed, so push.js reports push unsupported and App.jsx notifies
+  through notifyDesktop while the app runs (also hidden in the tray). No web/src changes.
+- Toasts (Toasts.cs) through the WinRT ABI with function pointers (no Windows SDK projection, which is ~25 MB):
+  tag = the notification's tag (server tags: mail-*, mail-batch-*, rem-e*, rem-t*), group `halcyon`, so the same tag
+  replaces; `Notification.close()` → History.RemoveGroupedTagWithId. Icon per kind via appLogoOverride (Icons.cs draws
+  mail / calendar / task / other PNGs at run time). Clicks use protocol activation (`halcyon-windows:open?page&id&route`,
+  HKCU\Software\Classes): the page whose notification it was fires its onclick (place + shared space, App.jsx); an
+  older page just moves to the route (only `#/…` routes are taken). mailto: is offered as a registered mail client
+  (Clients\Mail\Halcyon + RegisteredApplications); the user picks it in Settings → Default apps (tray menu opens it).
+- Icon: `windows/tools/make-icon.ps1` (GDI+) draws web/public/icon.svg without the yellow dot into `halcyon.ico`.
+- Build: `.github/workflows/windows.yml` (x64 + arm64: dotnet publish, zip, Inno Setup per-user installer
+  `windows/installer.iss`, which warns when the .NET 8 Desktop Runtime is missing and runs `--unregister` on uninstall).
+- Verified on the dev PC (Windows 11, .NET 8 SDK in a temp folder): builds without warnings for x64 and arm64; ran
+  against a local Halcyon server with WebView2's remote debugging: the bridge is present only on the server origin,
+  Notification.permission granted, PushManager gone; toasts appear in the notification history with the right tag,
+  group, kind icon and launch URL; a second toast with the same tag replaced the first; close() removed it; a
+  simulated click (`Halcyon.exe "halcyon-windows:open?…"`) fired the page's onclick, and an older page's click moved
+  to its route; a cold start from a click opened its route, an invalid route opened `#/mail/unified`; mailto: from a
+  second start opened `#/compose?url=…`; `--hidden` loaded the page with no window and a second start showed it;
+  the close button hid the window to the tray; `/api/` files from window.open landed in Downloads; a print pop-up got
+  its document; an unreachable server showed the error page. NOT verified: anything needing a person at the screen
+  (the tray menu, the look of toasts and of the taskbar overlay, clicking a real toast, the connect window's dialogs,
+  Change server, Start at login after a real login), signing in and real server notifications, a private-CA server,
+  OAuth pop-ups, dragging attachments out, the Inno Setup installer and the GitHub workflow itself (Inno Setup was not
+  available locally).
