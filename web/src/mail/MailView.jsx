@@ -42,7 +42,8 @@ function sortResults(list, s) {
   return [...list].sort(s.dir === 'asc' ? k : (a, b) => k(b, a));
 }
 const searchSortOf = (tab) => { try { return JSON.parse(localStorage.getItem(`halcyon.searchSort.${tab}`)) || { key: 'relevance', dir: 'desc' }; } catch { return { key: 'relevance', dir: 'desc' }; } };
-// The last searches, offered again under the search box (on this device).
+// The last searches, offered again under the search box. Kept with the person's settings (ui.recentSearches), so
+// every device has them; this key only holds what one device kept before that.
 const RECENT_KEY = 'halcyon.recentSearches';
 const readRecent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
 const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
@@ -362,10 +363,23 @@ function MessageList({ view, openId, onMenu }) {
   const [aiResults, setAiResults] = useState(null);
   const [searchTab, setSearchTab] = useState(null); // 'mail' | 'ai'; until chosen, AI only when nothing else matched
   const [searchSort, setSearchSortState] = useState(() => ({ mail: searchSortOf('mail'), ai: searchSortOf('ai') }));
-  const [recent, setRecent] = useState(readRecent);
+  const recent = settings?.ui?.recentSearches || [];
   const [recentOpen, setRecentOpen] = useState(false);
   const [recentAt, setRecentAt] = useState(-1);
-  const keepRecent = (list) => { setRecent(list); try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch { /* private mode */ } };
+  const savedRecent = () => store.get().settings?.ui?.recentSearches || [];
+  const keepRecent = (list) => { if (!store.get().readOnly) saveSettings({ ui: { recentSearches: list.slice(0, 10) } }).catch(() => {}); };
+  // Searches made on another device since this page loaded.
+  const fetchRecent = () => api.get('/api/me').then((me) => {
+    const s = store.get().settings;
+    if (s) store.set({ settings: { ...s, ui: { ...s.ui, recentSearches: me.settings?.ui?.recentSearches || [] } } });
+  }).catch(() => {});
+  useEffect(() => {
+    const local = readRecent();
+    if (!local.length || !store.get().settings) return;
+    const cur = savedRecent();
+    keepRecent([...cur, ...local.filter((q) => !cur.includes(q))]);
+    try { localStorage.removeItem(RECENT_KEY); } catch { /* private mode */ }
+  }, []);
   const setSearchSort = (tab, s) => { setSearchSortState((cur) => ({ ...cur, [tab]: s })); try { localStorage.setItem(`halcyon.searchSort.${tab}`, JSON.stringify(s)); } catch { /* private mode */ } };
   const aiQuery = useRef('');
   const [selected, setSelected] = useState(new Set());
@@ -494,7 +508,7 @@ function MessageList({ view, openId, onMenu }) {
   // A search is remembered once it has stayed a moment, so the steps of one built with the filters are not all kept.
   useEffect(() => {
     if (!activeQuery) return undefined;
-    const t = setTimeout(() => keepRecent([activeQuery, ...readRecent().filter((q) => q !== activeQuery)].slice(0, 10)), 1500);
+    const t = setTimeout(() => { if (savedRecent()[0] !== activeQuery) keepRecent([activeQuery, ...savedRecent().filter((q) => q !== activeQuery)]); }, 1500);
     return () => clearTimeout(t);
   }, [activeQuery]);
   const typed = query.trim().toLowerCase();
@@ -742,7 +756,7 @@ function MessageList({ view, openId, onMenu }) {
           <Search size={15} />
           <input ref={searchRef} className="input" placeholder='Search mail — words, or from:anna received:"last week" hasattachments:yes' value={query}
             onChange={(e) => { setQuery(e.target.value); setRecentOpen(true); setRecentAt(-1); if (!e.target.value) setActiveQuery(''); }}
-            onFocus={() => { setRecentOpen(true); setRecentAt(-1); }} onBlur={() => setRecentOpen(false)} onKeyDown={recentKeys} />
+            onFocus={() => { setRecentOpen(true); setRecentAt(-1); fetchRecent(); }} onBlur={() => setRecentOpen(false)} onKeyDown={recentKeys} />
           {recentShown.length > 0 && <div className="suggest recent-searches">
             <header>Recent searches</header>
             {recentShown.map((q, i) => <div key={q} className={i === recentAt ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); runRecent(q); }}>

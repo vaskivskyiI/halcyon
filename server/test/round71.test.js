@@ -54,6 +54,12 @@ test('only owners change the space; members keep their own habits; the space wri
   assert.equal(getSettings(space).mail.undoSendSeconds, 10);
   assert.equal((await as('owner', 'GET', '/api/me')).data.settings.mail.undoSendSeconds, 10, 'the owner has their own');
 
+  // Recent searches are the person's (on every device), and a shorter list replaces the longer one.
+  await as('member', 'PATCH', '/api/settings', { ui: { recentSearches: ['budget', 'from:ana'] } });
+  assert.deepEqual((await as('member', 'PATCH', '/api/settings', { ui: { recentSearches: ['from:ana'] } })).data.ui.recentSearches, ['from:ana']);
+  assert.deepEqual(getSettings(member).ui.recentSearches, ['from:ana']);
+  assert.deepEqual(getSettings(space).ui.recentSearches, []);
+
   // A member's device zone never moves the space's.
   const tz0 = getSettings(space).calendar.timezone;
   assert.equal((await as('member', 'PATCH', '/api/settings', { calendar: { tzAuto: true } })).status, 200, 'only the ignored zone switch: allowed, nothing changes');
