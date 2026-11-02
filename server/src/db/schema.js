@@ -601,4 +601,9 @@ export const migrations = [
   CREATE INDEX idx_messages_local_copy ON messages(account_id, created_at) WHERE local_copy = 1 AND uid IS NULL;
   CREATE INDEX idx_messages_user_from ON messages(user_id, from_addr, date DESC);
   `,
+  // 54: Focused goes by conversation (routes/mail.js FOCUSED): the other messages of a conversation and their folders are
+  //     looked up from this index alone.
+  `
+  CREATE INDEX idx_messages_thread_folder ON messages(user_id, thread_id, folder_id);
+  `,
 ];

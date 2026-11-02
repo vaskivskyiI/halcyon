@@ -58,8 +58,13 @@ function listItem(r, open) {
 }
 
 // Mail the AI is about to read waits in Other, visible, and moves when the analysis says so. Mail it will not read stays in Focused.
-const ANALYSING = "EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = m.user_id AND j.type = 'analyze' AND j.ref_id = CAST(m.id AS TEXT) AND j.status IN ('queued', 'running'))";
-const FOCUSED = `((i.message_id IS NULL AND NOT ${ANALYSING}) OR (i.priority >= 40 AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE}) OR i.priority >= 70)`;
+const analysing = (m) => `EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = ${m}.user_id AND j.type = 'analyze' AND j.ref_id = CAST(${m}.id AS TEXT) AND j.status IN ('queued', 'running'))`;
+const ANALYSING = analysing('m');
+const focusedOne = (i, m) => `((${i}.message_id IS NULL AND NOT ${analysing(m)}) OR (${i}.priority >= 40 AND COALESCE(${i}.category, '') NOT IN ${OPEN_NOISE}) OR ${i}.priority >= 70)`;
+// Focused goes by conversation: a message is focused when it or another message of its conversation in an Inbox is, so a
+// conversation is never split between Focused and Other (a reply to a focused conversation stays with it).
+const FOCUSED = `(${focusedOne('i', 'm')} OR (m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages t LEFT JOIN ai_insights ti ON ti.message_id = t.id
+  WHERE t.user_id = m.user_id AND t.thread_id = m.thread_id AND t.id != m.id AND t.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox') AND ${focusedOne('ti', 't')})))`;
 
 function scopeFor(userId, q, sc) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
@@ -94,7 +99,7 @@ function scopeFor(userId, q, sc) {
     case 'flagged': where.push('m.is_flagged = 1'); break;
     case 'attachments': where.push('m.has_attachments = 1'); break;
     case 'focused': where.push(FOCUSED); break;
-    case 'other': where.push(`((i.message_id IS NULL AND ${ANALYSING}) OR (i.message_id IS NOT NULL AND i.priority < 70 AND (i.priority < 40 OR i.category IN ${OPEN_NOISE})))`); break;
+    case 'other': where.push(`NOT COALESCE(${FOCUSED}, 0)`); break;
     default: break;
   }
   if (q.category && view !== 'category') { where.push('i.category = ?'); params.push(q.category); }
