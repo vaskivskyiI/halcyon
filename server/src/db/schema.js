@@ -565,4 +565,40 @@ export const migrations = [
   );
   CREATE INDEX idx_freebusy_grantee ON freebusy_shares(grantee_id);
   `,
+  // 53: messages rebuilt with the bodies (and other large text) last. A row larger than a page keeps its tail in a
+  //     chain of overflow pages, and SQLite walks that whole chain to reach any column stored after it: flags, sender,
+  //     calendar data and subject key sat after the bodies, so every list row and many counts read the whole email
+  //     (slow lists and folder counts on large mailboxes, worse with a cold disk). Ids stay, so the search index and
+  //     everything pointing at messages are kept. Columns added later with ALTER TABLE land after the bodies: a column
+  //     that lists or counts read should be added by a rebuild like this one.
+  `
+  CREATE TABLE messages_new (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE, uid INTEGER, thread_id TEXT, date INTEGER,
+    is_read INTEGER DEFAULT 0, is_flagged INTEGER DEFAULT 0, is_answered INTEGER DEFAULT 0, is_forwarded INTEGER DEFAULT 0,
+    is_draft INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0, snoozed_until INTEGER, local_copy INTEGER DEFAULT 0,
+    size INTEGER, created_at INTEGER, ai_status TEXT DEFAULT 'pending', message_id TEXT, in_reply_to TEXT, subject_key TEXT,
+    subject TEXT, from_name TEXT, from_addr TEXT, snippet TEXT, labels_json TEXT DEFAULT '[]', sender_json TEXT,
+    to_json TEXT, cc_json TEXT, bcc_json TEXT, reply_to_json TEXT, list_unsubscribe TEXT, raw_path TEXT,
+    attachments_json TEXT DEFAULT '[]', references_json TEXT, calendar_ics TEXT, body_text TEXT, body_html TEXT,
+    UNIQUE(folder_id, uid)
+  );
+  INSERT INTO messages_new (id, user_id, account_id, folder_id, uid, thread_id, date, is_read, is_flagged, is_answered, is_forwarded, is_draft, has_attachments, snoozed_until, local_copy, size, created_at, ai_status, message_id, in_reply_to, subject_key, subject, from_name, from_addr, snippet, labels_json, sender_json, to_json, cc_json, bcc_json, reply_to_json, list_unsubscribe, raw_path, attachments_json, references_json, calendar_ics, body_text, body_html) SELECT id, user_id, account_id, folder_id, uid, thread_id, date, is_read, is_flagged, is_answered, is_forwarded, is_draft, has_attachments, snoozed_until, local_copy, size, created_at, ai_status, message_id, in_reply_to, subject_key, subject, from_name, from_addr, snippet, labels_json, sender_json, to_json, cc_json, bcc_json, reply_to_json, list_unsubscribe, raw_path, attachments_json, references_json, calendar_ics, body_text, body_html FROM messages;
+  DROP TABLE messages;
+  ALTER TABLE messages_new RENAME TO messages;
+  CREATE INDEX idx_messages_folder_date ON messages(folder_id, date DESC);
+  CREATE INDEX idx_messages_user_date ON messages(user_id, date DESC);
+  CREATE INDEX idx_messages_thread ON messages(thread_id);
+  CREATE INDEX idx_messages_msgid ON messages(account_id, message_id);
+  CREATE INDEX idx_messages_snooze ON messages(snoozed_until) WHERE snoozed_until IS NOT NULL;
+  CREATE INDEX idx_messages_subject ON messages(user_id, subject_key);
+  CREATE INDEX idx_messages_user_msgid ON messages(user_id, message_id);
+  CREATE INDEX idx_messages_user_reply ON messages(user_id, in_reply_to);
+  CREATE INDEX idx_messages_user_thread ON messages(user_id, thread_id, date DESC);
+  CREATE INDEX idx_messages_folder_unread ON messages(folder_id, is_read, snoozed_until, thread_id, user_id, account_id);
+  CREATE INDEX idx_messages_list ON messages(user_id, date DESC, thread_id, folder_id, account_id, is_read, is_flagged,
+    has_attachments, snoozed_until, is_answered);
+  CREATE INDEX idx_messages_local_copy ON messages(account_id, created_at) WHERE local_copy = 1 AND uid IS NULL;
+  CREATE INDEX idx_messages_user_from ON messages(user_id, from_addr, date DESC);
+  `,
 ];

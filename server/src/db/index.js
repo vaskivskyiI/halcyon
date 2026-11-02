@@ -7,17 +7,24 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
+// 64 MB of pages kept in memory (the default is 2 MB): the list and count indexes of a large mailbox stay cached.
+db.pragma('cache_size = -65536');
 /** Text for comparing: lower case without accents (č → c, š → s, ž → z), so a search may leave them out. */
 export const fold = (s) => (s == null ? s : String(s).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase());
 db.function('fold', { deterministic: true }, fold);
 
 const current = db.pragma('user_version', { simple: true });
+// Foreign keys are off while migrating: a table rebuilt (copied, dropped, renamed) would otherwise take the rows that
+// point at it along when the old one is dropped.
+if (current < migrations.length) db.pragma('foreign_keys = OFF');
 for (let v = current; v < migrations.length; v++) {
+  if (/DROP TABLE messages;/.test(migrations[v])) console.log(`Halcyon: reorganising the mail store (database update ${v + 1}); with a large mailbox this takes a few minutes`);
   db.transaction(() => {
     db.exec(migrations[v]);
     db.pragma(`user_version = ${v + 1}`);
   })();
 }
+db.pragma('foreign_keys = ON');
 // A database that ran the Android app branch before it was merged had that branch's migration as number 38 and so
 // skipped this repository's 38 (automatic retries): its columns are added now.
 if (!db.prepare('PRAGMA table_info(pending_ops)').all().some((c) => c.name === 'auto_retries')) db.exec(migrations[37]); // "38" in schema.js (1-based)
