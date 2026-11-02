@@ -43,7 +43,8 @@ export async function profileJob(userId, email) {
   const { data } = await chatJSON(userId, 'background', {
     ...P.contactProfilePrompt({ ctx: P.userContext(get('SELECT * FROM users WHERE id = ?', userId), settings, mailAccounts(userId)), name, email, transcript, facts, notes: prev?.user_notes || '',
       language: P.LANG_NAMES[settings.ui.language] || 'English' }),
-    temperature: 0.2, maxTokens: 700,
+    // Room for every field in full: 700 tokens cut off longer profiles (more so in languages that take more tokens).
+    temperature: 0.2, maxTokens: 1500,
   });
   if (!data || typeof data !== 'object') throw new Error('no profile returned');
   const clean = (v, n) => String(v || '').trim().slice(0, n);

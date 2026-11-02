@@ -106,5 +106,23 @@ export function parseJSON(text) {
   if (s >= 0 && e > s) {
     try { return JSON.parse(t.slice(s, e + 1)); } catch { /* fallthrough */ }
   }
+  if (s >= 0) { try { return JSON.parse(closeCutOff(t.slice(s))); } catch { /* fallthrough */ } }
   throw new Error('Model did not return valid JSON');
+}
+
+// A reply cut off at the token limit (JSON modes keep it valid only while it lasts): keep everything up to the last
+// complete value and close the open objects and lists; the unfinished value is dropped.
+function closeCutOff(t) {
+  const stack = [];
+  let inStr = false, esc = false, cut = null;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === '{' || c === '[') stack.push(c === '{' ? '}' : ']');
+    else if (c === '}' || c === ']') stack.pop();
+    else if (c === ',') cut = { at: i, close: [...stack].reverse().join('') };
+  }
+  if (!cut) throw new Error('nothing complete');
+  return t.slice(0, cut.at) + cut.close;
 }

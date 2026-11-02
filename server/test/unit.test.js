@@ -132,6 +132,12 @@ test('parseJSON tolerates fences and prose', () => {
   assert.throws(() => parseJSON('nope'));
 });
 
+test('parseJSON keeps what came before a reply was cut off at the token limit', () => {
+  assert.deepEqual(parseJSON('{"who": "Head, of sales", "topics": ["a", "b"], "notes": ["one", "tw'), { who: 'Head, of sales', topics: ['a', 'b'], notes: ['one'] });
+  assert.deepEqual(parseJSON('{"a": {"b": 1, "c": "x\\"y, z'), { a: { b: 1 } });
+  assert.throws(() => parseJSON('{"who": "cut'));
+});
+
 test('vCard round trip with folding, escaping, photo', () => {
   const c = { uid: 'u1', displayName: 'Ana Novak', firstName: 'Ana', lastName: 'Novak', emails: [{ type: 'work', value: 'ana@x.si' }], phones: [{ type: 'cell', value: '+386 1' }], addresses: [{ type: 'home', street: 'Jamova 39', city: 'Ljubljana', postal: '1000', country: 'Slovenia' }], org: 'IJS', notes: 'a;b,c\nnext '.repeat(10), groups: ['Work', 'VIP'], birthday: '1990-05-01', photo: 'data:image/png;base64,' + 'A'.repeat(200) };
   const back = parseVCards(toVCard(c))[0];
