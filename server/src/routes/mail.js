@@ -363,11 +363,23 @@ export default async function mailRoutes(app) {
     return msg;
   }
 
+  // Cleaning a large HTML email takes long and blocks every other request meanwhile; a conversation is asked again on
+  // every live change while it is open, so the cleaned bodies of the recently opened messages are kept.
+  const cleaned = new Map();
+  function cleanHtml(m, trusted) {
+    const key = `${m.id}:${trusted ? 1 : 0}:${m.body_html.length}`;
+    let out = cleaned.get(key);
+    if (out) { cleaned.delete(key); cleaned.set(key, out); return out; }
+    out = sanitizeEmailHtml(m.body_html, { messageId: m.id, allowRemote: trusted });
+    cleaned.set(key, out);
+    if (cleaned.size > 300) cleaned.delete(cleaned.keys().next().value);
+    return out;
+  }
   function fullMessage(userId, m, allowRemote) {
     const settings = getSettings(userId);
     const sender = contactByEmail(userId, m.from_addr);
     const trusted = allowRemote || settings.mail.loadRemoteImages || !!sender;
-    const { html, blockedRemote } = m.body_html ? sanitizeEmailHtml(m.body_html, { messageId: m.id, allowRemote: trusted }) : { html: null, blockedRemote: 0 };
+    const { html, blockedRemote } = m.body_html ? cleanHtml(m, trusted) : { html: null, blockedRemote: 0 };
     const ins = get('SELECT * FROM ai_insights WHERE message_id = ?', m.id);
     const folder = get('SELECT id, name, special_use FROM folders WHERE id = ?', m.folder_id);
     return serializeMessage(m, {

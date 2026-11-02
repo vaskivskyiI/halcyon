@@ -56,20 +56,28 @@ export default function Reader({ id, view }) {
 
   // quiet: a live update of what is open, nothing the reader did. What is unfolded stays, a new message opens, a failed
   // request changes nothing.
+  // Only the newest load may show its answer: one asked for a message clicked before (or a live refresh started
+  // earlier) can come back later and must not replace what is open now.
   const openId = useRef(id);
   openId.current = id;
+  const loadSeq = useRef(0);
   const load = useCallback(async (images = allowImages, quiet = false) => {
+    const seq = ++loadSeq.current;
+    const stale = () => seq !== loadSeq.current || openId.current !== id;
     if (!id) { setThread(null); return; }
     if (!quiet) setLoading(true);
     try {
       const m = await api.get(`/api/messages/${id}${images ? '?images=1' : ''}`);
+      if (stale()) return;
       let data = { messages: [m], summary: null };
-      if (conv && m.threadId) {
-        const t = await api.get(`/api/threads/${encodeURIComponent(m.threadId)}${images ? '?images=1' : ''}`);
-        if (t.messages.length) data = t;
-      }
-      const muted = m.threadId ? (await api.get(`/api/threads/${encodeURIComponent(m.threadId)}/muted`).catch(() => ({}))).muted : false;
-      if (quiet && openId.current !== id) return;
+      const tid = m.threadId && encodeURIComponent(m.threadId);
+      const [th, mu] = await Promise.all([
+        conv && tid ? api.get(`/api/threads/${tid}${images ? '?images=1' : ''}`) : null,
+        tid ? api.get(`/api/threads/${tid}/muted`).catch(() => ({})) : {},
+      ]);
+      if (th?.messages.length) data = th;
+      const muted = !!mu?.muted;
+      if (stale()) return;
       const t = { ...data, related: data.related || m.related || { tasks: [], events: [], drafts: [] }, current: m, muted };
       setThread(quiet ? (cur) => ({ ...t, translations: cur?.translations }) : t);
       store.set({ focusAccountId: m.accountId }); // new mail defaults to the account of the message being read
@@ -78,12 +86,12 @@ export default function Reader({ id, view }) {
       setExpanded(quiet ? (cur) => new Set([...cur, ...data.messages.filter((x) => !x.isRead).map((x) => x.id)]) : ex);
       if (!images) { threadCache.delete(id); threadCache.set(id, { thread: t, expanded: ex }); if (threadCache.size > 40) threadCache.delete(threadCache.keys().next().value); }
     } catch (e) {
-      if (quiet && e.status !== 404) return;
+      if (stale() || (quiet && e.status !== 404)) return;
       setThread(null);
       threadCache.delete(id);
       // Gone (moved or deleted, here or by another mail app): say so and refresh the list instead of an error.
       if (e.status === 404) window.dispatchEvent(new Event('halcyon:poll')); else toastError(e);
-    } finally { setLoading(false); }
+    } finally { if (seq === loadSeq.current) setLoading(false); }
   }, [id, conv, allowImages]);
 
   useEffect(() => {
@@ -152,8 +160,9 @@ export default function Reader({ id, view }) {
   useEffect(() => {
     setAllowImages(false); setShowAll(false);
     // A conversation opened before shows at once; the fresh copy replaces it when it arrives.
+    // Another one not seen before: a spinner, not the previous conversation, until it arrives.
     const c = conv && threadCache.get(id);
-    if (c) { setThread(c.thread); setExpanded(c.expanded); }
+    if (c) { setThread(c.thread); setExpanded(c.expanded); } else setThread(null);
     load(false);
   }, [id, conv]);
 
