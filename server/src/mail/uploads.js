@@ -20,11 +20,19 @@ export function saveUpload(userId, { filename, contentType, content }) {
   return { uploadId: id, filename: String(filename || 'attachment').slice(0, 200), contentType: contentType || 'application/octet-stream', size: content.length };
 }
 
-/** { meta, content } of the user's upload, or null. */
+/**
+ * { meta, content } of the user's upload, or null. With shared mail shown among one's own, a file can be uploaded as
+ * the person and sent from the shared space's account (or the other way round), so the space's members and the spaces
+ * the user is in are looked at too.
+ */
 export function readUpload(userId, id) {
   if (!valid(id)) return null;
-  const base = path.join(dirOf(userId), id);
-  try { return { meta: JSON.parse(fs.readFileSync(`${base}.json`, 'utf8')), content: fs.readFileSync(`${base}.bin`) }; } catch { return null; }
+  const near = all('SELECT user_id AS id FROM shared_members WHERE shared_id = ? UNION SELECT shared_id FROM shared_members WHERE user_id = ?', userId, userId);
+  for (const uid of [userId, ...near.map((r) => r.id)]) {
+    const base = path.join(dirOf(uid), id);
+    try { return { meta: JSON.parse(fs.readFileSync(`${base}.json`, 'utf8')), content: fs.readFileSync(`${base}.bin`) }; } catch { /* not this one */ }
+  }
+  return null;
 }
 
 /** Uploads no draft or unsent message refers to any more, older than two days, are removed (daily). */
