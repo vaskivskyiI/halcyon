@@ -605,6 +605,13 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 .fold-title { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .ai-card.folded { padding-top: 8px; padding-bottom: 8px; }
 .ai-card.folded .title { margin-bottom: 2px; }
+/* The AI card's folded copy floating at the top of a scrolled conversation: a sticky strip of no height (nothing
+   below moves); opened, it lies over the messages and scrolls on its own. Messages scrolled to stay clear of it. */
+.ai-float { position: sticky; top: -18px; height: 0; z-index: 5; }
+.ai-float-inner { position: absolute; left: 0; right: 0; top: 0; }
+.ai-card.floating { margin: 0; background: color-mix(in srgb, var(--ai-soft) 35%, var(--panel)); box-shadow: 0 6px 18px rgb(0 0 0 / 12%); max-height: 60vh; overflow: auto; }
+.reader-scroll .msg-card { scroll-margin-top: 64px; }
+@media (max-width: 760px) { .ai-float { top: -12px; } }
 .recent-chip { flex: none; height: 20px; font-size: 11px; }
 .recent-with { padding: 6px 12px 10px; }
 a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display: inline-flex; align-items: center; }

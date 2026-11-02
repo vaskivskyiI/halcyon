@@ -46,6 +46,9 @@ export default function Reader({ id, view }) {
   const scroller = useRef();
   // Opening a conversation: start at its first unread message (as it was when opened), else at its draft, else at the top.
   const placedFor = useRef(null);
+  // The AI card scrolled out of view: a folded copy floats at the top of the conversation.
+  const aiRef = useRef(null);
+  const [aiAway, setAiAway] = useState(false);
   const firstUnread = useRef(null);
   const labels = store.use((s) => s.labels);
   const quickSteps = store.use((s) => s.quickSteps);
@@ -94,12 +97,30 @@ export default function Reader({ id, view }) {
     const hasDraft = !unread && (rel.length > 0 || thread.messages.some(isDraftMsg));
     const quick = rel.some((d) => d.quick);
     let tries = 0;
+    // What appears or grows above it afterwards (notes, the AI card, images in the messages above) must not push the
+    // first unread message away: it is held at the top for a few seconds, until the user scrolls themselves.
+    const hold = (el) => {
+      const s = scroller.current;
+      let stop = false;
+      const quit = () => { stop = true; };
+      const inputs = ['wheel', 'touchstart', 'keydown', 'mousedown'];
+      inputs.forEach((t) => s.addEventListener(t, quit, { passive: true, once: true }));
+      const top = () => el.getBoundingClientRect().top - s.getBoundingClientRect().top;
+      const want = top();
+      const until = Date.now() + 4000;
+      const tick = () => {
+        if (stop || placedFor.current !== id || !el.isConnected || Date.now() > until) { inputs.forEach((t) => s.removeEventListener(t, quit)); return; }
+        if (Math.abs(top() - want) > 2) el.scrollIntoView({ block: 'start' });
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    };
     const place = () => {
       const s = scroller.current;
       if (!s || placedFor.current !== id) return;
       if (unread) {
         const el = s.querySelector(`[data-msg="${unread.id}"]`);
-        if (el && thread.messages.length > 1) el.scrollIntoView({ block: 'start' }); else s.scrollTop = 0;
+        if (el && thread.messages.length > 1) { el.scrollIntoView({ block: 'start' }); hold(el); } else s.scrollTop = 0;
         return;
       }
       if (!hasDraft) { s.scrollTop = 0; return; }
@@ -399,7 +420,7 @@ export default function Reader({ id, view }) {
 
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
-        {settings.ai.enabled && !isDraftMsg(latest) && <AiCard ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
+        {settings.ai.enabled && !isDraftMsg(latest) && <AiFloat scroller={scroller} cardRef={aiRef} away={aiAway} setAway={setAiAway} render={(floating) => <AiCard floating={floating} ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}
           actions={actions} onItem={settleItem} suggested={suggested} onSuggestion={answerSuggestion}
           onDone={async (mid, resolution = 'done', undo = false) => {
@@ -413,7 +434,7 @@ export default function Reader({ id, view }) {
           }} onForward={forwardTo} requester={latest.from} onAnalyze={async () => {
             setAiWorking(true);
             try { const i = await api.get(`/api/messages/${latest.id}/insight?wait=1`); setThread((t) => ({ ...t, messages: t.messages.map((m) => (m.id === latest.id ? { ...m, insight: i } : m)) })); if (msgs.length >= 2 && !thread.summary) { const s = await api.post('/api/ai/thread-summary', { threadId: latest.threadId }); setThread((t) => ({ ...t, summary: s.summary })); } } catch (e) { toastError(e); } finally { setAiWorking(false); }
-          }} />}
+          }} />} />}
 
         {!isDraftMsg(latest) && <InkwellNotes {...inkwell} part="list" />}
 
@@ -539,12 +560,34 @@ function ActionList({ actions, needsReply, onDone, onItem }) {
   );
 }
 
-function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, onItem, actions, related, onTask, suggested, onSuggestion }) {
+/**
+ * The AI card in its place, and — once it is scrolled out of view — a folded copy floating at the top of the
+ * conversation (a sticky strip of no height, so nothing below moves). The copy opens over the messages when clicked.
+ */
+function AiFloat({ scroller, cardRef, away, setAway, render }) {
+  useEffect(() => {
+    const s = scroller.current, el = cardRef.current;
+    if (!s || !el) return undefined;
+    const io = new IntersectionObserver(([e]) => setAway(!e.isIntersecting && e.boundingClientRect.top < e.rootBounds.top), { root: s });
+    io.observe(el);
+    return () => { io.disconnect(); setAway(false); };
+  }, []);
+  return <>
+    <div ref={cardRef}>{render(false)}</div>
+    {away && <div className="ai-float"><div className="ai-float-inner">{render(true)}</div></div>}
+  </>;
+}
+
+function AiCard({ floating = false, ins, summary, count, latest, onReply, onEvent, onTasks, onAnalyze, aiWorking, onFeedback, onForward, requester, onNeedsReply, onDone, onItem, actions, related, onTask, suggested, onSuggestion }) {
   const [openMenu, menuNode] = useMenu();
   const [suggesting, setSuggesting] = useState(false);
   // Folded stays folded from email to email, on this device; the line that remains still says what is open.
   const [folded, setFolded] = useState(() => { try { return localStorage.getItem('halcyon:aiCardFolded') === '1'; } catch { return false; } });
   const fold = () => { const next = !folded; setFolded(next); try { localStorage.setItem('halcyon:aiCardFolded', next ? '1' : '0'); } catch { /* only a convenience */ } };
+  // The floating copy starts folded and opens only for now (the card's own folding is not changed by it).
+  const [peek, setPeek] = useState(false);
+  const isFolded = floating ? !peek : folded;
+  const toggle = floating ? () => setPeek(!peek) : fold;
   // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
   const suggest = async () => {
     setSuggesting(true);
@@ -555,6 +598,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
   const correct = (kind, value) => { onFeedback(kind, value); setWhy({ kind, value, text: '' }); };
   useEffect(() => setWhy(null), [latest.id]);
   if (!ins && !summary) {
+    if (floating) return null;
     return <div className="card ai-card"><div className="row"><div className="title" style={{ margin: 0 }}><Sparkles size={15} /> AI assistant</div><span className="grow small faint">{AI_STATUS_TEXT[latest.aiStatus] || 'Not analyzed yet.'}</span>
       <button className="btn sm ai" onClick={onAnalyze} disabled={aiWorking}>{aiWorking ? <Spinner size={13} /> : <Sparkles size={13} />} Analyze now</button></div></div>;
   }
@@ -563,11 +607,11 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
   const settled = rows.length > 0 && !openActions;
   const firstLine = String(summary || ins?.summary || '').split('\n').map((l) => l.replace(/^[-*\s]+/, '').replace(/\*\*/g, '').trim()).find(Boolean);
   return (
-    <div className={`card ai-card ${folded ? 'folded' : ''}`}>
-      <div className="title" style={{ flexWrap: 'wrap' }}><button className="fold-title" title={folded ? 'Show the summary' : 'Fold the summary'} onClick={fold}>{folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}</button>
+    <div className={`card ai-card ${isFolded ? 'folded' : ''} ${floating ? 'floating' : ''}`}>
+      <div className="title" style={{ flexWrap: 'wrap' }}><button className="fold-title" title={isFolded ? 'Show the summary' : 'Fold the summary'} onClick={toggle}>{isFolded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}</button>
         <span className="row" style={{ marginLeft: 'auto', gap: 4, flexWrap: 'wrap' }}>
-          {folded && openActions > 0 && <span className="chip ai"><ClipboardCheck size={11} /> {openActions} open</span>}
-          {folded && suggested?.length > 0 && <span className="chip"><ClipboardCheck size={11} /> possible action</span>}
+          {isFolded && openActions > 0 && <span className="chip ai"><ClipboardCheck size={11} /> {openActions} open</span>}
+          {isFolded && suggested?.length > 0 && <span className="chip"><ClipboardCheck size={11} /> possible action</span>}
           {ins?.expired && <span className="chip" title="Time-sensitive content (e.g. a login code) that is no longer valid"><Hourglass size={11} /> expired</span>}
           {ins?.topic && <a className="chip topic" href={`#/mail/${topicView(ins.topic)}`} title={`Show all mail about “${ins.topic}”`}>#{ins.topic}</a>}
           {ins?.needsReply && <button className="chip ai" style={{ border: 0, cursor: 'pointer' }} title="Remove “needs reply”" onClick={() => onNeedsReply(false)}><CornerUpLeft size={11} /> Needs reply ✕</button>}
@@ -585,7 +629,7 @@ function AiCard({ ins, summary, count, latest, onReply, onEvent, onTasks, onAnal
         </span>
       </div>
       {menuNode}
-      {folded ? firstLine && <div className="truncate small muted" title={firstLine}>{firstLine}</div> : <>
+      {isFolded ? firstLine && <div className="truncate small muted" title={firstLine}>{firstLine}</div> : <>
       {why && <div className="why-box">
         <span className="small"><b>{{ important: 'Important', unimportant: 'Not important', category: `Category “${why.value}”` }[why.kind]}</b> — why? <span className="faint">Optional. With a reason the AI applies it to similar mail from anyone, instead of to everything from this sender — e.g. “only fake conferences: generic greeting, unknown organiser, fee to publish”. “Suggest” lets the AI guess it.</span></span>
         <textarea className="input" rows={why.text.length > 60 ? 3 : 2} style={{ resize: 'vertical', minHeight: 30, paddingTop: 5 }} autoFocus maxLength={500} value={why.text} placeholder="Your reason…" onChange={(e) => setWhy({ ...why, text: e.target.value })}
