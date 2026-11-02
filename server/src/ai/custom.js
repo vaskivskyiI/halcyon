@@ -101,7 +101,7 @@ export async function scanCategory(userId, ref) {
   for (const w of words(`${c.name} ${c.description}`)) keywordSearch(userId, w, { limit: 60, sc }).forEach((id, i) => score.set(id, (score.get(id) || 0) + 1 / (10 + i)));
   try {
     const q = await embedQuery(userId, `${c.name}: ${c.description}`, { interactive: false, timeoutMs: 60e3 });
-    messageHits(userId, q, 120, sc).forEach((h, i) => score.set(h.id, (score.get(h.id) || 0) + 2 / (10 + i)));
+    (await messageHits(userId, q, 120, sc)).forEach((h, i) => score.set(h.id, (score.get(h.id) || 0) + 2 / (10 + i)));
   } catch { /* no embeddings: words only */ }
   const done = new Set(all('SELECT message_id FROM message_tags WHERE category_id = ?', c.id).map((r) => r.message_id));
   const ids = [...score.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id).filter((id) => !done.has(id)).slice(0, 150);

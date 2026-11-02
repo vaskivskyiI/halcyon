@@ -74,7 +74,7 @@ export function mock() {
           needs_reply: question, action_items: urgent ? [{ text: 'Respond to request', due: null }] : [],
           events: [], suggested_replies: question ? ['Sounds good, thanks!', 'Let me check and get back to you.', 'Can we discuss this tomorrow?'] : [],
           sentiment: urgent ? 'urgent' : 'neutral', language: 'en', is_phishing: false,
-          facts: (email.match(/[^.\n]* is the [^.\n]+/g) || []).slice(0, 3).map((x) => x.trim()),
+          facts: email.split(/[.\n]/).filter((x) => / is the ./.test(x)).slice(0, 3).map((x) => x.trim()),
           topic: (subject.match(/order \d+/i) || [null])[0],
           needs_action: /\b(pay|invoice|sign|register|submit|approve)\b/i.test(email),
           action_summary: (email.match(/\b(pay|sign|register|submit|approve)\b[^.\n]{0,40}/i) || [''])[0],

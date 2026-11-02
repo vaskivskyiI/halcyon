@@ -1,5 +1,6 @@
 // Admin: what the server is doing in the background right now (GET /api/admin/activity), refreshed every few seconds —
-// to find what keeps the CPU busy: AI jobs and calls, mail sync, calendar/contacts syncs, scheduled jobs, slow requests.
+// to find what keeps the CPU busy: AI jobs and calls, mail sync, calendar/contacts syncs, scheduled jobs, worker threads,
+// slow requests (and whether they were slow themselves or waited for other work).
 import { useEffect, useState } from 'react';
 import { Pause, Play, X } from 'lucide-react';
 import { api } from '../api.js';
@@ -46,9 +47,19 @@ export default function ServerActivity() {
         <span className="chip">user {p.cpuUserPercent}%</span>
         <span className="chip" style={warn(p.eventLoop.utilisation, 80)}>event loop busy {p.eventLoop.utilisation}%</span>
         <span className="chip" style={warn(p.eventLoop.delayP99Ms, 100)}>loop delay p99 {p.eventLoop.delayP99Ms} ms · max {p.eventLoop.delayMaxMs} ms</span>
+        {p.stalls && <span className="chip" style={warn(p.stalls.maxMs, 500)} title="Times in the last minute that the server could not answer any request for over 20 ms">
+          stalls last min {p.stalls.count} · longest {dur(p.stalls.maxMs)} · total {dur(p.stalls.totalMs)}</span>}
         <span className="chip">memory {p.memoryMb.rss} MB (heap {p.memoryMb.heapUsed} / {p.memoryMb.heapTotal} MB)</span>
         <span className="chip">up {dur(p.uptimeSec * 1000)} · Node {p.node} · pid {p.pid}</span>
       </div>
+
+      {d.workers?.length > 0 && <>
+        <h4>Worker threads</h4>
+        <div className="small faint">Heavy work done beside the thread that answers requests, so it does not hold them up. Busy is per thread since the last refresh.</div>
+        <Table head={['Work', 'Threads', 'Busy', 'Calls', 'In progress', 'Time in calls', 'Failed / restarted']} rows={d.workers.map((w) => (
+          <tr key={w.name}><td>{w.name}</td><td>{w.running} of {w.size}</td><td>{w.busyPercent.length ? w.busyPercent.map((b) => `${b}%`).join(' · ') : 'not started'}</td>
+            <td>{w.calls}</td><td>{w.pending}</td><td>{dur(w.busyMs)}</td><td style={warn(w.restarts, 0)}>{w.failed} / {w.restarts}</td></tr>))} />
+      </>}
 
       <h3>AI queue</h3>
       <div className="row">
@@ -92,8 +103,10 @@ export default function ServerActivity() {
         <tr key={`${t.kind}-${t.label}`}><td>{t.kind}</td><td>{t.label}</td><td>{t.runs}</td><td>{dur(t.totalMs)}</td><td>{dur(t.totalMs / t.runs)}</td><td>{dur(t.maxMs)}</td><td className="small">{ago(t.lastAt, now)}, {dur(t.lastMs)}</td></tr>))} />
 
       <h3>Slow requests (over 0.5 s)</h3>
-      <Table head={['When', 'Request', 'Status', 'Took', 'User']} empty="None since the server started." rows={d.slowRequests.map((r, i) => (
-        <tr key={i}><td className="small">{ago(r.at, now)}</td><td>{r.method} {r.route}</td><td>{r.status}</td><td style={warn(r.ms, 2000)}>{dur(r.ms)}</td><td>{r.userId ? `#${r.userId}` : ''}</td></tr>))} />
+      <div className="small faint">Handler: the request's own work. Server busy: time it waited because the server was doing something else (sync, AI, other requests). The rest is waiting on the disk, a mail server or an AI provider.</div>
+      <Table head={['When', 'Request', 'Status', 'Took', 'Handler', 'Server busy', 'User']} empty="None since the server started." rows={d.slowRequests.map((r, i) => (
+        <tr key={i}><td className="small">{ago(r.at, now)}</td><td>{r.method} {r.route}</td><td>{r.status}</td><td style={warn(r.ms, 2000)}>{dur(r.ms)}</td>
+          <td>{r.ownMs != null ? dur(r.ownMs) : ''}</td><td style={warn(r.busyMs, r.ms / 2)}>{r.busyMs != null ? dur(r.busyMs) : ''}</td><td>{r.userId ? `#${r.userId}` : ''}</td></tr>))} />
 
       <h3>Slow background work (over 1 s)</h3>
       <Table head={['When', 'Kind', 'What', 'Details', 'Took']} empty="None since the server started." rows={d.slowWork.map((w, i) => (

@@ -168,10 +168,10 @@ export async function embedQuery(userId, text, { interactive = true, timeoutMs =
 }
 
 /** Messages ranked by their best-matching chunk: [{ id, score, chunkId }]. */
-export function messageHits(userId, query, k = 20, sc = null) {
+export async function messageHits(userId, query, k = 20, sc = null) {
   if (!query) return [];
   const best = new Map();
-  for (const h of searchMemory(userId, query.vector, query.model, { k: k * 4, owners: sc?.owners || null, kinds: new Set(['message']) })) {
+  for (const h of await searchMemory(userId, query.vector, query.model, { k: k * 4, owners: sc?.owners || null, kinds: new Set(['message']) })) {
     const id = Number(h.ref);
     if (!best.has(id)) best.set(id, { id, score: h.score, chunkId: h.id });
   }

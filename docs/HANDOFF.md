@@ -989,3 +989,28 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   starting (in memory; a restart resumes). POST `/api/admin/activity/ai-jobs/:id/cancel` marks a queued or running job
   failed ("Cancelled by an administrator") and frees a running job's slot at once; whatever its handler does later is
   ignored. The handler itself is not aborted (providers take no signal from the queue).
+- Responsiveness under background work (no migration, round77): better-sqlite3 and JavaScript run on the main thread,
+  so heavy background work used to hold every request. Measured with `server/test/bench-busy.mjs` (a probe loads
+  `/api/messages` and `/api/folders` every 50 ms during each workload, on a `bench-lists.mjs` mailbox of 150 000
+  messages): the biggest blockers were WAL checkpoints (auto-checkpoint after every ~1000 pages, with an fsync of the
+  multi-GB file, run by whichever connection committed — during a sync that was the main thread, every ~25 messages,
+  up to a second each), the AI backfill (one commit per queued job: 25 s for 20 000 jobs), the memory purge (one 2 s
+  DELETE), loading/searching the AI memory index (2 s / 100 ms at 150 000 chunks) and parsing new mail. Now:
+  `wal_autocheckpoint = 0` on the main connection and `startCheckpoints()` (db/index.js) runs a PASSIVE checkpoint every
+  3 s from the scans worker; `backfillAnalysis`/`purgeMemory` are async (jobs queued in transactions of 500, the purge in
+  id ranges of 4000, its candidate lists read through `readAll` in a worker); the sync's flag reconcile and expunge go
+  in slices with requests in between; `resumeWaiting` goes from the jobs to their messages (was a pass over the
+  mailbox on every AI settings change). The outbox runs again right after a run that was busy when a send came in. Worker threads (`util/workers.js` `workerPool(file, { name, size, workerData })` →
+  `call(type, payload)` / `post(...)`; worker files `serve(handlers)`; started on first use, restarted when one dies,
+  keep the process alive only while a call is outstanding): `ai/vector-worker.js` holds the memory index on its own
+  read-only connection (memory.js writes rows on the main thread and then posts add/kill/invalidate, so the index
+  follows in order; `searchMemory`, `messageHits` and `memoryStats` now return promises), `mail/parse-worker.js`
+  parses new mail and saves its original .eml (`mail/parse.js` `digestAndSave`, no database — on Windows a sync file
+  write sometimes took seconds; ingest's database writes stay on the main thread: a second writer made main-thread
+  writes wait on the lock), `db/reader.js` runs `readAll` scans and the checkpoints. AI job handlers stay
+  on the main thread: with a real provider they wait on the network; their own work measured a few ms per job. After:
+  every workload's longest stall ≤ 60 ms, probe p95 ≤ 35 ms (before: stalls up to 25 s). Server activity shows the
+  stalls of the last minute, each worker pool (threads, busy % per thread, calls, in progress, failures/restarts), and
+  for each slow request its handler's own synchronous time (`timeHandler` onRoute hook) and how long it waited for
+  other work (`requestStart`/`recordRequest`: event-loop stalls measured by a 10 ms timer, including one that ended just
+  before the request was read).

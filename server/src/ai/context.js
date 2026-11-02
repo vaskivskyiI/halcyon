@@ -81,7 +81,7 @@ async function recall(userId, people, { query, threadId, sc, tz, own, budget, in
   if (!query) return { passages: '', facts: '' };
   const q = await embedQuery(userId, query.slice(0, 2000), { timeoutMs: interactive ? 8000 : 30000, interactive });
   if (!q) return { passages: '', facts: '' };
-  const hits = searchMemory(userId, q.vector, q.model, { k: 300, owners: sc?.owners || null, kinds: new Set(['message', 'thread', 'fact']), minScore: 0.15 });
+  const hits = await searchMemory(userId, q.vector, q.model, { k: 300, owners: sc?.owners || null, kinds: new Set(['message', 'thread', 'fact']), minScore: 0.15 });
   const w = withPeople(people, sc?.accountIds);
   const msgIds = [...new Set(hits.filter((h) => h.kind === 'message').map((h) => Number(h.ref)))];
   const ok = new Map(msgIds.length && people.length ? all(`SELECT m.id, m.date, m.from_addr, m.subject, m.thread_id FROM messages m WHERE m.id IN (${msgIds.join(',')}) AND m.user_id = ?

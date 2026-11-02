@@ -1,12 +1,17 @@
 import Database from 'better-sqlite3';
 import { config } from '../config.js';
 import { migrations } from './schema.js';
+import { workerPool } from '../util/workers.js';
 
 export const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
+// Checkpoints (copying the write-ahead log into the database file, with an fsync) are not done by whichever connection
+// happens to commit: on a large database one took up to a second, on the thread that answers requests. A worker
+// checkpoints instead (startCheckpoints).
+db.pragma('wal_autocheckpoint = 0');
 // 64 MB of pages kept in memory (the default is 2 MB): the list and count indexes of a large mailbox stay cached.
 db.pragma('cache_size = -65536');
 /** Text for comparing: lower case without accents (č → c, š → s, ž → z), so a search may leave them out. */
@@ -46,6 +51,18 @@ export const all = (sql, ...p) => stmt(sql).all(...p);
 export const get = (sql, ...p) => stmt(sql).get(...p);
 export const run = (sql, ...p) => stmt(sql).run(...p);
 export const tx = (fn) => db.transaction(fn)();
+// A read that scans much of the database, in a worker thread on its own connection: requests are answered meanwhile.
+// It sees what was committed when it runs (not this thread's open transaction); no fold() there.
+const reader = workerPool(new URL('./reader.js', import.meta.url), { name: 'Database scans', workerData: { dbPath: config.dbPath } });
+export const readAll = (sql, ...params) => reader.call('all', { sql, params });
+let checkpointing = null;
+/** Main thread: checkpoints the log every few seconds from the scans worker (here, should that fail). */
+export function startCheckpoints(everyMs = 3000) {
+  if (checkpointing) return;
+  checkpointing = setInterval(() => reader.call('checkpoint').catch(() => db.pragma('wal_checkpoint(PASSIVE)')), everyMs);
+  checkpointing.unref();
+}
+startCheckpoints();
 
 export const json = (s, fallback = null) => {
   if (s == null || s === '') return fallback;

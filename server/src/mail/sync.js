@@ -292,15 +292,20 @@ export class AccountSync {
           // (otherwise a conversation marked read during a sync shows unread again until the next one).
           const pending = new Set(all("SELECT payload_json FROM pending_ops WHERE account_id = ? AND op = 'flags'", this.accountId)
             .map((o) => json(o.payload_json, {})).filter((p) => p.folder === folder.path).flatMap((p) => p.uids || []));
-          tx(() => {
-            for (const msg of updates) {
-              if (pending.has(msg.uid)) continue;
-              const f = flagsToCols([...(msg.flags || [])]);
-              changes += run(`UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ?, is_forwarded = ? WHERE folder_id = ? AND uid = ?
-                AND (is_read != ? OR is_flagged != ? OR is_answered != ? OR is_draft != ? OR is_forwarded != ?)`, f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, folder.id, msg.uid,
-              f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded).changes;
-            }
-          });
+          // In slices with requests answered in between: the hourly pass over a folder of 100 000 messages is as many
+          // updates.
+          for (let i = 0; i < updates.length; i += 2000) {
+            if (i) await new Promise((r) => setImmediate(r));
+            tx(() => {
+              for (const msg of updates.slice(i, i + 2000)) {
+                if (pending.has(msg.uid)) continue;
+                const f = flagsToCols([...(msg.flags || [])]);
+                changes += run(`UPDATE messages SET is_read = ?, is_flagged = ?, is_answered = ?, is_draft = ?, is_forwarded = ? WHERE folder_id = ? AND uid = ?
+                  AND (is_read != ? OR is_flagged != ? OR is_answered != ? OR is_draft != ? OR is_forwarded != ?)`, f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, folder.id, msg.uid,
+                f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded).changes;
+              }
+            });
+          }
         }
         // 3) Expunged messages. Only when the server's answer is complete: an empty or short list during a glitch
         //    would otherwise remove mail here that is still on the server (and would not be fetched again).
@@ -310,7 +315,11 @@ export class AccountSync {
           const complete = box.exists == null ? serverUids.size > 0 : serverUids.size >= box.exists && (serverUids.size > 0 || box.exists === 0);
           const gone = complete ? all('SELECT id, uid FROM messages WHERE folder_id = ? AND uid IS NOT NULL', folder.id).filter((m) => !serverUids.has(m.uid)).map((m) => m.id) : [];
           if (!complete) log.warn(`${folder.path}: incomplete message list from the server (${serverUids.size} of ${box.exists}) — nothing removed this time`);
-          if (gone.length) { deleteMessages(gone, { keepAnalysis: true }); changes += gone.length; }
+          for (let i = 0; i < gone.length; i += 500) {
+            if (i) await new Promise((r) => setImmediate(r));
+            deleteMessages(gone.slice(i, i + 500), { keepAnalysis: true });
+          }
+          changes += gone.length;
         }
       }
 

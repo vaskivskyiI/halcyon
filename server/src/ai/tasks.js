@@ -263,7 +263,7 @@ export async function findRequestedEmails(userId, m, items) {
     const add = (id, i, w = 1) => score.set(id, (score.get(id) || 0) + w / (20 + i));
     for (const k of keywords) keywordSearch(userId, k, { limit: 15, sc }).forEach((id, i) => add(id, i));
     const q = await embedQuery(userId, `${description} ${keywords.join(' ')}`, { interactive: false, timeoutMs: 60e3 });
-    messageHits(userId, q, 15, sc).forEach((h, i) => add(h.id, i, 2));
+    (await messageHits(userId, q, 15, sc)).forEach((h, i) => add(h.id, i, 2));
     const rows = [...score.keys()].map((id) => get(`SELECT id, subject, from_name, from_addr, date, has_attachments, thread_id FROM messages WHERE id = ? AND user_id = ? AND date <= ? AND ${inIds('account_id', sc?.accountIds)}`, id, userId, m.date))
       .filter((r) => r && r.id !== m.id && r.thread_id !== m.thread_id);
     rows.sort((a, b) => (score.get(b.id) + (b.has_attachments ? 0.05 : 0)) - (score.get(a.id) + (a.has_attachments ? 0.05 : 0)));
@@ -557,7 +557,7 @@ export async function memoryJob(userId, ref, job) {
     let n = 0;
     for (const it of items) {
       const chunks = it.texts.map((text) => ({ text, vector: vectors[n++] })).filter((c) => c.vector?.length);
-      if (it.kind === 'fact' && isDuplicateFact(userId, it, chunks[0]?.vector, model)) continue;
+      if (it.kind === 'fact' && await isDuplicateFact(userId, it, chunks[0]?.vector, model)) continue;
       storeMemory(userId, { ...it, model, chunks });
     }
     for (const o of others) run("UPDATE ai_jobs SET status = 'done', error = NULL, updated_at = ? WHERE id = ?", now(), o.id);
@@ -568,9 +568,9 @@ export async function memoryJob(userId, ref, job) {
 }
 
 // A fact that says the same as one already remembered (in the same scope) is dropped.
-function isDuplicateFact(userId, it, vector, model) {
+async function isDuplicateFact(userId, it, vector, model) {
   if (!vector) return false;
-  const dup = searchMemory(userId, vector, model, { k: 2, owners: new Set([it.owner]), kinds: new Set(['fact']), minScore: 0.93 }).find((h) => h.ref !== String(it.ref));
+  const dup = (await searchMemory(userId, vector, model, { k: 2, owners: new Set([it.owner]), kinds: new Set(['fact']), minScore: 0.93 })).find((h) => h.ref !== String(it.ref));
   if (!dup) return false;
   run('DELETE FROM facts WHERE id = ? AND user_id = ?', it.ref, userId);
   return true;

@@ -10,7 +10,8 @@ import { userAccounts } from '../accounts.js';
 import { syncManager } from '../mail/sync.js';
 import { openReplySql, openActionSql, NOISE } from '../ai/open-items.js';
 import { timingSummary } from '../util/metrics.js';
-import { activitySnapshot, processStats } from '../util/activity.js';
+import { activitySnapshot, processStats, recentStalls } from '../util/activity.js';
+import { workerStats } from '../util/workers.js';
 import { queueActivity, pauseQueue, cancelJob } from '../ai/queue.js';
 import { laneStats } from '../ai/router.js';
 import { runningOps } from '../mail/sync.js';
@@ -118,7 +119,8 @@ export function backgroundActivity() {
   }).filter((a) => a.worker || a.pendingOps.length || a.syncEnabled);
   return {
     at: t,
-    process: processStats(),
+    process: { ...processStats(), stalls: recentStalls() },
+    workers: workerStats(),
     ai: {
       paused: q.paused, running: q.running, maxConcurrency: q.maxGlobal, lanes: laneStats(),
       active: q.active.map((j) => ({ ...j, ...who(j.userId) })),

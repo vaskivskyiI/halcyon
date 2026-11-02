@@ -1,30 +1,18 @@
 // Ingestion of fetched messages into the local store: parsing, threading, full-text index, hooks.
 import fs from 'node:fs';
 import path from 'node:path';
-import { simpleParser } from 'mailparser';
+import os from 'node:os';
 import { tracked } from '../util/activity.js';
+import { workerPool } from '../util/workers.js';
+import { simpleParse, digestAndSave, findIcs, inviteText, actingSender } from './parse.js';
 import { db, get, run, all, json, now } from '../db/index.js';
 import { config } from '../config.js';
 import { sha1 } from '../util/crypto.js';
-import { htmlToText } from './sanitize.js';
-import { parseIcs } from '../calendar/ics.js';
 import { subjectKey, isReplySubject } from '../util/subject.js';
 import { logger } from '../util/log.js';
 
 const log = logger('store');
-
-const addrList = (a) => (a ? (Array.isArray(a) ? a : [a]).flatMap((x) => x.value || []).map((v) => ({ name: v.name || '', address: (v.address || '').toLowerCase() })).filter((v) => v.address) : []);
-const cleanId = (s) => (s || '').trim().replace(/^<|>$/g, '');
-
-// The Sender header names who actually sent a message when that is not the From address ("Ana on behalf of the
-// Director"). Mailing lists and bulk-mail services set it to list / bounce addresses: those are not worth showing.
-const SYSTEM_SENDER = /(^|[-_.+])(bounces?|owner|request|noreply|no-reply|donotreply|mailer-daemon|postmaster|listserv|mailman|majordomo)([-_.+@]|$)/i;
-function actingSender(headers, from) {
-  const s = addrList(headers.get('sender'))[0];
-  if (!s || s.address === String(from.address || '').toLowerCase()) return '';
-  if (headers.has('list-id') || headers.has('list-post') || SYSTEM_SENDER.test(s.address)) return '';
-  return JSON.stringify(s);
-}
+export { findIcs, inviteText, fallbackParse } from './parse.js';
 
 /** Sender of older mail (stored before sender_json existed): read once from the raw headers, then kept. */
 export async function senderOf(m) {
@@ -38,28 +26,6 @@ export async function senderOf(m) {
   run('UPDATE messages SET sender_json = ? WHERE id = ?', v, m.id);
   m.sender_json = v;
   return v;
-}
-
-// Calendar data in a message: a text/calendar or .ics part (any type name senders use), calendar data recognised by its
-// content in other text parts, or inside a forwarded message (the original invitation attached as message/rfc822).
-const ICS_BLOCK = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/;
-export async function findIcs(parsed, depth = 0) {
-  const atts = parsed.attachments || [];
-  const typed = atts.find((a) => /^(text\/calendar|text\/x-vcalendar|application\/ics|application\/x-ics)/i.test(a.contentType || '') || /\.(ics|vcs)$/i.test(a.filename || ''));
-  const block = (s) => { const m = String(s || '').match(ICS_BLOCK); return m && /BEGIN:VEVENT/.test(m[0]) ? m[0] : null; };
-  if (typed) return block(typed.content.toString('utf8')) || typed.content.toString('utf8');
-  for (const a of atts) {
-    if (a.size > 5e6) continue;
-    if (/^message\/rfc822/i.test(a.contentType || '') && depth < 2) {
-      const inner = await findIcs(await parseRaw(a.content), depth + 1).catch(() => null);
-      if (inner) return inner;
-    } else if (/^(text\/|application\/octet-stream)/i.test(a.contentType || '')) {
-      const b = block(a.content.toString('utf8'));
-      if (b) return b;
-    }
-  }
-  // Some clients put the invitation in a text body part.
-  return block(parsed.text);
 }
 
 /** Invitations in older mail (stored before detection improved): looked for once when the message is opened. */
@@ -77,20 +43,6 @@ export async function icsOf(m) {
   m.calendar_ics = ics;
   if (ics && !String(m.body_text || '').trim() && !m.body_html) run('UPDATE messages SET body_text = ? WHERE id = ?', (m.body_text = inviteText(ics)), m.id);
   return ics;
-}
-
-/** Text of an invitation that has no body of its own (only calendar data): its description and location. */
-export function inviteText(ics) {
-  try {
-    const e = parseIcs(ics).events[0];
-    return e ? [e.description, e.location && `Location: ${e.location}`].filter(Boolean).join('\n\n') : '';
-  } catch { return ''; }
-}
-
-export function rawPathFor(accountId, raw) {
-  const dir = path.join(config.mailStoreDir, String(accountId));
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, sha1(raw) + '.eml');
 }
 
 export function readRaw(message) {
@@ -144,36 +96,23 @@ export function flagsToCols(flags) {
 
 export async function parseRaw(raw) {
   // Tracked: a large message keeps the CPU busy here (admin activity view).
-  return tracked('parse', 'Read email (mailparser)', { kb: Math.round(raw.length / 1024) }, () => simpleParser(raw, { skipImageLinks: true, skipTextToHtml: false, keepCidLinks: true }));
+  return tracked('parse', 'Read email (mailparser)', { kb: Math.round(raw.length / 1024) }, () => simpleParse(raw));
 }
+
+// New mail is parsed in worker threads (parse-worker.js): taking a large or tricky message apart keeps the CPU busy for
+// tens of milliseconds, during which no request would be answered. Writing it stays here: one writer, no lock waits.
+const parsers = workerPool(new URL('./parse-worker.js', import.meta.url), { name: 'Mail parsing', size: Math.max(1, Math.min(2, os.availableParallelism() - 1)) });
+// Should a worker fail (not the message: that gives the fallback in digest), the message is parsed here.
+const digestRaw = (raw, dir) => tracked('parse', 'Read email (worker)', { kb: Math.round(raw.length / 1024) },
+  () => parsers.call('digest', { raw, dir }).catch((e) => { log.warn(`parse worker: ${e.message}`); return digestAndSave(raw, dir); }));
 
 /**
  * Inserts (or updates the uid of) a message. Returns { id, isNew }.
  */
-/**
- * When a message cannot be parsed, it is stored anyway — with the headers that can be read and a note — so nothing
- * that arrived is lost; the original stays available for download.
- */
-export function fallbackParse(raw, err) {
-  const head = raw.subarray(0, 65536).toString('latin1').split(/\r?\n\r?\n/)[0].replace(/\r?\n[ \t]+/g, ' ');
-  const h = (name) => (head.match(new RegExp(`^${name}:[ \t]*(.*)$`, 'mi')) || [])[1]?.trim() || '';
-  const addr = (v) => { const m = v.match(/^(.*?)<([^>]+)>/); return m ? { value: [{ name: m[1].replace(/"/g, '').trim(), address: m[2].trim() }] } : (v ? { value: [{ name: '', address: v }] } : null); };
-  const date = new Date(h('Date'));
-  return {
-    messageId: h('Message-ID'), inReplyTo: h('In-Reply-To'), references: h('References') || undefined, subject: h('Subject') || '(message could not be read)',
-    from: addr(h('From')), to: addr(h('To')), cc: null, bcc: null, replyTo: null, date: Number.isNaN(date.getTime()) ? null : date,
-    text: `This message could not be read completely (${err.message}). Download the original to open it in another program.`, html: null, attachments: [], headers: new Map(),
-  };
-}
-
 export async function ingestMessage({ account, folder, uid, flags, raw, internalDate }) {
-  let parsed;
-  try { parsed = await parseRaw(raw); } catch (e) { parsed = fallbackParse(raw, e); }
-  const messageId = cleanId(parsed.messageId) || `${sha1(raw).slice(0, 24)}@halcyon.local`;
-  const inReplyTo = cleanId(parsed.inReplyTo);
-  let refs = parsed.references ? (Array.isArray(parsed.references) ? parsed.references : String(parsed.references).split(/\s+/)) : [];
-  refs = refs.map(cleanId).filter(Boolean);
-  if (inReplyTo && !refs.includes(inReplyTo)) refs.push(inReplyTo);
+  const d = await digestRaw(raw, path.join(config.mailStoreDir, String(account.id)));
+  const messageId = d.messageId || `${sha1(raw).slice(0, 24)}@halcyon.local`;
+  const { inReplyTo, refs, from, to, cc, bcc, replyTo, html, text, snippet, attachments, ics } = d;
 
   // Message moved locally (uid unknown) and now re-discovered → just attach the uid.
   const pendingMove = get('SELECT id FROM messages WHERE folder_id = ? AND uid IS NULL AND message_id = ?', folder.id, messageId);
@@ -184,26 +123,11 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
   const existing = get('SELECT id FROM messages WHERE folder_id = ? AND uid = ?', folder.id, uid);
   if (existing) return { id: existing.id, isNew: false };
 
-  const rawPath = rawPathFor(account.id, raw);
-  if (!fs.existsSync(rawPath)) fs.writeFileSync(rawPath, raw);
-
-  const from = addrList(parsed.from)[0] || { name: '', address: '' };
-  const to = addrList(parsed.to), cc = addrList(parsed.cc), bcc = addrList(parsed.bcc), replyTo = addrList(parsed.replyTo);
-  const html = parsed.html || null;
-  let text = parsed.text || (html ? htmlToText(html) : '');
-  const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 240);
-  const attachments = (parsed.attachments || []).map((a, i) => (
-    { index: i, filename: a.filename || `attachment-${i + 1}`, contentType: a.contentType, size: a.size, cid: a.cid || null, inline: a.contentDisposition === 'inline' && !!a.cid }));
-  const ics = await findIcs(parsed);
-  // An invitation sent as calendar data only: its description is the message.
-  if (!html && !text.trim() && ics) text = inviteText(ics);
   const realAttachments = attachments.filter((a) => !a.inline);
-  const unsub = parsed.headers.get('list-unsubscribe');
-  const unsubStr = unsub ? (typeof unsub === 'string' ? unsub : JSON.stringify(unsub)) : null;
-  const date = (parsed.date || internalDate || new Date()).getTime();
-  const key = subjectKey(parsed.subject);
+  const date = d.date || (internalDate || new Date()).getTime();
+  const key = subjectKey(d.subject);
   const threadId = resolveThreadId(account.user_id, messageId, refs, {
-    key, reply: !!refs.length || isReplySubject(parsed.subject), date, from_addr: from.address, to_json: JSON.stringify(to), cc_json: JSON.stringify(cc), own: ownAddresses(account.user_id),
+    key, reply: !!refs.length || isReplySubject(d.subject), date, from_addr: from.address, to_json: JSON.stringify(to), cc_json: JSON.stringify(cc), own: ownAddresses(account.user_id),
   });
   const f = flagsToCols(flags);
 
@@ -213,11 +137,11 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
       has_attachments, attachments_json, size, is_read, is_flagged, is_answered, is_draft, is_forwarded, raw_path, list_unsubscribe, calendar_ics, sender_json, created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       account.user_id, account.id, folder.id, uid, messageId, inReplyTo || null, JSON.stringify(refs), threadId, key,
-      parsed.subject || '', from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), JSON.stringify(replyTo),
+      d.subject, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), JSON.stringify(replyTo),
       date, snippet, text, html, realAttachments.length ? 1 : 0, JSON.stringify(attachments), raw.length,
-      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, rawPath, unsubStr, ics || '', actingSender(parsed.headers, from), now());
+      f.is_read, f.is_flagged, f.is_answered, f.is_draft, f.is_forwarded, d.rawPath, d.unsubscribe, ics, d.sender, now());
     const mid = r.lastInsertRowid;
-    run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', mid, parsed.subject || '',
+    run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', mid, d.subject,
       `${from.name} ${from.address}`, [...to, ...cc].map((a) => `${a.name} ${a.address}`).join(' '), text.slice(0, 30000));
     return mid;
   })();

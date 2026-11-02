@@ -256,6 +256,6 @@ async function afterMove(from, to, accountId = null) {
   if (accountId && get('SELECT sync_enabled FROM accounts WHERE id = ?', accountId)?.sync_enabled) await syncManager.restart(accountId);
   for (const uid of [from, to]) notify(uid, 'spaces:changed', {});
   for (const m of [...new Set([from, to].flatMap((uid) => (isShared(uid) ? membersOf(uid).map((x) => x.id) : [uid])))]) notify(m, 'shared:changed', {});
-  setImmediate(() => { try { backfillAnalysis(to); } catch (e) { log.warn(e.message); } });
+  setImmediate(() => backfillAnalysis(to).catch((e) => log.warn(e.message)));
   return { ok: true };
 }

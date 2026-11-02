@@ -34,7 +34,7 @@ export default async function aiRoutes(app) {
     const r = run('INSERT INTO ai_providers (user_id, name, type, base_url, api_key_enc, default_model, embed_model, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)',
       req.user.id, b.name || t.label, b.type, b.baseUrl || t.defaultBaseUrl, encrypt(b.apiKey), b.defaultModel || t.defaultModel, b.embedModel ?? t.defaultEmbed, now());
     resumeWaiting(req.user.id);
-    backfillAnalysis(req.user.id);
+    backfillAnalysis(req.user.id).catch((e) => req.log.error(e));
     return provOut(get('SELECT * FROM ai_providers WHERE id = ?', r.lastInsertRowid));
   });
 
@@ -106,7 +106,7 @@ export default async function aiRoutes(app) {
     // From the analyses, not messages.ai_status: that column sits after the bodies in each row, so counting it reads
     // the whole mailbox (this endpoint is polled every few seconds by Settings → AI).
     const analyzed = get('SELECT COUNT(*) AS n FROM ai_insights i JOIN messages m ON m.id = i.message_id WHERE m.user_id = ?', req.user.id).n;
-    const mem = memoryStats(req.user.id);
+    const mem = await memoryStats(req.user.id);
     const msgRows = mem.rows.filter((r) => r.kind === 'message').sort((a, b) => b.items - a.items);
     return { queue: queueStats(req.user.id), index: { count: msgRows[0]?.items || 0, model: msgRows[0]?.model || null }, memory: mem, usage, analyzed, approvals: pendingApprovalCount(req.user.id) };
   });
@@ -276,7 +276,7 @@ export default async function aiRoutes(app) {
     const facts = all('SELECT f.*, m.subject FROM facts f LEFT JOIN messages m ON m.id = f.source_message_id WHERE f.user_id = ? ORDER BY f.created_at DESC LIMIT 1000', req.user.id)
       .filter((f) => !sc || sc.owners.has(f.owner))
       .map((f) => ({ id: f.id, text: f.text, origin: f.origin, space: ownerSpace(req.user.id, f.owner, map), sourceMessageId: f.source_message_id, sourceSubject: f.subject, createdAt: f.created_at }));
-    return { stats: memoryStats(req.user.id), facts };
+    return { stats: await memoryStats(req.user.id), facts };
   });
   app.post('/api/ai/memory/facts', async (req, reply) => {
     const text = String(req.body?.text || '').trim();

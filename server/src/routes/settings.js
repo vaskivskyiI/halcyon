@@ -71,7 +71,7 @@ export default async function settingsRoutes(app) {
     const ai = ['enabled', 'autoAnalyze', 'analyzeDays', 'analyzeFolders', 'embeddings', 'routes', 'privacyMode'];
     if (ai.some((k) => JSON.stringify(s.ai[k]) !== JSON.stringify(old.ai[k]))) {
       const userId = req.user.id;
-      setImmediate(() => { try { resumeWaiting(userId); backfillAnalysis(userId); } catch (e) { req.log.error(e); } });
+      setImmediate(() => { try { resumeWaiting(userId); backfillAnalysis(userId).catch((e) => req.log.error(e)); } catch (e) { req.log.error(e); } });
     }
     return s;
   });

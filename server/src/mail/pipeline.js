@@ -1,5 +1,5 @@
 // Hooks executed after new messages are stored: contact collection, rules, AI queueing, notifications.
-import { get, all, run, json, now } from '../db/index.js';
+import { get, all, run, tx, readAll, json, now } from '../db/index.js';
 import { getSettings } from '../settings.js';
 import { applyRules } from '../rules.js';
 import { enqueue, queueMemory } from '../ai/queue.js';
@@ -21,6 +21,15 @@ const log = logger('pipeline');
 const NEVER_ANALYZE = ['\\Trash', '\\Junk', '\\Drafts'];
 // Recent mail first: priority decays with age (0–100).
 const analyzePriority = (date) => Math.max(10, Math.round(90 - ((Date.now() - date) / 864e5) * 2));
+const pause = () => new Promise((r) => setImmediate(r));
+// Many jobs at once go in transactions of a few hundred with requests answered in between: one commit per job made the
+// backfill of a large mailbox hold the whole server for half a minute.
+async function inBatches(items, fn, size = 500) {
+  for (let i = 0; i < items.length; i += size) {
+    tx(() => { for (const x of items.slice(i, i + size)) fn(x); });
+    await pause();
+  }
+}
 
 export async function afterIngest(account, folder, ids, { initial = false } = {}) {
   const settings = getSettings(account.user_id);
@@ -88,21 +97,25 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
  * while AI was off, before a provider existed, or after the analysis window/folders were widened).
  * Messages whose job failed are left alone so a broken model is not retried forever.
  */
-export function backfillAnalysis(userId) {
+export async function backfillAnalysis(userId) {
   const s = getSettings(userId);
   if (!s.ai.enabled) return 0;
   let n = 0;
   if (s.ai.autoAnalyze) {
     const folderCond = s.ai.analyzeFolders === 'all' ? "COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk', '\\Drafts')" : "f.special_use IN ('\\Inbox', '\\Sent')";
-    const rows = all(`SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id
+    const rows = await readAll(`SELECT m.id, m.date FROM messages m JOIN folders f ON f.id = m.folder_id
       WHERE m.user_id = ? AND m.date >= ? AND ${folderCond}
         AND NOT EXISTS (SELECT 1 FROM ai_insights i WHERE i.message_id = m.id)
         AND NOT EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = m.user_id AND j.type = 'analyze' AND j.ref_id = CAST(m.id AS TEXT) AND j.status != 'done')
       ORDER BY m.date DESC LIMIT 5000`, userId, Date.now() - s.ai.analyzeDays * 864e5);
-    for (const m of rows) enqueue(userId, 'analyze', m.id, analyzePriority(m.date), { force: true });
-    n += rows.length;
+    // The list is read in a worker: the user may have switched analysis off meanwhile.
+    const cur = getSettings(userId).ai;
+    if (cur.enabled && cur.autoAnalyze) {
+      await inBatches(rows, (m) => enqueue(userId, 'analyze', m.id, analyzePriority(m.date), { force: true }));
+      n += rows.length;
+    }
   }
-  if (s.ai.embeddings) n += backfillMemory(userId);
+  if (s.ai.embeddings) n += await backfillMemory(userId);
   return n;
 }
 
@@ -110,7 +123,7 @@ export function backfillAnalysis(userId) {
  * Memory catch-up: items with no memory for the current embedding model (new, changed since indexing, or indexed
  * with a previous model) and no pending job. Changing the embedding model therefore re-indexes everything.
  */
-function backfillMemory(userId) {
+async function backfillMemory(userId) {
   let model;
   try { const r = resolve(userId, 'embeddings'); model = `${r.row.type}:${r.model}`; } catch { return 0; }
   // Pending, failed, or done in the last 6 hours (done without anything to index — e.g. a summary of a conversation
@@ -119,29 +132,39 @@ function backfillMemory(userId) {
   const active = (type, ref) => `NOT EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = ? AND j.type = '${type}' AND j.ref_id = ${ref} AND (j.status IN ('queued', 'running', 'waiting', 'failed') OR (j.status = 'done' AND j.updated_at > ${recent})))`;
   const fresh = (kind, ref, changed = 'NULL') => `NOT EXISTS (SELECT 1 FROM memory x WHERE x.user_id = ? AND x.kind = '${kind}' AND x.ref_id = CAST(${ref} AS TEXT) AND x.model = ? AND (${changed} IS NULL OR x.created_at >= ${changed}))`;
   const lists = [
-    ['message', all(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
+    ['message', () => readAll(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
       AND ${fresh('message', 'm.id')} AND ${active('embed', 'CAST(m.id AS TEXT)')} ORDER BY m.date DESC LIMIT 20000`, userId, userId, model, userId)],
-    ['thread', all(`SELECT t.thread_id AS id FROM thread_summaries t WHERE t.user_id = ? AND ${fresh('thread', 't.thread_id', 't.updated_at')}
+    ['thread', () => readAll(`SELECT t.thread_id AS id FROM thread_summaries t WHERE t.user_id = ? AND ${fresh('thread', 't.thread_id', 't.updated_at')}
       AND ${active('memory', "'thread:' || t.thread_id")} LIMIT 5000`, userId, userId, model, userId)],
-    ['event', all(`SELECT e.id FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.deleted = 0 AND ${fresh('event', 'e.id', 'e.updated_at')}
+    ['event', () => readAll(`SELECT e.id FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.user_id = ? AND e.deleted = 0 AND ${fresh('event', 'e.id', 'e.updated_at')}
       AND ${active('memory', "'event:' || e.id")} ORDER BY e.start DESC LIMIT 5000`, userId, userId, model, userId)],
-    ['contact', all(`SELECT c.id FROM contacts c WHERE c.user_id = ? AND c.deleted = 0 AND (c.auto_collected = 0 OR c.favorite = 1) AND ${fresh('contact', 'c.id', 'c.updated_at')}
+    ['contact', () => readAll(`SELECT c.id FROM contacts c WHERE c.user_id = ? AND c.deleted = 0 AND (c.auto_collected = 0 OR c.favorite = 1) AND ${fresh('contact', 'c.id', 'c.updated_at')}
       AND ${active('memory', "'contact:' || c.id")} LIMIT 5000`, userId, userId, model, userId)],
-    ['fact', all(`SELECT f.id FROM facts f WHERE f.user_id = ? AND ${fresh('fact', 'f.id')} AND ${active('memory', "'fact:' || f.id")} LIMIT 5000`, userId, userId, model, userId)],
+    ['fact', () => readAll(`SELECT f.id FROM facts f WHERE f.user_id = ? AND ${fresh('fact', 'f.id')} AND ${active('memory', "'fact:' || f.id")} LIMIT 5000`, userId, userId, model, userId)],
   ];
   let n = 0;
-  for (const [kind, rows] of lists) { for (const r of rows) queueMemory(userId, kind, r.id); n += rows.length; }
+  for (const [kind, q] of lists) { const rows = await q(); await inBatches(rows, (r) => queueMemory(userId, kind, r.id)); n += rows.length; }
   return n;
 }
 
-/** Removes memory whose source no longer exists (sync deletes rows directly). Returns the number of rows removed. */
-export function purgeMemory() {
+/**
+ * Removes memory whose source no longer exists (sync deletes rows directly). Returns the number of rows removed.
+ * Goes through the table in id ranges so a large memory is not one long statement that holds the server.
+ */
+export async function purgeMemory() {
+  const gone = [
+    "kind = 'message' AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = CAST(memory.ref_id AS INTEGER))",
+    "kind = 'event' AND NOT EXISTS (SELECT 1 FROM events e WHERE e.id = CAST(memory.ref_id AS INTEGER) AND e.deleted = 0)",
+    "kind = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = CAST(memory.ref_id AS INTEGER) AND c.deleted = 0)",
+    "kind = 'fact' AND NOT EXISTS (SELECT 1 FROM facts f WHERE f.id = CAST(memory.ref_id AS INTEGER))",
+    "kind = 'thread' AND NOT EXISTS (SELECT 1 FROM thread_summaries t WHERE t.user_id = memory.user_id AND t.thread_id = memory.ref_id)",
+  ].map((c) => `(${c})`).join(' OR ');
+  const max = get('SELECT MAX(id) AS m FROM memory')?.m || 0;
   let n = 0;
-  n += run("DELETE FROM memory WHERE kind = 'message' AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = CAST(memory.ref_id AS INTEGER))").changes;
-  n += run("DELETE FROM memory WHERE kind = 'event' AND NOT EXISTS (SELECT 1 FROM events e WHERE e.id = CAST(memory.ref_id AS INTEGER) AND e.deleted = 0)").changes;
-  n += run("DELETE FROM memory WHERE kind = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = CAST(memory.ref_id AS INTEGER) AND c.deleted = 0)").changes;
-  n += run("DELETE FROM memory WHERE kind = 'fact' AND NOT EXISTS (SELECT 1 FROM facts f WHERE f.id = CAST(memory.ref_id AS INTEGER))").changes;
-  n += run("DELETE FROM memory WHERE kind = 'thread' AND NOT EXISTS (SELECT 1 FROM thread_summaries t WHERE t.user_id = memory.user_id AND t.thread_id = memory.ref_id)").changes;
+  for (let from = 0; from < max; from += 4000) {
+    n += run(`DELETE FROM memory WHERE id > ? AND id <= ? AND (${gone})`, from, from + 4000).changes;
+    await pause();
+  }
   if (n) invalidateAll();
   return n;
 }

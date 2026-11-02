@@ -9,7 +9,7 @@ import { config } from './config.js';
 import './db/index.js';
 import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from './auth.js';
 import { recordTiming } from './util/metrics.js';
-import { recordRequest } from './util/activity.js';
+import { recordRequest, requestStart, timeHandler } from './util/activity.js';
 import diagnosticsRoutes from './routes/diagnostics.js';
 import threadRoutes from './routes/threads.js';
 import senderRoutes from './routes/senders.js';
@@ -46,9 +46,11 @@ export async function buildServer({ background = true } = {}) {
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket);
 
+  app.addHook('onRoute', timeHandler);
   // Read-only sessions are enforced here, before any route runs (see auth.js readOnlyBlocks).
   app.addHook('onRequest', async (req, reply) => {
     req.t0 = performance.now();
+    requestStart(req);
     if (!req.url.startsWith('/api/')) return;
     if (!sessionFromRequest(req)?.read_only) return;
     req.readOnly = true;

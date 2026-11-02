@@ -925,7 +925,7 @@ export default async function mailRoutes(app) {
       const query = await embedQuery(uid, words.join(' '));
       if (!query) return { items: [], unavailable: true };
       const exclude = new Set(ids(req.query.exclude));
-      const hits = messageHits(uid, query, 40, sc).filter((h) => !exclude.has(h.id) && h.score > 0.3);
+      const hits = (await messageHits(uid, query, 40, sc)).filter((h) => !exclude.has(h.id) && h.score > 0.3);
       if (!hits.length) return { items: [] };
       const { where, params } = buildWhere(uid, { ...f, terms: [], bodyTerms: [] }, sc);
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));

@@ -302,8 +302,8 @@ export default async function accountRoutes(app) {
     // Nothing learned from a removed account stays in the AI memory.
     run('DELETE FROM memory WHERE user_id = ? AND owner = ?', req.user.id, `a:${a.id}`);
     run('DELETE FROM facts WHERE user_id = ? AND owner = ?', req.user.id, `a:${a.id}`);
-    purgeMemory();
     invalidate(req.user.id);
+    purgeMemory().catch((e) => req.log.error(e));
     return { ok: true };
   });
 

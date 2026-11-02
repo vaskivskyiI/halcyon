@@ -264,10 +264,11 @@ const sentFolder = (accountId) => mailFolder(accountId, '\\Sent');
 /** Last SMTP result per account (shown in Settings → Accounts). */
 export const smtpStatus = new Map();
 
-let busy = false, busySince = 0;
+let busy = false, busySince = 0, again = false;
 export async function processOutbox() {
-  // One run at a time; a run stuck for 20 minutes (a hung connection) does not block the outbox for ever.
-  if (busy && now() - busySince < 20 * 60e3) return;
+  // One run at a time; a run stuck for 20 minutes (a hung connection) does not block the outbox for ever. A message
+  // queued meanwhile is sent by another run right after this one, not on the next scheduler tick.
+  if (busy && now() - busySince < 20 * 60e3) { again = true; return; }
   busy = true; busySince = now();
   try {
     // Interrupted while sending (server restarted): not resent automatically (it may have gone out) — the user decides.
@@ -302,5 +303,8 @@ export async function processOutbox() {
     }
     // Keep sent outbox entries for a day for the UI, then clear.
     run("DELETE FROM outbox WHERE status = 'sent' AND sent_at < ?", now() - 864e5);
-  } finally { busy = false; }
+  } finally {
+    busy = false;
+    if (again) { again = false; setImmediate(() => processOutbox().catch((e) => log.warn(`outbox: ${e.message}`))); }
+  }
 }

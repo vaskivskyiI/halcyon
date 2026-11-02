@@ -41,7 +41,7 @@ export async function buildContext(userId, question, sc, { mails = 8 } = {}) {
   const accIn = inIds('m.account_id', sc?.accountIds);
   const query = await embedQuery(userId, question);
   // Ranking matters more than absolute scores (embedding models differ in their similarity baseline).
-  const hits = query ? searchMemory(userId, query.vector, query.model, { k: 80, owners: sc?.owners || null, minScore: 0.1 }) : [];
+  const hits = query ? await searchMemory(userId, query.vector, query.model, { k: 80, owners: sc?.owners || null, minScore: 0.1 }) : [];
   const byKind = (k) => hits.filter((h) => h.kind === k);
 
   // Emails: reciprocal-rank fusion of keyword matches and the best semantic chunk per message, weighted by age

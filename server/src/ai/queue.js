@@ -124,8 +124,9 @@ function tick() {
 }
 
 export function resumeWaiting(userId) {
-  run(`UPDATE messages SET ai_status = 'pending' WHERE user_id = ? AND ai_status IN ('waiting', 'failed') AND CAST(id AS TEXT) IN
-    (SELECT ref_id FROM ai_jobs WHERE user_id = ? AND type = 'analyze' AND status IN ('waiting', 'failed'))`, userId, userId);
+  // From the jobs (indexed) to their messages: not a pass over every message of the user.
+  run(`UPDATE messages SET ai_status = 'pending' WHERE id IN (SELECT CAST(ref_id AS INTEGER) FROM ai_jobs WHERE user_id = ? AND type = 'analyze'
+    AND status IN ('waiting', 'failed')) AND user_id = ? AND ai_status IN ('waiting', 'failed')`, userId, userId);
   run("UPDATE ai_jobs SET status = 'queued', attempts = 0, run_after = 0 WHERE user_id = ? AND status IN ('waiting', 'failed')", userId);
   kick();
 }

@@ -199,14 +199,14 @@ export function startScheduler() {
   const davAll = job('Start calendar & contacts syncs', () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); });
   setTimeout(davAll, 5e3).unref();
   // Catch up on mail that was never queued for AI (e.g. arrived while AI was off); cheap when nothing is missing.
-  const backfillAll = job('AI backfill check', () => { for (const u of all('SELECT id FROM users')) { try { backfillAnalysis(u.id); } catch (e) { log.error(e); } } });
+  const backfillAll = job('AI backfill check', async () => { for (const u of all('SELECT id FROM users')) { try { await backfillAnalysis(u.id); } catch (e) { log.error(e); } } });
   setTimeout(backfillAll, 15e3).unref();
   setTimeout(job('Regroup conversations', regroupConversations), 20e3).unref();
   setTimeout(job('Mark replied history', markRepliedHistory), 40e3).unref();
   setTimeout(job('Re-analyse open items', () => { reanalyzeOpen(); reanalyzeItems(); }), 50e3).unref();
   setInterval(job('Database optimise', () => db.pragma('optimize')), 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
-  setInterval(job('Purge memory', () => { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); }), 3600e3).unref();
+  setInterval(job('Purge memory', async () => { await purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); }), 3600e3).unref();
   setInterval(job('Expire insights', expireInsights), 2 * 60e3).unref();
   setInterval(job('Clean uploads', cleanUploads), 864e5).unref();
   // Linked event copies follow their originals (subscriptions and server calendars change them in the background).
