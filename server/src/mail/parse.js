@@ -16,7 +16,8 @@ const SYSTEM_SENDER = /(^|[-_.+])(bounces?|owner|request|noreply|no-reply|donotr
 export function actingSender(headers, from) {
   const s = addrList(headers.get('sender'))[0];
   if (!s || s.address === String(from.address || '').toLowerCase()) return '';
-  if (headers.has('list-id') || headers.has('list-post') || SYSTEM_SENDER.test(s.address)) return '';
+  const list = headers.get('list') || {}; // mailparser folds the List-* headers into one object
+  if (list.id || list.post || SYSTEM_SENDER.test(s.address)) return '';
   return JSON.stringify(s);
 }
 
@@ -68,6 +69,18 @@ export function fallbackParse(raw, err) {
   };
 }
 
+/** A header's value as sent (unfolded), from mailparser's headerLines; null when absent. */
+export function headerValue(lines, key) {
+  const l = (lines || []).find((x) => x.key === key);
+  return l ? l.line.slice(l.line.indexOf(':') + 1).replace(/\r?\n[ \t]+/g, ' ').trim() || null : null;
+}
+
+/** The same from the header block of a raw message (a Buffer of at least its headers). */
+export function rawHeaderValue(raw, name) {
+  const head = raw.toString('latin1').split(/\r?\n\r?\n/)[0].replace(/\r?\n[ \t]+/g, ' ');
+  return head.match(new RegExp(`^${name}:[ \t]*(.*)$`, 'mi'))?.[1].trim() || null;
+}
+
 /** Everything ingest stores from a raw message, as plain values (it crosses from the worker thread). */
 export async function digest(raw) {
   let parsed;
@@ -84,12 +97,13 @@ export async function digest(raw) {
   const ics = (await findIcs(parsed)) || '';
   // An invitation sent as calendar data only: its description is the message.
   if (!html && !text.trim() && ics) text = inviteText(ics);
-  const unsub = parsed.headers.get('list-unsubscribe');
+  // Not headers.get('list-unsubscribe'): mailparser folds it into headers.get('list') as an object.
+  const unsub = headerValue(parsed.headerLines, 'list-unsubscribe');
   return {
     messageId: cleanId(parsed.messageId), inReplyTo, refs, subject: parsed.subject || '', from,
     to: addrList(parsed.to), cc: addrList(parsed.cc), bcc: addrList(parsed.bcc), replyTo: addrList(parsed.replyTo),
     date: parsed.date ? parsed.date.getTime() : null, html, text, snippet: text.replace(/\s+/g, ' ').trim().slice(0, 240), attachments, ics,
-    unsubscribe: unsub ? (typeof unsub === 'string' ? unsub : JSON.stringify(unsub)) : null, sender: actingSender(parsed.headers, from),
+    unsubscribe: unsub, sender: actingSender(parsed.headers, from),
   };
 }
 

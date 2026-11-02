@@ -8,7 +8,7 @@ import { syncCalDav } from './calendar/caldav.js';
 import { dropStarters } from './bootstrap.js';
 import { syncCardDav } from './contacts/carddav.js';
 import { enqueue } from './ai/queue.js';
-import { backfillAnalysis, purgeMemory } from './mail/pipeline.js';
+import { backfillAnalysis, purgeMemory, backfillUnsubscribe } from './mail/pipeline.js';
 import { listSpaces } from './spaces.js';
 import { expireInsights, reanalyzeOpen, reanalyzeItems } from './ai/tasks.js';
 import { seedCorrespondents, scheduleProfiles } from './ai/profiles.js';
@@ -203,6 +203,7 @@ export function startScheduler() {
   setTimeout(backfillAll, 15e3).unref();
   setTimeout(job('Regroup conversations', regroupConversations), 20e3).unref();
   setTimeout(job('Mark replied history', markRepliedHistory), 40e3).unref();
+  setTimeout(job('Unsubscribe headers of stored mail', backfillUnsubscribe), 45e3).unref();
   setTimeout(job('Re-analyse open items', () => { reanalyzeOpen(); reanalyzeItems(); }), 50e3).unref();
   setInterval(job('Database optimise', () => db.pragma('optimize')), 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();

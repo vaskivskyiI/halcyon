@@ -16,6 +16,8 @@ import { noteCorrespondence } from '../ai/profiles.js';
 import { markReplied } from '../ai/open-items.js';
 import { autoReply, applyMuted } from './extras.js';
 import { notifyUser } from '../notifications.js';
+import { rawHeaderValue } from './parse.js';
+import fs from 'node:fs/promises';
 
 const log = logger('pipeline');
 const NEVER_ANALYZE = ['\\Trash', '\\Junk', '\\Drafts'];
@@ -166,6 +168,38 @@ export async function purgeMemory() {
     await pause();
   }
   if (n) invalidateAll();
+  return n;
+}
+
+/**
+ * List-Unsubscribe was never stored before (mailparser hides it under 'list'): fill it in once from the originals.
+ * Only each file's header block is read, a few hundred messages at a time; progress survives a restart.
+ */
+export async function backfillUnsubscribe() {
+  const key = 'unsub:v1';
+  let from = Number(get('SELECT value FROM app_state WHERE key = ?', key)?.value ?? 0);
+  if (from < 0) return 0;
+  let n = 0;
+  for (;;) {
+    const rows = all('SELECT id, raw_path FROM messages WHERE id > ? AND list_unsubscribe IS NULL AND raw_path IS NOT NULL ORDER BY id LIMIT 300', from);
+    if (!rows.length) break;
+    const found = [];
+    for (const r of rows) {
+      let fh;
+      try {
+        fh = await fs.open(r.raw_path, 'r');
+        const { buffer, bytesRead } = await fh.read(Buffer.alloc(65536), 0, 65536, 0);
+        const v = rawHeaderValue(buffer.subarray(0, bytesRead), 'List-Unsubscribe');
+        if (v) found.push([v, r.id]);
+      } catch { /* original gone: nothing to fill in */ } finally { await fh?.close(); }
+    }
+    from = rows.at(-1).id;
+    tx(() => { for (const [v, id] of found) run('UPDATE messages SET list_unsubscribe = ? WHERE id = ? AND list_unsubscribe IS NULL', v, id); });
+    run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', key, String(from));
+    n += found.length;
+    await pause();
+  }
+  run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', key, '-1');
   return n;
 }
 
