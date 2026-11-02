@@ -345,6 +345,9 @@ function MessageList({ view, openId, onMenu }) {
   const pullStart = useRef(null);
   const folders = store.use((s) => s.folders);
   const [items, setItems] = useState([]);
+  // The search (or none: '') the list now shows. Until the results of a new search arrive, the list it replaces is
+  // hidden: it is not what was asked for.
+  const [itemsFor, setItemsFor] = useState('');
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [tab, setTabState] = useState(() => tabByView.get(view) || null);
@@ -431,6 +434,7 @@ function MessageList({ view, openId, onMenu }) {
 
   const load = useCallback(async (append = false) => {
     setLoading(true);
+    const q = activeQuery;
     try {
       const before = append && items.length && byDate ? items[items.length - 1].date : null;
       const r = await api.get(`/api/messages?${params(before, append ? items.length : 0)}`);
@@ -449,21 +453,20 @@ function MessageList({ view, openId, onMenu }) {
         const shown = new Set(r.items.map((m) => m.id));
         setAiResults((cur) => (cur?.items ? { ...cur, items: cur.items.filter((m) => !shown.has(m.id)) } : cur));
       } else if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
-        const q = activeQuery;
         aiQuery.current = q;
         setAiResults({ status: 'loading', items: [] });
         api.get(`/api/search/semantic?q=${encodeURIComponent(q)}&exclude=${r.items.map((m) => m.id).join(',')}`)
           .then((s) => { if (aiQuery.current === q) setAiResults({ status: s.unavailable ? 'unavailable' : 'done', items: s.items }); })
           .catch(() => { if (aiQuery.current === q) setAiResults({ status: 'unavailable', items: [] }); });
       } else if (!activeQuery) { aiQuery.current = ''; setAiResults(null); }
-    } catch (e) { toastError(e); } finally { setLoading(false); }
+    } catch (e) { toastError(e); if (!append && q) setItems([]); } finally { setLoading(false); if (!append) setItemsFor(q); }
   }, [params, items]);
 
   useEffect(() => {
     // Last loaded state of this list is shown at once (and its scroll position), then refreshed.
     const c = !activeQuery && listCache.get(cacheKey);
     if (c) {
-      setItems(c.items); setHasMore(c.hasMore);
+      setItems(c.items); setHasMore(c.hasMore); setItemsFor('');
       requestAnimationFrame(() => { if (listRef.current) listRef.current.scrollTop = c.scroll || 0; });
     }
     load(false);
@@ -691,8 +694,9 @@ function MessageList({ view, openId, onMenu }) {
   }, [view, folders]);
 
   const bulk = selected.size > 0;
-  const showAi = !!activeQuery && !!aiResults && (searchTab ? searchTab === 'ai' : !items.length && !loading && aiResults.items.length > 0);
-  const shownItems = activeQuery ? sortResults(items, searchSort.mail) : items;
+  const searching = itemsFor !== activeQuery;
+  const showAi = !searching && !!activeQuery && !!aiResults && (searchTab ? searchTab === 'ai' : !items.length && !loading && aiResults.items.length > 0);
+  const shownItems = searching ? [] : activeQuery ? sortResults(items, searchSort.mail) : items;
   const aiItems = aiResults ? sortResults(aiResults.items, searchSort.ai) : [];
   const resultsTab = showAi ? 'ai' : 'mail';
   const rs = searchSort[resultsTab];
@@ -718,12 +722,12 @@ function MessageList({ view, openId, onMenu }) {
           {query && <button type="button" className="icon-btn" style={{ position: 'absolute', right: 2, top: 1 }} onClick={() => { setQuery(''); setActiveQuery(''); }}><X size={15} /></button>}
         </form>
         {(filtersOpen || activeQuery) && <SearchFilters query={query} onChange={(q) => { setQuery(q); setActiveQuery(q.trim()); }} />}
-        {activeQuery && aiResults && <div className="tabs">
+        {activeQuery && aiResults && !searching && <div className="tabs">
           <button className={`tab ${showAi ? '' : 'active'}`} onClick={() => setSearchTab('mail')}>Results<TabCount n={hasMore ? 0 : items.length} /></button>
           <button className={`tab ${showAi ? 'active' : ''}`} title="Mail related by meaning, found by the AI" onClick={() => setSearchTab('ai')}><Sparkles size={13} /> AI{aiResults.status === 'loading' ? <> <Spinner size={11} /></> : <TabCount n={aiResults.items.length} />}</button>
           {searchSortBtn}
         </div>}
-        {activeQuery && !aiResults && <div className="tabs"><span className="grow" />{searchSortBtn}</div>}
+        {activeQuery && !aiResults && !searching && <div className="tabs"><span className="grow" />{searchSortBtn}</div>}
         {!activeQuery && <div className="tabs">
           {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${effectiveTab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused<TabCount n={tabCounts?.focused} /></button><button className={`tab ${effectiveTab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other<TabCount n={tabCounts?.other} /></button></>}
           <button className={`tab ${effectiveTab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All<TabCount n={tabCounts?.all} /></button>
@@ -761,7 +765,7 @@ function MessageList({ view, openId, onMenu }) {
         {!showAi && pinned.length > 0 && <div className="list-group"><Pin size={12} /> Pinned · {pinned.length}</div>}
         {!showAi && pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
-        {!showAi && pinned.length > 0 && items.length > 0 && <div className="list-group">Everything else</div>}
+        {!showAi && pinned.length > 0 && shownItems.length > 0 && <div className="list-group">Everything else</div>}
         {!showAi && shownItems.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}
@@ -772,9 +776,9 @@ function MessageList({ view, openId, onMenu }) {
           {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
           {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
         </div>}
-        {!showAi && !items.length && !loading && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
-        {loading && items.length === 0 && <div className="empty"><Spinner size={22} /></div>}
-        {!showAi && hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
+        {!showAi && !searching && !items.length && !loading && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
+        {searching && activeQuery ? <div className="empty"><Spinner size={22} />Searching…</div> : (searching || (loading && items.length === 0)) && <div className="empty"><Spinner size={22} /></div>}
+        {!showAi && !searching && hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
       </div>
       {menuNode}
     </section>
