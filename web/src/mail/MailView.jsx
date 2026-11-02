@@ -10,6 +10,7 @@ import { BackButton } from '../back.js';
 import { extraMenuItems, archives } from './extras.js';
 import { navigate, fmtListDate, toast, toastError } from '../util.js';
 import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
+import { useDismiss } from '../dismiss.js';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
 import Reader from './Reader.jsx';
@@ -519,6 +520,9 @@ function MessageList({ view, openId, onMenu }) {
   const typed = query.trim().toLowerCase();
   const recentShown = recentOpen ? recent.filter((q) => q.toLowerCase() !== typed && q.toLowerCase().includes(typed)).slice(0, 8) : [];
   const runRecent = (q) => { setQuery(q); setActiveQuery(q); setRecentOpen(false); searchRef.current?.blur(); };
+  // On a phone the field can keep focus when tapping beside it (no blur), so a tap outside closes the list too.
+  const searchForm = useRef();
+  useDismiss(searchForm, () => setRecentOpen(false), recentShown.length > 0, { swallow: false });
   const recentKeys = (e) => {
     if (!recentShown.length) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = recentShown.length; setRecentAt((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i <= 0 ? n : i) - 1)); }
@@ -760,7 +764,7 @@ function MessageList({ view, openId, onMenu }) {
           <button className="icon-btn" title="Check for new mail" onClick={() => { window.dispatchEvent(new Event('halcyon:sync')); load(false); }}>{loading ? <Spinner /> : <RefreshCw size={16} />}</button>
           <button className="icon-btn" title={threaded ? 'Conversation view: on' : 'Conversation view: off'} onClick={() => saveSettings({ ui: { conversationView: !threaded } })}><MailIcon size={16} /></button>
         </div>
-        <form className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); setRecentOpen(false); }}>
+        <form ref={searchForm} className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); setRecentOpen(false); }}>
           <Search size={15} />
           <input ref={searchRef} className="input" placeholder='Search mail — words, or from:anna received:"last week" hasattachments:yes' value={query}
             onChange={(e) => { setQuery(e.target.value); setRecentOpen(true); setRecentAt(-1); if (!e.target.value) setActiveQuery(''); }}

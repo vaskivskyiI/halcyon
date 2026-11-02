@@ -705,3 +705,54 @@ a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display
 .home-notes-quick { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
 .home-note { display: flex; flex-direction: column; min-width: 0; padding: 7px 6px; margin: 0 -6px; border-radius: 8px; color: inherit; text-decoration: none; }
 .home-note:hover { background: var(--hover); }
+/* Touch screens (phones, tablets, the Android app): a finger needs about 40-44 px to hit a control, and icons drawn
+   for a mouse at 12-16 px are hard to see. Icon sizes given in the code are overridden here (CSS beats the SVG's
+   width/height attributes, min-* beats an inline width), so the look with a mouse stays as it is. */
+@media (pointer: coarse) {
+  .icon-btn, .icon-btn.inline { min-width: 40px; min-height: 40px; }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .icon-btn.inline { vertical-align: middle; margin: -8px 0; }
+  .icon-btn.inline svg { width: 18px; height: 18px; }
+  .btn { min-height: 40px; padding: 0 14px; }
+  .btn.sm { min-height: 34px; padding: 0 11px; font-size: 13px; }
+  .btn svg { width: 18px; height: 18px; }
+  .btn.sm svg { width: 16px; height: 16px; }
+  .rail button svg { width: 22px; height: 22px; }
+  .nav-item { min-height: 44px; }
+  .nav-item svg { width: 18px; height: 18px; }
+  .nav-section.account-head .head-more { width: 36px; height: 36px; opacity: .7; }
+  .tab { min-height: 44px; padding: 10px 12px; }
+  .chip.clickable, button.chip, .chip.service.add { min-height: 32px; padding: 0 12px; border-radius: 16px; font-size: 12.5px; gap: 5px; }
+  .chip.clickable svg, button.chip svg { width: 15px; height: 15px; }
+  .recent-chip { height: auto; font-size: 12.5px; }
+  .msg-row .meta .chip.clickable { min-height: 26px; padding: 0 9px; }
+  .search > svg { top: 12px; }
+  .search .icon-btn svg { left: 10px; top: 10px; }
+  /* Small × and similar buttons inside chips and recipients: a bigger target without making the chip taller. */
+  .chip .icon-btn, .recipient button { min-width: 36px; min-height: 36px; margin: -8px -6px -8px -2px; display: inline-grid; place-items: center; }
+  .chip .icon-btn svg, .recipient button svg { width: 16px; height: 16px; }
+  .recipient { height: 32px; font-size: 13.5px; }
+  .att-chip { padding: 7px 12px; font-size: 13px; }
+  .quote-toggle { padding: 8px 14px; font-size: 13px; }
+  input[type=checkbox]:not(.switch input), input[type=radio] { width: 22px; height: 22px; }
+  .task-row input[type=checkbox] { width: 24px; height: 24px; }
+  .switch input[type=checkbox] { width: 46px; height: 28px; border-radius: 14px; }
+  .switch input[type=checkbox]::after { width: 22px; height: 22px; }
+  .switch input[type=checkbox]:checked::after { left: 21px; }
+  .input, select.input { min-height: 40px; }
+  /* Menus: taller rows, more room between them, larger icons. */
+  .menu { padding: 6px; }
+  .menu button { min-height: 46px; padding: 10px 14px; gap: 12px; font-size: 15px; }
+  .menu button svg { width: 20px; height: 20px; flex: none; }
+  .menu .label { padding: 10px 14px 4px; font-size: 12px; }
+  .menu .sep { margin: 6px 0; }
+  .suggest div { padding: 11px 12px; }
+  .suggest .icon-btn { margin: -10px -6px -10px 0; }
+  .palette-item { min-height: 46px; padding: 10px; font-size: 15px; }
+  .palette-item svg { width: 20px; height: 20px; }
+  .toast button { min-height: 40px; min-width: 40px; padding: 0 8px; }
+  .toast button svg { width: 18px; height: 18px; }
+  .reader-toolbar { gap: 4px; }
+  .modal-head .icon-btn { min-width: 44px; min-height: 44px; }
+  .home-event .note-link { width: 40px; height: 40px; }
+}

@@ -6,6 +6,7 @@ import {
 import { api } from '../api.js';
 import { store } from '../store.js';
 import { navigate } from '../util.js';
+import { useDismiss } from '../dismiss.js';
 import { setSpace } from '../data.js';
 import { openComposer } from '../mail/Composer.jsx';
 
@@ -55,6 +56,8 @@ export default function CommandPalette() {
   }, [q, open]);
 
   const close = () => setOpen(false);
+  const box = useRef();
+  useDismiss(box, close, open);
   const go = (hash) => { navigate(hash); close(); };
   const items = useMemo(() => {
     if (!open) return [];
@@ -95,8 +98,8 @@ export default function CommandPalette() {
   };
   let last = null;
   return (
-    <div className="palette-backdrop" onMouseDown={close}>
-      <div className="palette" role="dialog" aria-label="Go to or do" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="palette-backdrop">
+      <div ref={box} className="palette" role="dialog" aria-label="Go to or do">
         <div className="palette-input"><Search size={16} />
           <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKeyDown} placeholder="Go to, do, find mail or people, ask…" aria-label="Command" />
           <kbd>Esc</kbd></div>

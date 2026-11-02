@@ -7,6 +7,7 @@ import { api, stream } from '../api.js';
 import { store } from '../store.js';
 import { toast, toastError, textToHtml, escapeHtml, addrFull, fileToBase64, fmtSize, fmtFull, htmlToText, toLocalInput } from '../util.js';
 import { useMenu, Spinner, Modal } from '../components/common.jsx';
+import { useDismiss } from '../dismiss.js';
 import { afterSend } from './mailActions.js';
 
 let seq = 0;
@@ -103,6 +104,9 @@ function RecipientInput({ value, onChange, autoFocus }) {
     setText(''); setSugs([]);
   };
   const choose = (s) => { onChange([...value, { name: s.name, address: s.address }]); setText(''); setSugs([]); };
+  const box = useRef();
+  // Suggestions go away on a tap elsewhere; that tap still does what it was for (no swallowing beside a text field).
+  useDismiss(box, () => setSugs([]), sugs.length > 0, { swallow: false });
   useEffect(() => {
     clearTimeout(timer.current);
     setSugs([]);
@@ -114,7 +118,7 @@ function RecipientInput({ value, onChange, autoFocus }) {
     }).catch(() => {}), 120);
   }, [text]);
   return (
-    <div className="recipients">
+    <div className="recipients" ref={box}>
       {value.map((a, i) => (
         <span key={a.address + i} className={`recipient ${validEmail(a.address) ? '' : 'invalid'}`} title={a.address}>
           {a.name || a.address}<button type="button" onClick={() => onChange(value.filter((_, j) => j !== i))}><X size={12} /></button>

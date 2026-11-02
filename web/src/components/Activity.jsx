@@ -1,10 +1,11 @@
 // The sync button: starts a sync, and shows what is running — mail per account, AI work, archive jobs.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RefreshCw, Mail, Sparkles, Archive, X } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { Spinner } from './common.jsx';
+import { useDismiss } from '../dismiss.js';
 
 const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s} s` : `${Math.round(s / 60)} min`; };
 const secs = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
@@ -17,6 +18,8 @@ export function Activity({ syncing, onSync }) {
   const connected = store.use((s) => s.connected);
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null);
+  const btn = useRef(), panel = useRef();
+  useDismiss([btn, panel], () => setOpen(false), open, { ignore: '.menu, .modal-back, .toasts' });
   useEffect(() => {
     let timer = null, live = true;
     const load = () => api.get('/api/activity').then((d) => { if (live) setData(d); }).catch(() => {});
@@ -30,9 +33,9 @@ export function Activity({ syncing, onSync }) {
   const busy = syncing || running.length > 0 || (data?.ai.running.length || 0) + (data?.archives.length || 0) > 0;
   const queued = (data?.ai.queued || []).reduce((n, q) => n + q.n, 0);
   return <>
-    <button title={connected ? 'Sync and activity' : 'Live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'} aria-label="Sync and activity" onClick={() => setOpen(!open)} className={connected ? '' : 'offline'}>
+    <button ref={btn} title={connected ? 'Sync and activity' : 'Live updates are not connected (refreshing every 30 s). If this persists, the reverse proxy probably does not pass WebSockets for /api/ws.'} aria-label="Sync and activity" onClick={() => setOpen(!open)} className={connected ? '' : 'offline'}>
       {syncing ? <Spinner size={18} /> : <RefreshCw size={19} />}{!connected && <span className="offline-dot" />}{!connected ? null : busy && !syncing && <span className="activity-dot" />}</button>
-    {open && createPortal(<div className="activity-panel" role="dialog" aria-label="Activity">
+    {open && createPortal(<div ref={panel} className="activity-panel" role="dialog" aria-label="Activity">
       <div className="activity-head"><b className="grow">Activity</b><button className="btn sm primary" disabled={syncing} onClick={onSync}>{syncing ? <Spinner size={13} /> : <RefreshCw size={13} />} Sync now</button>
         <button className="icon-btn" aria-label="Close" onClick={() => setOpen(false)}><X size={15} /></button></div>
       {!data ? <div className="empty"><Spinner size={18} /></div> : <>

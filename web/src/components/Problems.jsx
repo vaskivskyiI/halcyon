@@ -4,6 +4,7 @@ import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { toast, toastError, navigate } from '../util.js';
 import { Spinner } from './common.jsx';
+import { useDismiss } from '../dismiss.js';
 
 // Mail server / sending problems, never silent: a red indicator in the rail with a panel that offers what can be done
 // (retry, save for later as a draft, reconnect). New problems also show a toast once.
@@ -40,6 +41,8 @@ export default function Problems() {
   const open = store.use((s) => s.problemsOpen);
   const known = useRef(null);
   const timer = useRef();
+  const btn = useRef(), panel = useRef();
+  useDismiss([btn, panel], () => store.set({ problemsOpen: false }), open, { ignore: '.menu, .modal-back, .toasts' });
 
   const load = () => api.get('/api/status/problems').then((r) => {
     setProblems(r.problems);
@@ -84,12 +87,12 @@ export default function Problems() {
   if (!problems.length) return null;
   return <>
     {problems.length > 0 && (
-      <button className={`problems-btn ${errors ? 'error' : 'warn'}`} title={`${problems.length} problem${problems.length > 1 ? 's' : ''} with mail servers or sending`} aria-label="Problems" onClick={() => store.set({ problemsOpen: !open })}>
+      <button ref={btn} className={`problems-btn ${errors ? 'error' : 'warn'}`} title={`${problems.length} problem${problems.length > 1 ? 's' : ''} with mail servers or sending`} aria-label="Problems" onClick={() => store.set({ problemsOpen: !open })}>
         <AlertTriangle size={19} /><span className="badge">{problems.length}</span>
       </button>
     )}
     {open && (
-      <div className="problems-panel" role="dialog" aria-label="Problems">
+      <div ref={panel} className="problems-panel" role="dialog" aria-label="Problems">
         <div className="row"><b className="grow">Mail servers and sending</b>
           {problems.length > 1 && <button className="btn sm" title="Hide all these problems until they change or happen again — nothing is retried or deleted" onClick={() => dismiss()}><EyeOff size={13} /> Dismiss all</button>}
           <button className="icon-btn" onClick={() => store.set({ problemsOpen: false })} aria-label="Close"><X size={16} /></button></div>

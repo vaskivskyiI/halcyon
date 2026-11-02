@@ -5,6 +5,7 @@ import DOMPurify from 'dompurify';
 import { X } from 'lucide-react';
 import { store } from '../store.js';
 import { dismissToast, initials, colorFor } from '../util.js';
+import { useDismiss } from '../dismiss.js';
 
 export function Modal({ title, onClose, children, footer, wide }) {
   useEffect(() => {
@@ -23,20 +24,15 @@ export function Modal({ title, onClose, children, footer, wide }) {
 }
 
 /** Dropdown/context menu anchored at {x,y} or to an element. items: [{label, icon, onClick, danger} | {section} | 'sep'] */
-export function Menu({ at, items, onClose }) {
+export function Menu({ at, items, onClose, anchor }) {
   const ref = useRef();
   const [pos, setPos] = useState({ left: at.x, top: at.y });
   useLayoutEffect(() => {
     const r = ref.current.getBoundingClientRect();
     setPos({ left: Math.max(8, Math.min(at.x, innerWidth - r.width - 8)), top: Math.max(8, Math.min(at.y, innerHeight - r.height - 8)) });
   }, [at.x, at.y]);
-  useEffect(() => {
-    const close = (e) => { if (!ref.current?.contains(e.target)) onClose(); };
-    const key = (e) => e.key === 'Escape' && onClose();
-    setTimeout(() => window.addEventListener('mousedown', close), 0);
-    window.addEventListener('keydown', key);
-    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', key); };
-  }, [onClose]);
+  // The button that opened it is not "outside": tapping it again closes the menu (useMenu), not close-and-reopen.
+  useDismiss([ref, anchor], onClose);
   return createPortal(
     <div className="menu" ref={ref} style={pos}>
       {items.filter(Boolean).map((it, i) => it === 'sep' ? <div key={i} className="sep" /> : it.section ? <div key={i} className="label">{it.section}</div> : (
@@ -51,10 +47,13 @@ export function useMenu() {
   const [menu, setMenu] = useState(null);
   const open = (e, items) => {
     e.preventDefault(); e.stopPropagation();
-    const r = e.currentTarget?.getBoundingClientRect?.();
-    setMenu({ at: e.type === 'contextmenu' || !r ? { x: e.clientX, y: e.clientY } : { x: r.left, y: r.bottom + 4 }, items });
+    const el = e.currentTarget, r = el?.getBoundingClientRect?.();
+    const ctx = e.type === 'contextmenu' || !r;
+    // A second click on the button that opened the menu closes it.
+    if (!ctx && menu?.anchor && menu.anchor === el) { setMenu(null); return; }
+    setMenu({ at: ctx ? { x: e.clientX, y: e.clientY } : { x: r.left, y: r.bottom + 4 }, items, anchor: ctx ? null : el });
   };
-  const node = menu && <Menu at={menu.at} items={menu.items} onClose={() => setMenu(null)} />;
+  const node = menu && <Menu at={menu.at} items={menu.items} anchor={menu.anchor} onClose={() => setMenu(null)} />;
   return [open, node];
 }
 

@@ -10,6 +10,7 @@ import { BackButton, jump } from '../back.js';
 import { extraMenuItems, runQuickStep } from './extras.js';
 import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, textToHtml, escapeHtml, CATEGORY_COLORS } from '../util.js';
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
+import { useDismiss } from '../dismiss.js';
 import { openComposer, replyPayload, Composer } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
@@ -647,6 +648,9 @@ function AiCard({ floating = false, ins, summary, count, latest, onReply, onEven
   const [peek, setPeek] = useState(false);
   const isFolded = floating ? !peek : folded;
   const toggle = floating ? () => setPeek(!peek) : fold;
+  // Opened, the floating copy lies over the messages: a tap beside it folds it again.
+  const cardEl = useRef();
+  useDismiss(cardEl, () => setPeek(false), floating && peek, { ignore: '.menu, .modal-back, .toasts' });
   // The AI's guess at the reason, put into the box for the user to edit (nothing is saved until they do).
   const suggest = async () => {
     setSuggesting(true);
@@ -666,7 +670,7 @@ function AiCard({ floating = false, ins, summary, count, latest, onReply, onEven
   const settled = rows.length > 0 && !openActions;
   const firstLine = String(summary || ins?.summary || '').split('\n').map((l) => l.replace(/^[-*\s]+/, '').replace(/\*\*/g, '').trim()).find(Boolean);
   return (
-    <div className={`card ai-card ${isFolded ? 'folded' : ''} ${floating ? 'floating' : ''}`}>
+    <div ref={cardEl} className={`card ai-card ${isFolded ? 'folded' : ''} ${floating ? 'floating' : ''}`}>
       <div className="title" style={{ flexWrap: 'wrap' }}><button className="fold-title" title={isFolded ? 'Show the summary' : 'Fold the summary'} onClick={toggle}>{isFolded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Sparkles size={15} /> {count > 1 && summary ? `Conversation summary · ${count} messages` : 'Summary'}</button>
         <span className="row" style={{ marginLeft: 'auto', gap: 4, flexWrap: 'wrap' }}>
           {isFolded && openActions > 0 && <span className="chip ai"><ClipboardCheck size={11} /> {openActions} open</span>}
