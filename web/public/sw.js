@@ -123,8 +123,16 @@ self.addEventListener('push', (e) => {
   }));
 });
 
+// Opened or swiped away here: the server takes it back on the user's other devices too.
+const taken = (n) => n.tag && fetch(new URL('./api/push/close', self.registration.scope), {
+  method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json', ...(n.data?.as ? { 'x-halcyon-as': String(n.data.as) } : {}) },
+  body: JSON.stringify({ tag: n.tag }),
+}).catch(() => {});
+self.addEventListener('notificationclose', (e) => { e.waitUntil(taken(e.notification) || Promise.resolve()); });
+
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  taken(e.notification);
   const { url, as } = e.notification.data || {};
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

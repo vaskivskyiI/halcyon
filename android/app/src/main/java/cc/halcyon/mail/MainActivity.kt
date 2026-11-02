@@ -50,6 +50,8 @@ class MainActivity : ComponentActivity() {
         const val ACTION_OPEN = "cc.halcyon.mail.OPEN"
         const val EXTRA_ROUTE = "route"
         const val EXTRA_AS = "as"
+        const val EXTRA_TAG = "tag" // the notification's tag (also the data key of the system-drawn ones)
+        const val HOME = "#/mail/unified"
     }
 
     private data class Target(val route: String, val shared: String = "")
@@ -106,19 +108,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val target = targetOf(intent)
-        if (target != null || savedInstanceState == null || web.restoreState(savedInstanceState) == null) load(target)
+        // Opening the app always starts at the mail (not the page it was left on), unless it was opened for a place.
+        load(targetOf(intent) ?: Target(HOME))
+        // A token Firebase replaced while the app was closed, or a server that forgot this device.
+        if (Prefs.pushOn(this)) Prefs.token(this)?.let { Server.register(this, it) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        targetOf(intent)?.let { open(it) }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        if (::web.isInitialized) web.saveState(outState)
+        val launcher = intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+        // The launcher icon on a running app: back to the mail too — but a message being written stays open.
+        if (launcher && ready) web.evaluateJavascript("location.hash.startsWith('#/compose') || window.halcyonOpen(${JSONObject.quote(HOME)}, '')", null)
+        else targetOf(intent)?.let { open(it) }
     }
 
     override fun onPause() {
@@ -137,6 +139,8 @@ class MainActivity : ComponentActivity() {
         // Only places inside the web app: another app may start this activity too.
         // EXTRA_ROUTE: shortcuts, the app's own notifications, and the system's (its data comes as extras).
         val route = i.getStringExtra(EXTRA_ROUTE)?.takeIf { it.startsWith("#/") } ?: return null
+        // From a notification: seen here, so it is taken back on the user's other devices.
+        i.getStringExtra(EXTRA_TAG)?.takeIf { it.isNotEmpty() }?.let { Server.closed(this, it, i.getStringExtra(EXTRA_AS).orEmpty()) }
         return Target(route, i.getStringExtra(EXTRA_AS).orEmpty())
     }
 
@@ -285,8 +289,18 @@ class MainActivity : ComponentActivity() {
             </body>""", "text/html", "utf-8", null)
     }
 
-    private val deviceName: String
-        get() = (if (Build.MODEL.startsWith(Build.MANUFACTURER, true)) Build.MODEL else "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}").take(80)
+    private val deviceName get() = Server.deviceName
+
+    /** Battery savers hold back notifications of apps they put to sleep: asked once, when notifications are turned on. */
+    @SuppressLint("BatteryLife")
+    private fun askBattery() {
+        if (Build.VERSION.SDK_INT < 23 || Prefs.askedBattery(this)) return
+        Prefs.setAskedBattery(this)
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        try { startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }
+        catch (_: ActivityNotFoundException) { }
+    }
 
     private fun firebase() = FirebaseApp.getApps(this).isNotEmpty()
 
@@ -299,7 +313,8 @@ class MainActivity : ComponentActivity() {
             else FirebaseMessaging.getInstance().token.addOnCompleteListener { t ->
                 if (t.isSuccessful && t.result != null) {
                     Prefs.setToken(this, t.result)
-                    done(JSONObject().put("token", t.result).put("device", deviceName))
+                    done(JSONObject().put("token", t.result).put("device", deviceName).put("version", BuildConfig.VERSION_CODE))
+                    askBattery()
                 } else fail("Firebase did not give this device a token: ${t.exception?.message ?: "no Google Play services?"}")
             }
         }
@@ -326,7 +341,7 @@ class MainActivity : ComponentActivity() {
             val ctx: Context = this@MainActivity
             return JSONObject().put("available", firebase()).put("on", Prefs.pushOn(ctx))
                 .put("permission", if (Notifications.allowed(ctx)) "granted" else "default")
-                .put("token", Prefs.token(ctx) ?: JSONObject.NULL).put("device", deviceName).toString()
+                .put("token", Prefs.token(ctx) ?: JSONObject.NULL).put("device", deviceName).put("version", BuildConfig.VERSION_CODE).toString()
         }
 
         /** An answer that takes a while; it comes back through window.halcyonAndroidResolve(id, result). */

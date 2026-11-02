@@ -4,6 +4,7 @@ import { queueOp, runningOps } from './sync.js';
 import { recountFolder, deleteMessages, readRaw } from './store.js';
 import { notify } from '../util/events.js';
 import { isArchive, intoArchive } from './archive.js';
+import { sweepSoon } from '../notifications.js';
 
 function ownedMessages(userId, ids) {
   if (!ids?.length) return [];
@@ -35,6 +36,7 @@ export function setFlags(userId, ids, { read, flagged, answered, forwarded }) {
     recountFolder(group[0].folder_id);
   }
   notify(userId, 'mail:changed', { ids });
+  if (read) sweepSoon();
   return msgs.length;
 }
 
@@ -85,6 +87,7 @@ export async function moveMessages(userId, ids, targetFolderId) {
   }
   recountFolder(target.id);
   notify(userId, 'mail:changed', { ids });
+  sweepSoon();
   return msgs.length;
 }
 

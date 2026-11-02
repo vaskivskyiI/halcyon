@@ -18,7 +18,7 @@ import { logger } from './util/log.js';
 import { markRepliedHistory } from './ai/open-items.js';
 import { syncLinked } from './calendar/linked.js';
 import { cleanUploads } from './mail/uploads.js';
-import { notifyUser } from './notifications.js';
+import { notifyUser, sweepNotifications } from './notifications.js';
 import { autoRetry } from './mail/retry.js';
 import { scanAll } from './contacts/review.js';
 import { track } from './util/activity.js';
@@ -135,14 +135,14 @@ function checkReminders() {
           if (get('SELECT 1 AS x FROM reminders_sent WHERE event_id = ? AND occurrence = ?', e.id, key * 1000 + min)) continue;
           run('INSERT OR IGNORE INTO reminders_sent (event_id, occurrence) VALUES (?, ?)', e.id, key * 1000 + min);
           notify(u.id, 'reminder', { eventId: e.id, title: e.title, start: e.start, location: e.location, onlineMeeting: e.onlineMeeting });
-          notifyUser(u.id, 'reminder', { title: e.title, body: `${new Date(e.start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: getSettings(u.id).calendar.timezone })}${e.location ? ` · ${e.location}` : ''}`, url: '#/calendar', tag: `rem-e${e.id}-${e.start}` });
+          notifyUser(u.id, 'reminder', { title: e.title, body: `${new Date(e.start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: getSettings(u.id).calendar.timezone })}${e.location ? ` · ${e.location}` : ''}`, url: '#/calendar', tag: `rem-e${e.id}-${e.start}`, type: 'event', about: { until: Math.max(e.end || 0, e.start + 15 * 60e3) } });
         }
       }
     }
     // Task due reminders
     for (const task of all('SELECT * FROM tasks WHERE user_id = ? AND done = 0 AND due BETWEEN ? AND ?', u.id, t - 60e3, t)) {
       notify(u.id, 'reminder', { taskId: task.id, title: task.title, start: task.due });
-      notifyUser(u.id, 'reminder', { title: task.title, body: 'Task due now', url: '#/tasks', tag: `rem-t${task.id}` });
+      notifyUser(u.id, 'reminder', { title: task.title, body: 'Task due now', url: '#/tasks', tag: `rem-t${task.id}`, type: 'task', about: { task: task.id } });
     }
   }
 }
@@ -195,6 +195,7 @@ const job = (name, fn) => () => {
 export function startScheduler() {
   setInterval(job('Outbox', processOutbox), 2000).unref();
   setInterval(job('Drafts to server', syncDraftsToServer), 30e3).unref();
+  setInterval(job('Notifications taken back', sweepNotifications), 10e3).unref();
   setInterval(job('Snoozes, reminders, briefs', () => { wakeSnoozed(); checkReminders(); scheduleBriefs(); }), 30e3).unref();
   const davAll = job('Start calendar & contacts syncs', () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); });
   setTimeout(davAll, 5e3).unref();

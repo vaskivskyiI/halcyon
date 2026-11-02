@@ -1014,3 +1014,28 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   for each slow request its handler's own synchronous time (`timeHandler` onRoute hook) and how long it waited for
   other work (`requestStart`/`recordRequest`: event-loop stalls measured by a 10 ms timer, including one that ended just
   before the request was read).
+
+### Notifications taken back, one icon per kind, touch sizes, new app icon (migration 56)
+- server/notifications.js: `notifyUser(…, { type, about })` — type `mail` / `event` / `task` picks the icon
+  (FCM `android.notification.icon` = `ic_notify_<type>`, the app's own drawing too); `about` says when it no longer
+  applies: `{ mail: [ids] }` (none unread in an Inbox), `{ task }` (done or gone), `{ until }` (event over, at least
+  15 min after start). Kept in memory (`showing`; after a restart devices keep what they show); `sweepNotifications`
+  every 10 s (scheduler) and 1.5 s after setFlags(read)/moveMessages (`sweepSoon`). `closeNotifications(owner, tags)`:
+  `notify:close` to the open app (util.js `closeShown`: its own Notifications and the service worker's) and a data-only
+  NORMAL-priority FCM `{ action: 'close', tags }` — only to tokens with `app_version` (migration 56; older apps would
+  draw an empty notification). `POST /api/push/close { tag }`: opened/swiped on one device (sw.js notificationclick /
+  notificationclose; the app's content intent and DismissReceiver) → taken back on the others. round80.
+- Delivery: silent mail used channel `mail_quiet` (IMPORTANCE_LOW: never popped up, went to the silent section) —
+  now `mail_silent`, high importance without sound (old channel deleted). The app registers its FCM token itself
+  (Server.kt, with the session cookie) in onNewToken and on every start, so a token Firebase replaced while the app
+  stayed closed is no longer lost until the web app runs. On turning notifications on, the app asks once to be exempt
+  from battery optimisation (REQUEST_IGNORE_BATTERY_OPTIMIZATIONS; savers on many phones hold back FCM).
+- The app always opens at `#/mail/unified` (no restoreState; the launcher icon on a running app goes there too, except
+  while a message is being written).
+- Web, touch (`@media (pointer: coarse)` at the end of styles.css): icon buttons ≥ 40 px with 20 px icons, menu items
+  46 px, bigger chips/checkboxes/tabs. `web/src/dismiss.js useDismiss(refs, onClose, open)`: outside pointerdown,
+  Escape and hash change close every menu (common.jsx Menu/useMenu), the Activity and Problems panels, the command
+  palette, the floating AI card and suggestion lists; on touch the closing tap does not also press what is under it.
+- Icon: no yellow dot (web/public/icon.svg and PNGs, maskable, badge = white shape on transparent, desktop
+  icon.png/.ico, Android adaptive foreground + mipmap).
+- NOT verified on a phone: FCM close delivery, delete intents, battery prompt, per-type icons (no emulator here).

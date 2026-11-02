@@ -28,7 +28,7 @@ async function androidStart() {
     if (url) navigate(url);
   };
   android().ready?.();
-  if (s.on && s.token && (await serverFcm()).available) api.post('/api/push/fcm/register', { token: s.token, device: s.device || 'Android' }).catch(() => {});
+  if (s.on && s.token && (await serverFcm()).available) api.post('/api/push/fcm/register', { token: s.token, device: s.device || 'Android', version: s.version }).catch(() => {});
 }
 
 const supported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
@@ -64,8 +64,8 @@ const deviceName = () => { const ua = navigator.userAgent; return /Android/i.tes
 
 export async function enablePush() {
   if (android()) {
-    const { token, device } = await ask('enable'); // asks for the notification permission (Android 13+) and a token
-    await api.post('/api/push/fcm/register', { token, device: device || 'Android' });
+    const { token, device, version } = await ask('enable'); // asks for the notification permission (Android 13+) and a token
+    await api.post('/api/push/fcm/register', { token, device: device || 'Android', version });
     android().setOn(true);
     return true;
   }

@@ -19,6 +19,9 @@ object Prefs {
     fun token(ctx: Context): String? = p(ctx).getString("fcm_token", null)
     fun setToken(ctx: Context, token: String?) = p(ctx).edit().putString("fcm_token", token).apply()
 
+    fun askedBattery(ctx: Context) = p(ctx).getBoolean("asked_battery", false)
+    fun setAskedBattery(ctx: Context) = p(ctx).edit().putBoolean("asked_battery", true).apply()
+
     /** "https://mail.example.com" from what was typed (no path, no trailing slash; https when no scheme). */
     fun normalize(input: String): String? {
         var s = input.trim().trimEnd('/')

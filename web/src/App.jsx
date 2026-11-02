@@ -8,7 +8,7 @@ import { store } from './store.js';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, loadInkwell, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setSharedShown, inMyMail, applyMergedSpaces } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
-import { toast, notifyDesktop, navigate, textToHtml } from './util.js';
+import { toast, notifyDesktop, closeShown, navigate, textToHtml } from './util.js';
 import Login from './Login.jsx';
 import MailView from './mail/MailView.jsx';
 import ComposerDock from './mail/Composer.jsx';
@@ -96,6 +96,7 @@ function Shell() {
         case 'notify:show':
           pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !inMyMail(store.get().settings, e.payload.as) ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag }); });
           break;
+        case 'notify:close': closeShown(e.payload.tags || []); break;
         case 'reminder':
           toast(`Reminder: ${e.payload.title} at ${new Date(e.payload.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, { duration: 15000, action: e.payload.onlineMeeting ? { label: 'Join', onClick: () => window.open(e.payload.onlineMeeting, '_blank') } : undefined });
           break;

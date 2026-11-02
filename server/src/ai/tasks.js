@@ -379,7 +379,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) {
     notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
     // Same tag as the new-mail notification: it replaces it (with the summary) rather than buzzing twice.
-    notifyUser(userId, 'mail', { important: true, title: `Important: ${m.from_name || m.from_addr}`, body: `${m.subject || ''}${ins.summary ? `\n${ins.summary}` : ''}`, url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id });
+    notifyUser(userId, 'mail', { important: true, title: `Important: ${m.from_name || m.from_addr}`, body: `${m.subject || ''}${ins.summary ? `\n${ins.summary}` : ''}`, url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id, about: { mail: [m.id] } });
   }
   if (!quiet && ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
   if (ins.priority >= 60 && now() - m.date < 36 * 3600e3) scheduleBriefRefresh(userId);

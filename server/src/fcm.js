@@ -47,7 +47,7 @@ async function accessToken(a) {
  * Resolves { ok } or { gone } (the token is no longer valid: the app
  * was uninstalled or its data cleared); other failures throw.
  */
-export async function fcmSend(token, data, { ttlSeconds = 6 * 3600, notification = null } = {}) {
+export async function fcmSend(token, data, { ttlSeconds = 6 * 3600, notification = null, priority = 'HIGH' } = {}) {
   const a = fcmAccount();
   if (!a) throw new Error(accountErr || 'Android push is not set up (HALCYON_FCM_SERVICE_ACCOUNT)');
   const send = async () => fetch(`${config.fcm.url}/v1/projects/${encodeURIComponent(a.project_id)}/messages:send`, {
@@ -55,8 +55,8 @@ export async function fcmSend(token, data, { ttlSeconds = 6 * 3600, notification
     body: JSON.stringify({ message: {
       token, data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? '' : String(v)])),
       ...(notification ? { notification: { title: notification.title, body: notification.body || '' } } : {}),
-      android: { priority: 'HIGH', ttl: `${ttlSeconds}s`, ...(notification ? { notification: {
-        channel_id: notification.channel, tag: notification.tag, icon: 'ic_notify', color: '#2563EB', default_sound: !notification.silent,
+      android: { priority, ttl: `${ttlSeconds}s`, ...(notification ? { notification: {
+        channel_id: notification.channel, tag: notification.tag, icon: notification.icon || 'ic_notify', color: '#2563EB', default_sound: !notification.silent,
         notification_priority: notification.silent ? 'PRIORITY_LOW' : 'PRIORITY_HIGH', visibility: 'PRIVATE',
       } } : {}) },
     } }),

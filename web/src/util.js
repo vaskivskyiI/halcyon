@@ -58,10 +58,21 @@ export function startOfWeek(d, weekStart = 1) { const x = startOfDay(d); const d
 export const toLocalInput = (ms) => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 export const toDateInput = (ms) => toLocalInput(ms).slice(0, 10);
 
+const shownHere = new Map(); // tag → the Notification this page showed
 export function notifyDesktop(title, body, onClick, { silent = false, tag } = {}) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification(title, { body, icon: './icon-192.png', silent, tag });
+  if (tag) shownHere.set(tag, n);
   n.onclick = () => { window.halcyonDesktop?.show?.(); window.focus(); onClick?.(); n.close(); };
+}
+/** Notifications that no longer apply (the mail was read, the task done …; server notifications.js): the page's own
+ *  and the service worker's are closed. */
+export async function closeShown(tags) {
+  for (const t of tags) { shownHere.get(t)?.close(); shownHere.delete(t); }
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    for (const n of (await reg?.getNotifications()) || []) if (tags.includes(n.tag)) n.close();
+  } catch { /* no service worker here */ }
 }
 
 export const CATEGORY_COLORS = {

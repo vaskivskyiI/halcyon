@@ -92,7 +92,7 @@ test('a notification goes out as a high-priority FCM data message with only what
   assert.deepEqual(m.notification, { title: 'Halcyon', body: 'Notifications work on this device.' });
   assert.equal(m.android.notification.channel_id, 'reminders');
   assert.equal(m.android.notification.tag, 'test');
-  assert.deepEqual(m.data, { title: 'Halcyon', body: 'Notifications work on this device.', url: '#/settings/notifications', tag: 'test', silent: 'false', as: '', kind: 'reminder', route: '#/settings/notifications' });
+  assert.deepEqual(m.data, { title: 'Halcyon', body: 'Notifications work on this device.', url: '#/settings/notifications', tag: 'test', silent: 'false', as: '', type: 'event', kind: 'reminder', route: '#/settings/notifications' });
   await waitFor(() => db.prepare('SELECT last_ok_at FROM fcm_tokens').get().last_ok_at > 0);
 
   // New mail with "hide content": no sender or subject leaves the server.
@@ -100,9 +100,10 @@ test('a notification goes out as a high-priority FCM data message with only what
   await api('PATCH', '/api/settings', { notifications: { hideContent: true, sound: false } });
   notifyUser(uid, 'mail', { title: 'Alice', body: 'Secret plans', url: '#/mail/unified/7', tag: 'mail-7', important: false });
   await waitFor(() => got.sends.length === 2);
-  assert.deepEqual(got.sends[1].data, { title: 'New email', body: '', url: '#/mail/unified/7', tag: 'mail-7', silent: 'true', as: '', kind: 'mail', route: '#/mail/unified/7' });
+  assert.deepEqual(got.sends[1].data, { title: 'New email', body: '', url: '#/mail/unified/7', tag: 'mail-7', silent: 'true', as: '', type: 'mail', kind: 'mail', route: '#/mail/unified/7' });
   assert.deepEqual(got.sends[1].notification, { title: 'New email', body: '' });
-  assert.equal(got.sends[1].android.notification.channel_id, 'mail_quiet');
+  assert.equal(got.sends[1].android.notification.channel_id, 'mail_silent');
+  assert.equal(got.sends[1].android.notification.icon, 'ic_notify_mail', 'each kind has its own icon');
   assert.equal(got.tokens, 1, 'the access token is reused');
 });
 

@@ -610,4 +610,8 @@ export const migrations = [
   `
   CREATE TABLE unsubscribed (user_id INTEGER NOT NULL, address TEXT NOT NULL, method TEXT, at INTEGER, PRIMARY KEY (user_id, address));
   `,
+  // 56: the Android app's version per device: only versions that understand it are sent "take this notification back".
+  `
+  ALTER TABLE fcm_tokens ADD COLUMN app_version INTEGER;
+  `,
 ];
