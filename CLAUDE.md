@@ -17,6 +17,7 @@ Docker), Windows desktop (Electron), Linux/macOS desktop.
   - `src/ai/` providers (`providers/*`), router (per-task routing, privacy mode), queue (durable job queue), tasks (handlers), assistant (RAG chat), vectors (semantic index), prompts
   - `src/calendar/`, `src/contacts/`, `src/routes/` (REST), `src/rules.js`, `src/search.js`, `src/scheduler.js`
 - `web/` React 18 + Vite, no UI library; global store in `src/store.js`; hash routing (`#/mail/<view>/<id>`, `#/calendar`, `#/contacts/<id>`, `#/tasks`, `#/assistant`, `#/settings/<section>`, `#/compose?url=mailto:…`)
+- `windows/` lightweight Windows app (C# .NET 8 WinForms + WebView2, remote server only; windows/README.md)
 - `desktop/` Electron 44 shell (`main.js`, `preload.js`, `connect.html`), `scripts/bundle-server.mjs`, electron-builder config in `package.json`
 - `deploy/` Ubuntu installer, systemd unit, nginx · `Dockerfile`, `docker-compose.yml` · `.github/workflows/`
 
