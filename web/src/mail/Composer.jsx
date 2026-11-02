@@ -316,19 +316,32 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   });
 
   // Saves the draft in Halcyon now; returns its id.
+  const edits = useRef(0);
   const saveNow = async () => {
+    clearTimeout(saveTimer.current); unsavedSince.current = 0;
+    const seen = edits.current;
     const p = payload();
     const r = await api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined });
-    setDraftId(r.id); setDirty(false);
+    setDraftId(r.id);
+    if (edits.current === seen) setDirty(false); // typed on while it was saved: that is saved next time
     return r.id;
   };
+  const saveRef = useRef(saveNow);
+  saveRef.current = saveNow;
 
-  // Autosave (in Halcyon); the copy in the account's Drafts folder is written when the user saves/closes.
-  useEffect(() => {
-    if (!dirty) return undefined;
-    const t = setTimeout(() => { saveNow().catch(() => { /* offline: retried on next change */ }); }, 2500);
-    return () => clearTimeout(t);
-  }, [dirty, to, cc, bcc, subject, attachments]);
+  // Autosave (in Halcyon); the copy in the account's Drafts folder is written when the user saves/closes. Saved once
+  // typing pauses, and at least every 20 s while it goes on — not on every key.
+  const saveTimer = useRef();
+  const unsavedSince = useRef(0);
+  const scheduleSave = () => {
+    const t = Date.now();
+    edits.current += 1;
+    if (!unsavedSince.current) unsavedSince.current = t;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { saveRef.current().catch(() => { /* offline: retried on next change */ }); }, Math.max(0, Math.min(3000, unsavedSince.current + 20000 - t)));
+  };
+  useEffect(() => { if (dirty) scheduleSave(); }, [dirty, to, cc, bcc, subject, attachments]);
+  useEffect(() => () => clearTimeout(saveTimer.current), []);
 
   // Closing the browser tab with unsaved changes asks first.
   useEffect(() => {
@@ -362,7 +375,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     const text = htmlToText(editor.current.innerHTML);
     if (/\battach(ed|ment)|\bpriložen|\banbei|\bpièce jointe/i.test(text.split(/On .* wrote:/)[0]) && !attachments.length && !confirm('You mentioned an attachment but none is attached. Send anyway?')) return;
     if (sending.current) return;
-    sending.current = true; setBusySend(true);
+    sending.current = true; setBusySend(true); clearTimeout(saveTimer.current);
     try {
       // A draft from the Drafts folder becomes a Halcyon draft first, so sending also removes it from there.
       let p = payload();
@@ -382,7 +395,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
 
   // Deleting a draft is explicit: from the close dialog or the trash button (which asks).
   const discard = async () => {
-    abort.current?.abort();
+    abort.current?.abort(); clearTimeout(saveTimer.current);
     const did = draftId || (init.serverMessageId ? await saveNow().catch(() => null) : null);
     if (did) await api.del(`/api/drafts/${did}`).catch(() => {});
     close();
@@ -468,7 +481,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
         ])}><Wand2 size={14} /> Rewrite <ChevronDown size={12} /></button>}
         {settings.ai.enabled && aiSteps > 0 && !aiBusy && <button className="btn sm" title="Undo the last AI change" onClick={undoAi}><Undo2 size={13} /> Undo AI</button>}
       </div>
-      <div ref={editor} className="editor" contentEditable suppressContentEditableWarning onInput={() => setDirty(true)}
+      <div ref={editor} className="editor" contentEditable suppressContentEditableWarning onInput={() => { setDirty(true); scheduleSave(); }}
         onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); } }} />
       {attachments.length > 0 && <div className="att-list">{attachments.map((a, i) => (
         <span key={i} className="chip"><Paperclip size={12} />

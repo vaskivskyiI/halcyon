@@ -118,7 +118,8 @@ async function request(method, url, body) {
   }
   learn(method, url, data, as);
   // Mail changed from here: counts in the sidebar refresh even when the event socket is not connected (e.g. behind a proxy).
-  if (method !== 'GET' && /^\/api\/(messages|folders|send|outbox|drafts|ai\/approvals|tasks|events)/.test(url)) window.dispatchEvent(new CustomEvent('halcyon:mutated', { detail: { url } }));
+  // Not a draft's autosave: it changes no mail, and the list (search results too) must not reload while one is written.
+  if (method !== 'GET' && !(method === 'POST' && url === '/api/drafts') && /^\/api\/(messages|folders|send|outbox|drafts|ai\/approvals|tasks|events)/.test(url)) window.dispatchEvent(new CustomEvent('halcyon:mutated', { detail: { url } }));
   return data;
 }
 
