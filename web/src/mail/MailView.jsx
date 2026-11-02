@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
-  Inbox, Star, Clock, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
+  Inbox, Star, Clock, History, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
   ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal,
 } from 'lucide-react';
@@ -42,6 +42,9 @@ function sortResults(list, s) {
   return [...list].sort(s.dir === 'asc' ? k : (a, b) => k(b, a));
 }
 const searchSortOf = (tab) => { try { return JSON.parse(localStorage.getItem(`halcyon.searchSort.${tab}`)) || { key: 'relevance', dir: 'desc' }; } catch { return { key: 'relevance', dir: 'desc' }; } };
+// The last searches, offered again under the search box (on this device).
+const RECENT_KEY = 'halcyon.recentSearches';
+const readRecent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
 const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
 // Per page load: last list per view/tab/sort (shown instantly when coming back) and the tab chosen per view.
 const listCache = new Map();
@@ -359,6 +362,10 @@ function MessageList({ view, openId, onMenu }) {
   const [aiResults, setAiResults] = useState(null);
   const [searchTab, setSearchTab] = useState(null); // 'mail' | 'ai'; until chosen, AI only when nothing else matched
   const [searchSort, setSearchSortState] = useState(() => ({ mail: searchSortOf('mail'), ai: searchSortOf('ai') }));
+  const [recent, setRecent] = useState(readRecent);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [recentAt, setRecentAt] = useState(-1);
+  const keepRecent = (list) => { setRecent(list); try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch { /* private mode */ } };
   const setSearchSort = (tab, s) => { setSearchSortState((cur) => ({ ...cur, [tab]: s })); try { localStorage.setItem(`halcyon.searchSort.${tab}`, JSON.stringify(s)); } catch { /* private mode */ } };
   const aiQuery = useRef('');
   const [selected, setSelected] = useState(new Set());
@@ -483,6 +490,22 @@ function MessageList({ view, openId, onMenu }) {
     } else if (hasMore && --seekOpen.current > 0) load(true);
     else seekOpen.current = 0;
   }, [items, loading]);
+
+  // A search is remembered once it has stayed a moment, so the steps of one built with the filters are not all kept.
+  useEffect(() => {
+    if (!activeQuery) return undefined;
+    const t = setTimeout(() => keepRecent([activeQuery, ...readRecent().filter((q) => q !== activeQuery)].slice(0, 10)), 1500);
+    return () => clearTimeout(t);
+  }, [activeQuery]);
+  const typed = query.trim().toLowerCase();
+  const recentShown = recentOpen ? recent.filter((q) => q.toLowerCase() !== typed && q.toLowerCase().includes(typed)).slice(0, 8) : [];
+  const runRecent = (q) => { setQuery(q); setActiveQuery(q); setRecentOpen(false); searchRef.current?.blur(); };
+  const recentKeys = (e) => {
+    if (!recentShown.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = recentShown.length; setRecentAt((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i <= 0 ? n : i) - 1)); }
+    else if (e.key === 'Enter' && recentAt >= 0 && recentShown[recentAt]) { e.preventDefault(); runRecent(recentShown[recentAt]); }
+    else if (e.key === 'Escape') { e.stopPropagation(); setRecentOpen(false); }
+  };
 
   // A search started from the command palette (Ctrl+K).
   useEffect(() => {
@@ -715,9 +738,18 @@ function MessageList({ view, openId, onMenu }) {
           <button className="icon-btn" title="Check for new mail" onClick={() => { window.dispatchEvent(new Event('halcyon:sync')); load(false); }}>{loading ? <Spinner /> : <RefreshCw size={16} />}</button>
           <button className="icon-btn" title={threaded ? 'Conversation view: on' : 'Conversation view: off'} onClick={() => saveSettings({ ui: { conversationView: !threaded } })}><MailIcon size={16} /></button>
         </div>
-        <form className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); }}>
+        <form className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); setRecentOpen(false); }}>
           <Search size={15} />
-          <input ref={searchRef} className="input" placeholder='Search mail — words, or from:anna received:"last week" hasattachments:yes' value={query} onChange={(e) => { setQuery(e.target.value); if (!e.target.value) setActiveQuery(''); }} />
+          <input ref={searchRef} className="input" placeholder='Search mail — words, or from:anna received:"last week" hasattachments:yes' value={query}
+            onChange={(e) => { setQuery(e.target.value); setRecentOpen(true); setRecentAt(-1); if (!e.target.value) setActiveQuery(''); }}
+            onFocus={() => { setRecentOpen(true); setRecentAt(-1); }} onBlur={() => setRecentOpen(false)} onKeyDown={recentKeys} />
+          {recentShown.length > 0 && <div className="suggest recent-searches">
+            <header>Recent searches</header>
+            {recentShown.map((q, i) => <div key={q} className={i === recentAt ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); runRecent(q); }}>
+              <span className="row"><History size={13} /><span className="grow truncate">{q}</span>
+                <button type="button" className="icon-btn" title="Forget this search" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); keepRecent(recent.filter((x) => x !== q)); }}><X size={13} /></button></span>
+            </div>)}
+          </div>}
           <button type="button" className={`icon-btn ${filtersOpen ? 'active' : ''}`} style={{ position: 'absolute', right: query ? 28 : 2, top: 1 }} title="Filters" onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={15} /></button>
           {query && <button type="button" className="icon-btn" style={{ position: 'absolute', right: 2, top: 1 }} onClick={() => { setQuery(''); setActiveQuery(''); }}><X size={15} /></button>}
         </form>

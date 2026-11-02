@@ -96,6 +96,11 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .search { position: relative; }
 .search input { padding-left: 32px; }
 .search svg { position: absolute; left: 10px; top: 9px; color: var(--text-3); }
+.search .suggest svg { position: static; }
+.recent-searches { right: 0; min-width: 0; }
+.recent-searches header { padding: 6px 10px 2px; font-size: 11px; color: var(--text-3); }
+.recent-searches .row { gap: 8px; }
+.recent-searches .icon-btn { padding: 2px; }
 .tabs { display: flex; gap: 2px; }
 .tab { padding: 8px 10px; border: 0; background: none; cursor: pointer; color: var(--text-2); font-weight: 500; border-bottom: 2px solid transparent; }
 .tab.active { color: var(--accent); border-color: var(--accent); }
