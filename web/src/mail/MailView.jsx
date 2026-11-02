@@ -32,6 +32,16 @@ const MORE_VIEWS = [
   ['senders', Users, 'Senders'],
 ];
 const SORTS = [['date', 'Date', 'desc'], ['from', 'From', 'asc'], ['subject', 'Subject', 'asc'], ['size', 'Size', 'desc'], ['unread', 'Unread first', 'asc'], ['flagged', 'Flagged first', 'desc']];
+// Search results (the best matches, not paged) are put in order here: by how well they match (as found), by date or by
+// sender. Chosen separately for the keyword results and the AI's, and remembered on this device.
+const SEARCH_SORTS = [['relevance', 'Relevance', 'desc'], ['date', 'Date', 'desc'], ['from', 'Sender', 'asc']];
+const senderOf = (m) => (m.from?.name || m.from?.address || '').toLowerCase();
+function sortResults(list, s) {
+  if (!s || s.key === 'relevance') return list;
+  const k = s.key === 'date' ? (a, b) => a.date - b.date : (a, b) => senderOf(a).localeCompare(senderOf(b)) || b.date - a.date;
+  return [...list].sort(s.dir === 'asc' ? k : (a, b) => k(b, a));
+}
+const searchSortOf = (tab) => { try { return JSON.parse(localStorage.getItem(`halcyon.searchSort.${tab}`)) || { key: 'relevance', dir: 'desc' }; } catch { return { key: 'relevance', dir: 'desc' }; } };
 const sortDirLabel = (key, dir) => ({ date: ['Oldest first', 'Newest first'], size: ['Smallest first', 'Largest first'], from: ['A → Z', 'Z → A'], subject: ['A → Z', 'Z → A'] }[key] || ['Ascending', 'Descending'])[dir === 'asc' ? 0 : 1];
 // Per page load: last list per view/tab/sort (shown instantly when coming back) and the tab chosen per view.
 const listCache = new Map();
@@ -345,6 +355,8 @@ function MessageList({ view, openId, onMenu }) {
   // AI part of search: { status: 'loading' | 'done' | 'unavailable', items }
   const [aiResults, setAiResults] = useState(null);
   const [searchTab, setSearchTab] = useState(null); // 'mail' | 'ai'; until chosen, AI only when nothing else matched
+  const [searchSort, setSearchSortState] = useState(() => ({ mail: searchSortOf('mail'), ai: searchSortOf('ai') }));
+  const setSearchSort = (tab, s) => { setSearchSortState((cur) => ({ ...cur, [tab]: s })); try { localStorage.setItem(`halcyon.searchSort.${tab}`, JSON.stringify(s)); } catch { /* private mode */ } };
   const aiQuery = useRef('');
   const [selected, setSelected] = useState(new Set());
   const [openMenu, menuNode] = useMenu();
@@ -543,8 +555,9 @@ function MessageList({ view, openId, onMenu }) {
     if (!action) return;
     const removing = ['archive', 'trash', 'spam', 'move', 'snooze', 'delete', 'notspam'].includes(action) || (action === 'unsnooze' && view === 'snoozed');
     if (removing) {
-      const idx = items.findIndex((m) => ids.includes(m.id));
-      const next = items.filter((m) => !ids.includes(m.id))[idx];
+      // The next one as shown (search results may be in another order than loaded).
+      const idx = shownItems.findIndex((m) => ids.includes(m.id));
+      const next = shownItems.filter((m) => !ids.includes(m.id))[idx];
       setItems((cur) => cur.filter((m) => !ids.includes(m.id)));
       if (ids.includes(openId)) navigate(next ? `#/mail/${view}/${next.id}` : `#/mail/${view}`);
     } else if (['read', 'unread', 'flag', 'unflag'].includes(action)) {
@@ -559,11 +572,11 @@ function MessageList({ view, openId, onMenu }) {
     const onKey = (e) => {
       if (e.target.closest('input, textarea, [contenteditable=true], select') || e.metaKey || e.ctrlKey || e.altKey) return;
       if (store.get().composers.some((c) => !c.minimized)) return;
-      const idx = items.findIndex((m) => m.id === openId);
-      const cur = items[idx];
+      const idx = shownItems.findIndex((m) => m.id === openId);
+      const cur = shownItems[idx];
       const k = e.key;
-      if (k === 'j' || k === 'ArrowDown') { const n = items[Math.min(items.length - 1, idx + 1)]; if (n) open(n); e.preventDefault(); }
-      else if (k === 'k' || k === 'ArrowUp') { const n = items[Math.max(0, idx - 1)]; if (n) open(n); e.preventDefault(); }
+      if (k === 'j' || k === 'ArrowDown') { const n = shownItems[Math.min(shownItems.length - 1, idx + 1)]; if (n) open(n); e.preventDefault(); }
+      else if (k === 'k' || k === 'ArrowUp') { const n = shownItems[Math.max(0, idx - 1)]; if (n) open(n); e.preventDefault(); }
       else if (k === '/') { e.preventDefault(); searchRef.current?.focus(); }
       else if (k === 'c') { e.preventDefault(); openComposer({}); }
       else if (k === 'e' && selIds.length) act('archive');
@@ -582,8 +595,8 @@ function MessageList({ view, openId, onMenu }) {
   const toggleSel = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const clickRow = (e, m) => {
     if (e.shiftKey && anchor.current != null) {
-      const a = items.findIndex((x) => x.id === anchor.current), b = items.findIndex((x) => x.id === m.id);
-      setSelected(new Set(items.slice(Math.min(a, b), Math.max(a, b) + 1).map((x) => x.id)));
+      const a = shownItems.findIndex((x) => x.id === anchor.current), b = shownItems.findIndex((x) => x.id === m.id);
+      setSelected(new Set(shownItems.slice(Math.min(a, b), Math.max(a, b) + 1).map((x) => x.id)));
     } else if (e.metaKey || e.ctrlKey) {
       // As in Outlook: Ctrl+click extends the current selection, which includes the open message.
       setSelected((s) => { const n = new Set(s.size || !openId || openId === m.id ? s : [openId]); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; });
@@ -679,6 +692,15 @@ function MessageList({ view, openId, onMenu }) {
 
   const bulk = selected.size > 0;
   const showAi = !!activeQuery && !!aiResults && (searchTab ? searchTab === 'ai' : !items.length && !loading && aiResults.items.length > 0);
+  const shownItems = activeQuery ? sortResults(items, searchSort.mail) : items;
+  const aiItems = aiResults ? sortResults(aiResults.items, searchSort.ai) : [];
+  const resultsTab = showAi ? 'ai' : 'mail';
+  const rs = searchSort[resultsTab];
+  const searchSortBtn = activeQuery && <button className="tab sort-btn" title={`Sort: ${SEARCH_SORTS.find((x) => x[0] === rs.key)?.[1]}${rs.key === 'relevance' ? '' : `, ${sortDirLabel(rs.key, rs.dir).toLowerCase()}`}`} onClick={(e) => openMenu(e, [
+    { section: `Sort ${showAi ? 'AI results' : 'results'} by` },
+    ...SEARCH_SORTS.map(([key, label, dir]) => ({ label, icon: rs.key === key ? Check : undefined, onClick: () => setSearchSort(resultsTab, { key, dir }) })),
+    ...(rs.key === 'relevance' ? [] : ['sep', ...['asc', 'desc'].map((d) => ({ label: sortDirLabel(rs.key, d), icon: rs.dir === d ? Check : undefined, onClick: () => setSearchSort(resultsTab, { ...rs, dir: d }) }))]),
+  ])}><ArrowUpDown size={13} />{rs.key !== 'relevance' && ` ${SEARCH_SORTS.find((x) => x[0] === rs.key)?.[1]}`}</button>;
   return (
     <section className="list-pane">
       <div className="list-head">
@@ -699,7 +721,9 @@ function MessageList({ view, openId, onMenu }) {
         {activeQuery && aiResults && <div className="tabs">
           <button className={`tab ${showAi ? '' : 'active'}`} onClick={() => setSearchTab('mail')}>Results<TabCount n={hasMore ? 0 : items.length} /></button>
           <button className={`tab ${showAi ? 'active' : ''}`} title="Mail related by meaning, found by the AI" onClick={() => setSearchTab('ai')}><Sparkles size={13} /> AI{aiResults.status === 'loading' ? <> <Spinner size={11} /></> : <TabCount n={aiResults.items.length} />}</button>
+          {searchSortBtn}
         </div>}
+        {activeQuery && !aiResults && <div className="tabs"><span className="grow" />{searchSortBtn}</div>}
         {!activeQuery && <div className="tabs">
           {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${effectiveTab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused<TabCount n={tabCounts?.focused} /></button><button className={`tab ${effectiveTab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other<TabCount n={tabCounts?.other} /></button></>}
           <button className={`tab ${effectiveTab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All<TabCount n={tabCounts?.all} /></button>
@@ -738,12 +762,12 @@ function MessageList({ view, openId, onMenu }) {
         {!showAi && pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
         {!showAi && pinned.length > 0 && items.length > 0 && <div className="list-group">Everything else</div>}
-        {!showAi && items.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
+        {!showAi && shownItems.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}
         {showAi && <div className="ai-results">
           {aiResults.status === 'loading' && <div className="row small faint" style={{ padding: '8px 16px', gap: 6 }}><Spinner size={12} /> Searching by meaning…</div>}
-          {aiResults.items.map((m) => <Row key={`ai${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={false}
+          {aiItems.map((m) => <Row key={`ai${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={false}
             onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
           {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
           {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
