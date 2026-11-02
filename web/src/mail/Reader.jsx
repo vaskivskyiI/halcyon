@@ -25,6 +25,10 @@ const threadCache = new Map();
 // The server sends the unread messages among the last 20 of a conversation with their bodies (routes/mail.js).
 const OPEN_UNREAD = 20;
 
+// Bodies of folded messages, fetched when unfolded or ahead of time in the background (key: id + images).
+const bodyCache = new Map();
+const cacheBody = (k, f) => { bodyCache.delete(k); bodyCache.set(k, f); if (bodyCache.size > 300) bodyCache.delete(bodyCache.keys().next().value); };
+
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
   // Pin and note state of the open conversation (hooks stay above the early returns below).
@@ -148,7 +152,12 @@ export default function Reader({ id, view }) {
 
   // A folded message of a long conversation comes without its body: asked for when it is unfolded.
   const fetchingBody = useRef(new Set());
-  const fullOf = (m) => api.get(`/api/messages/${m.id}${allowImages ? '?images=1' : ''}`).then((f) => ({ ...f, isRead: m.isRead }));
+  const fullOf = async (m) => {
+    const k = `${m.id}:${allowImages ? 1 : 0}`;
+    let f = bodyCache.get(k);
+    if (!f) { f = await api.get(`/api/messages/${m.id}${allowImages ? '?images=1' : ''}`); cacheBody(k, f); }
+    return { ...f, isRead: m.isRead };
+  };
   useEffect(() => {
     for (const m of thread?.messages || []) {
       if (!m.partial || !expanded.has(m.id) || fetchingBody.current.has(m.id)) continue;
@@ -157,6 +166,27 @@ export default function Reader({ id, view }) {
         .catch(() => {}).finally(() => fetchingBody.current.delete(m.id));
     }
   }, [expanded, thread]);
+
+  // Once the conversation is shown, the bodies of its folded messages are fetched one by one in the background, newest
+  // first, so unfolding one does not wait. Stops when another message is opened or the reader closes.
+  const partialKey = thread?.current?.id === Number(id) ? thread.messages.filter((m) => m.partial).map((m) => m.id).join(',') : '';
+  useEffect(() => {
+    if (!partialKey) return undefined;
+    let stop = false;
+    const todo = partialKey.split(',').map(Number).reverse();
+    const images = allowImages ? 1 : 0;
+    const next = async () => {
+      while (!stop && todo.length) {
+        const mid = todo.shift();
+        const k = `${mid}:${images}`;
+        if (bodyCache.has(k)) continue;
+        try { cacheBody(k, await api.get(`/api/messages/${mid}${images ? '?images=1' : ''}`)); } catch { return; }
+        await new Promise((r) => setTimeout(r, 100)); // leaves the server room for what the user does meanwhile
+      }
+    };
+    const t = setTimeout(next, 1000);
+    return () => { stop = true; clearTimeout(t); };
+  }, [partialKey, id, allowImages]);
 
   // Opened = read (after the configured delay, if it is still the message shown): every unread message shown here.
   // Runs again whenever what is unread changes (a cached copy is shown first, then the fresh one), and always includes
