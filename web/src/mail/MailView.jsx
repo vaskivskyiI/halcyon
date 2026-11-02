@@ -431,7 +431,12 @@ function MessageList({ view, openId, onMenu }) {
       setHasMore(r.hasMore);
       if (!append) loadTabCounts();
       // Keyword results are shown at once; matches by meaning follow when the AI answers.
-      if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
+      // Asked once per search: the list also reloads on every sync or change, and must not throw away (and ask again
+      // for) the matches by meaning each time — only those now among the keyword results drop out.
+      if (activeQuery && !append && aiQuery.current === activeQuery) {
+        const shown = new Set(r.items.map((m) => m.id));
+        setAiResults((cur) => (cur?.items ? { ...cur, items: cur.items.filter((m) => !shown.has(m.id)) } : cur));
+      } else if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
         const q = activeQuery;
         aiQuery.current = q;
         setAiResults({ status: 'loading', items: [] });
