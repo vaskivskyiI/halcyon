@@ -60,15 +60,17 @@ export default async function senderRoutes(app) {
     return { ok: true, learned: rareSenders(req.user.id).has(address) };
   });
 
-  // Everything from a sender out of the inbox (archived) or marked read; undo goes through the usual list undo.
+  // Everything from a sender (or several: addresses) out of the inbox (archived) or marked read; undo goes through the
+  // usual list undo.
   app.post('/api/senders/action', async (req, reply) => {
-    const address = String(req.body?.address || '').toLowerCase();
+    const addresses = [...new Set([req.body?.address, ...(Array.isArray(req.body?.addresses) ? req.body.addresses : [])]
+      .map((a) => String(a || '').toLowerCase()).filter((a) => a.includes('@')))].slice(0, 1000);
     const action = req.body?.action;
-    if (!address.includes('@') || !['archive', 'read'].includes(action)) return reply.code(400).send({ error: 'address and action (archive | read) needed' });
+    if (!addresses.length || !['archive', 'read'].includes(action)) return reply.code(400).send({ error: 'address and action (archive | read) needed' });
     const sc = scope(req.user.id, reqSpace(req));
     const where = action === 'archive' ? "f.special_use = '\\Inbox'" : `m.is_read = 0 AND ${SKIP_FOLDERS}`;
     const ids = all(`SELECT m.id FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND ${inIds('m.account_id', sc?.accountIds)}
-      AND lower(m.from_addr) = ? AND ${where}`, req.user.id, address).map((r) => r.id);
+      AND lower(m.from_addr) IN (${addresses.map(() => '?').join(',')}) AND ${where}`, req.user.id, ...addresses).map((r) => r.id);
     if (!ids.length) return { count: 0 };
     if (action === 'archive') await actions.archiveMessages(req.user.id, ids);
     else actions.setFlags(req.user.id, ids, { read: true });

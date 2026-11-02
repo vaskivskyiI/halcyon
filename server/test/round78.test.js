@@ -99,3 +99,13 @@ test('Subscriptions lists list mail by sender, remembers unsubscribes and shows 
   db.prepare("UPDATE unsubscribed SET at = ? WHERE address = 'weekly@club.example'").run(t - 10 * day);
   assert.equal((await api('GET', '/api/subscriptions')).data.find((s) => s.address === 'weekly@club.example').since, 2);
 });
+
+test('mail from several subscriptions is marked read in one go', async () => {
+  const unread = () => db.prepare("SELECT COUNT(*) AS n FROM messages WHERE is_read = 0 AND from_addr IN ('weekly@club.example', 'daily@paper.example')").get().n;
+  assert.ok(unread() >= 3);
+  const r = await api('POST', '/api/senders/action', { addresses: ['weekly@club.example', 'Daily@Paper.example'], action: 'read' });
+  assert.equal(r.data.count, 3);
+  assert.equal(unread(), 0);
+  assert.ok(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE is_read = 0 AND from_addr = 'news@shop.example'").get().n > 0); // others untouched
+  assert.equal((await api('POST', '/api/senders/action', { addresses: ['nobody'], action: 'read' })).status, 400);
+});

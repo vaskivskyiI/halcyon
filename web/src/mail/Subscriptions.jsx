@@ -2,7 +2,7 @@
 // per sender with its latest subjects, and one click to unsubscribe — alone, with its inbox mail archived, or for several
 // selected at once. Unsubscribed lists stay listed, so a list that keeps sending shows up.
 import { useEffect, useState } from 'react';
-import { Menu as MenuIcon, Archive, BellOff, Search, ChevronRight, ChevronDown } from 'lucide-react';
+import { Menu as MenuIcon, Archive, BellOff, Search, ChevronRight, ChevronDown, MailOpen } from 'lucide-react';
 import { api } from '../api.js';
 import { Spinner } from '../components/common.jsx';
 import { fmtListDate, navigate, toast, toastError } from '../util.js';
@@ -51,10 +51,21 @@ export default function SubscriptionsList({ onMenu }) {
     setPicked(new Set());
     load();
   };
+  // Their unread mail marked read: one subscription, or several at once (the selected ones, else all shown).
+  const markRead = async (list) => {
+    list.forEach((r) => mark(r.address, 'read', true));
+    try {
+      const x = await api.post('/api/senders/action', { addresses: list.map((r) => r.address), action: 'read' });
+      toast(x.count ? `${x.count} marked read` : 'Nothing unread');
+      load();
+    } catch (e) { toastError(e); } finally { list.forEach((r) => mark(r.address, 'read', false)); }
+  };
   const toggle = (address) => setPicked((s) => { const n = new Set(s); n.has(address) ? n.delete(address) : n.add(address); return n; });
   const shown = (rows || []).filter((r) => filter === 'all' || (filter === 'unsubscribed' ? r.unsubscribedAt : !r.unsubscribedAt));
   const pickable = shown.filter((r) => !r.unsubscribedAt);
   const allPicked = pickable.length > 0 && pickable.every((r) => picked.has(r.address));
+  const unread = (r) => r.total - (r.seen || 0);
+  const readTargets = (picked.size ? shown.filter((r) => picked.has(r.address)) : shown).filter((r) => unread(r) > 0);
   return (
     <section className="list-pane senders" style={{ flex: 1, width: 'auto' }}>
       <div className="list-head" style={{ paddingBottom: 10 }}>
@@ -64,9 +75,11 @@ export default function SubscriptionsList({ onMenu }) {
           <span className="muted grow">Newsletters and mailing lists that send to you. Unsubscribe in one click; lists that keep sending after you unsubscribed are marked.</span>
           {FILTERS.map(([k, l]) => <button key={k} className={`chip clickable ${filter === k ? 'on' : ''}`} onClick={() => setFilter(k)}>{l}{rows ? ` ${(rows || []).filter((r) => k === 'all' || (k === 'unsubscribed' ? r.unsubscribedAt : !r.unsubscribedAt)).length}` : ''}</button>)}
         </div>
-        {pickable.length > 0 && <div className="row small" style={{ marginTop: 8, gap: 10 }}>
-          <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(pickable.map((r) => r.address)))} /> Select all</label>
+        {(pickable.length > 0 || readTargets.length > 0) && <div className="row small" style={{ marginTop: 8, gap: 10 }}>
+          {pickable.length > 0 && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(pickable.map((r) => r.address)))} /> Select all</label>}
           {picked.size > 0 && <button className="btn sm" onClick={unsubscribePicked}><BellOff size={13} /> Unsubscribe from {picked.size}</button>}
+          {readTargets.length > 0 && <button className="btn sm ghost" title={picked.size ? 'Mark the selected subscriptions\' mail read' : 'Mark the mail of every subscription shown read'} onClick={() => markRead(readTargets)}>
+            <MailOpen size={13} /> {picked.size ? 'Mark selected read' : 'Mark all read'}</button>}
         </div>}
       </div>
       <div className="list-scroll" style={{ overflow: 'auto', flex: 1 }}>
@@ -87,6 +100,7 @@ export default function SubscriptionsList({ onMenu }) {
             </div>
             <div className="row" style={{ gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <button className="icon-btn" title="Show all their mail" onClick={() => { navigate('#/mail/unified'); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${r.address}` } })), 150); }}><Search size={15} /></button>
+              {unread(r) > 0 && <button className="icon-btn" disabled={busy[`${r.address}read`]} title={`Mark ${unread(r)} unread read`} onClick={() => markRead([r])}><MailOpen size={15} /></button>}
               {(!r.unsubscribedAt || r.since > 0) && <button className="btn sm" disabled={busy[`${r.address}unsub`]} title="Unsubscribe from this list" onClick={() => unsubscribe(r, false)}><BellOff size={13} /> {r.unsubscribedAt ? 'Again' : 'Unsubscribe'}</button>}
               {!r.unsubscribedAt && r.inbox > 0 && <button className="btn sm ghost" disabled={busy[`${r.address}unsub`]} title={`Unsubscribe and archive the ${r.inbox} in the inbox`} onClick={() => unsubscribe(r, true)}>+ <Archive size={13} /></button>}
               {r.unsubscribedAt && r.inbox > 0 && <button className="btn sm" disabled={busy[`${r.address}archive`]} title="Archive everything from them in the inbox" onClick={() => archive(r)}><Archive size={13} /> Archive {r.inbox}</button>}
