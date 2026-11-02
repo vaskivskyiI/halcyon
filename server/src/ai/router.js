@@ -3,6 +3,8 @@ import { get, all, run, now } from '../db/index.js';
 import { decrypt } from '../util/crypto.js';
 import { getSettings } from '../settings.js';
 import { makeProvider, PROVIDER_TYPES, isLocalEndpoint } from './providers/index.js';
+import { noteCall } from './queue.js';
+import { track } from '../util/activity.js';
 
 export class NoProviderError extends Error {
   constructor(task) { super(`No AI provider configured for "${task}". Add one in Settings → AI.`); this.code = 'NO_PROVIDER'; }
@@ -51,6 +53,13 @@ async function enterLane(row, interactive) {
 
 export const laneStats = () => Object.fromEntries([...lanes].map(([id, l]) => [id, { interactive: l.interactive, background: l.bg, waiting: l.waiters.length }]));
 
+// Calls in flight (waiting for their lane included) for the admin activity view, also on the running queue job.
+function watch(userId, row, model, task, interactive, extra = null) {
+  const a = track('ai-call', task, { userId, provider: row.type, providerId: row.id, model, interactive, ...extra });
+  const b = noteCall(row.type, model, task);
+  return () => { a(); b(); };
+}
+
 function logUsage(userId, row, model, task, usage, ms, ok) {
   run('INSERT INTO ai_usage (user_id, provider_id, model, task, input_tokens, output_tokens, ms, ok, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
     userId, row.id, model, task, usage?.input || 0, usage?.output || 0, ms, ok ? 1 : 0, now());
@@ -59,7 +68,8 @@ function logUsage(userId, row, model, task, usage, ms, ok) {
 /** opts.interactive overrides the lane (e.g. "analyze now" uses the background model but the user is waiting). */
 export async function chat(userId, task, { interactive = task !== 'background', ...opts } = {}) {
   const { row, model, provider } = resolve(userId, task);
-  const leave = await enterLane(row, interactive);
+  const end = watch(userId, row, model, task, interactive);
+  const leave = await enterLane(row, interactive).catch((e) => { end(); throw e; });
   const t0 = Date.now();
   try {
     const res = await provider.chat({ model, ...opts });
@@ -68,7 +78,7 @@ export async function chat(userId, task, { interactive = task !== 'background', 
   } catch (e) {
     logUsage(userId, row, model, task, null, Date.now() - t0, false);
     throw e;
-  } finally { leave(); }
+  } finally { leave(); end(); }
 }
 
 export async function chatJSON(userId, task, opts) {
@@ -79,13 +89,14 @@ export async function chatJSON(userId, task, opts) {
 /** interactive: a search query the user is waiting for (vs. background indexing). */
 export async function embed(userId, texts, { interactive = false, signal } = {}) {
   const { row, model, provider } = resolve(userId, 'embeddings');
-  const leave = await enterLane(row, interactive);
+  const end = watch(userId, row, model, 'embeddings', interactive, { texts: texts.length });
+  const leave = await enterLane(row, interactive).catch((e) => { end(); throw e; });
   const t0 = Date.now();
   try {
     const vectors = await provider.embed({ model, input: texts, signal });
     logUsage(userId, row, model, 'embeddings', { input: texts.join(' ').length / 4 }, Date.now() - t0, true);
     return { vectors, model: `${row.type}:${model}` };
-  } finally { leave(); }
+  } finally { leave(); end(); }
 }
 
 export function parseJSON(text) {

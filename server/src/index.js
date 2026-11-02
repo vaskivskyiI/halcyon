@@ -9,6 +9,7 @@ import { config } from './config.js';
 import './db/index.js';
 import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from './auth.js';
 import { recordTiming } from './util/metrics.js';
+import { recordRequest } from './util/activity.js';
 import diagnosticsRoutes from './routes/diagnostics.js';
 import threadRoutes from './routes/threads.js';
 import senderRoutes from './routes/senders.js';
@@ -53,7 +54,12 @@ export async function buildServer({ background = true } = {}) {
     req.readOnly = true;
     if (readOnlyBlocks(req)) return reply.code(403).send({ error: 'Read-only session: nothing can be changed. Sign out and sign in normally to make changes.', readOnly: true });
   });
-  app.addHook('onResponse', async (req, reply) => { if (req.t0 != null) recordTiming(req, reply.statusCode, performance.now() - req.t0); });
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.t0 == null) return;
+    const ms = performance.now() - req.t0;
+    recordTiming(req, reply.statusCode, ms);
+    recordRequest(req, reply.statusCode, ms);
+  });
 
   app.addHook('onSend', async (req, reply, payload) => {
     // Next to a companion app of the suite (see routes/sso.js), and nowhere else.

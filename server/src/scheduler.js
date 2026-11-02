@@ -21,6 +21,7 @@ import { cleanUploads } from './mail/uploads.js';
 import { notifyUser } from './notifications.js';
 import { autoRetry } from './mail/retry.js';
 import { scanAll } from './contacts/review.js';
+import { track } from './util/activity.js';
 
 const log = logger('scheduler');
 const davBusy = new Map();
@@ -53,6 +54,7 @@ const isGoogle = (url) => /\/\/([^/]*\.)?google(apis|usercontent)?\.com/i.test(S
  */
 export function syncDav(account, { asked = false } = {}) {
   if (davBusy.has(account.id)) return davBusy.get(account.id);
+  const end = track('dav', 'Calendars & contacts sync', { accountId: account.id, userId: account.user_id, asked });
   const run = (async () => {
     // asked: the user is waiting for it (saved the account, pressed retry) — a problem is shown at once.
     const out = { at: Date.now(), calendars: null, books: null, error: null, asked };
@@ -100,6 +102,7 @@ export function syncDav(account, { asked = false } = {}) {
       } else if (!out.error) davRetries.delete(account.id);
       davStatus.set(account.id, out);
       davBusy.delete(account.id);
+      end();
     }
     return out;
   })();
@@ -181,32 +184,41 @@ function scheduleBriefs() {
   return hhmm;
 }
 
+// Each periodic job is tracked by name (admin activity view: what runs now, how often and how long it takes).
+const job = (name, fn) => () => {
+  const end = track('scheduled', name);
+  let r;
+  try { r = fn(); } catch (e) { end(); log.error(e); return; }
+  if (r && typeof r.then === 'function') r.catch((e) => log.error(e)).finally(end); else end();
+};
+
 export function startScheduler() {
-  setInterval(() => processOutbox().catch((e) => log.error(e)), 2000).unref();
-  setInterval(() => syncDraftsToServer().catch((e) => log.error(e)), 30e3).unref();
-  setInterval(() => { try { wakeSnoozed(); checkReminders(); scheduleBriefs(); } catch (e) { log.error(e); } }, 30e3).unref();
-  const davAll = () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); };
+  setInterval(job('Outbox', processOutbox), 2000).unref();
+  setInterval(job('Drafts to server', syncDraftsToServer), 30e3).unref();
+  setInterval(job('Snoozes, reminders, briefs', () => { wakeSnoozed(); checkReminders(); scheduleBriefs(); }), 30e3).unref();
+  const davAll = job('Start calendar & contacts syncs', () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); });
   setTimeout(davAll, 5e3).unref();
   // Catch up on mail that was never queued for AI (e.g. arrived while AI was off); cheap when nothing is missing.
-  const backfillAll = () => { for (const u of all('SELECT id FROM users')) { try { backfillAnalysis(u.id); } catch (e) { log.error(e); } } };
+  const backfillAll = job('AI backfill check', () => { for (const u of all('SELECT id FROM users')) { try { backfillAnalysis(u.id); } catch (e) { log.error(e); } } });
   setTimeout(backfillAll, 15e3).unref();
-  setTimeout(() => regroupConversations().catch((e) => log.error(e)), 20e3).unref();
-  setTimeout(() => { try { markRepliedHistory(); } catch (e) { log.error(e); } }, 40e3).unref();
-  setTimeout(() => { try { reanalyzeOpen(); reanalyzeItems(); } catch (e) { log.error(e); } }, 50e3).unref();
-  setInterval(() => { try { db.pragma('optimize'); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
+  setTimeout(job('Regroup conversations', regroupConversations), 20e3).unref();
+  setTimeout(job('Mark replied history', markRepliedHistory), 40e3).unref();
+  setTimeout(job('Re-analyse open items', () => { reanalyzeOpen(); reanalyzeItems(); }), 50e3).unref();
+  setInterval(job('Database optimise', () => db.pragma('optimize')), 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
-  setInterval(() => { try { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); } catch (e) { log.error(e); } }, 3600e3).unref();
-  setInterval(() => { try { expireInsights(); } catch (e) { log.error(e); } }, 2 * 60e3).unref();
-  setInterval(() => { try { cleanUploads(); } catch (e) { log.error(e); } }, 864e5).unref();
+  setInterval(job('Purge memory', () => { purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); }), 3600e3).unref();
+  setInterval(job('Expire insights', expireInsights), 2 * 60e3).unref();
+  setInterval(job('Clean uploads', cleanUploads), 864e5).unref();
   // Linked event copies follow their originals (subscriptions and server calendars change them in the background).
-  setInterval(() => { try { syncLinked(); } catch (e) { log.error(e); } }, 60e3).unref();
-  setTimeout(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 60e3).unref();
-  setInterval(() => { try { scheduleStyle(); } catch (e) { log.error(e); } }, 6 * 3600e3).unref();
+  setInterval(job('Linked event copies', syncLinked), 60e3).unref();
+  const style = job('Style, profiles, about me', scheduleStyle);
+  setTimeout(style, 60e3).unref();
+  setInterval(style, 6 * 3600e3).unref();
   setInterval(davAll, 10 * 60e3).unref();
   // Contact tidying suggestions, once a day per user (contacts/review.js).
-  setInterval(() => scanAll().catch((e) => log.error(e)), 3600e3).unref();
+  setInterval(job('Contact tidying', scanAll), 3600e3).unref();
   // Failed server changes, unreachable sends, unsaved sent copies, SMTP warnings: tried again by themselves (mail/retry.js).
-  setInterval(() => autoRetry().catch((e) => log.error(e)), 20e3).unref();
+  setInterval(job('Automatic retries', autoRetry), 20e3).unref();
   // Clean up old reminder markers.
-  setInterval(() => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000), 3600e3).unref();
+  setInterval(job('Old reminder markers', () => run('DELETE FROM reminders_sent WHERE occurrence < ?', (now() - 7 * 864e5) * 1000)), 3600e3).unref();
 }

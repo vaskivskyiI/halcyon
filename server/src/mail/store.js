@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { simpleParser } from 'mailparser';
+import { tracked } from '../util/activity.js';
 import { db, get, run, all, json, now } from '../db/index.js';
 import { config } from '../config.js';
 import { sha1 } from '../util/crypto.js';
@@ -137,7 +138,8 @@ export function flagsToCols(flags) {
 }
 
 export async function parseRaw(raw) {
-  return simpleParser(raw, { skipImageLinks: true, skipTextToHtml: false, keepCidLinks: true });
+  // Tracked: a large message keeps the CPU busy here (admin activity view).
+  return tracked('parse', 'Read email (mailparser)', { kb: Math.round(raw.length / 1024) }, () => simpleParser(raw, { skipImageLinks: true, skipTextToHtml: false, keepCidLinks: true }));
 }
 
 /**

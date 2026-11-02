@@ -10,6 +10,11 @@ import { userAccounts } from '../accounts.js';
 import { syncManager } from '../mail/sync.js';
 import { openReplySql, openActionSql, NOISE } from '../ai/open-items.js';
 import { timingSummary } from '../util/metrics.js';
+import { activitySnapshot, processStats } from '../util/activity.js';
+import { queueActivity, pauseQueue, cancelJob } from '../ai/queue.js';
+import { laneStats } from '../ai/router.js';
+import { runningOps } from '../mail/sync.js';
+import { davStatus } from '../scheduler.js';
 
 const DAY = 864e5;
 const started = Date.now();
@@ -87,6 +92,60 @@ export function diagnostics(userId) {
   };
 }
 
+/**
+ * Admin: what the whole server is doing right now — AI jobs and calls, mail sync per account, calendar/contacts syncs,
+ * scheduled jobs, heavy parsing, slow requests and process load. Ids and labels only; no mail content.
+ */
+export function backgroundActivity() {
+  const users = new Map(all("SELECT id, email, name, COALESCE(kind, 'person') AS kind FROM users").map((u) => [u.id, u]));
+  const who = (id) => { const u = users.get(id); return u ? { userId: id, user: u.kind === 'person' ? u.email : u.name || u.email, space: u.kind !== 'person' } : { userId: id, user: null, space: false }; };
+  const t = Date.now();
+  const q = queueActivity();
+  const work = activitySnapshot();
+  const accounts = all("SELECT id, user_id, email, kind, sync_enabled, sync_state FROM accounts WHERE COALESCE(kind, '') != 'archive'");
+  const ops = new Map(accounts.map((a) => [a.id, all('SELECT op, COUNT(*) AS n, SUM(attempts > 0) AS retrying, MIN(created_at) AS oldest FROM pending_ops WHERE account_id = ? AND attempts < 5 GROUP BY op', a.id)]));
+  const mail = accounts.map((a) => {
+    const w = syncManager.workers.get(a.id), c = w?.client;
+    const doing = w?.status.doing;
+    return {
+      accountId: a.id, ...who(a.user_id), email: a.email, syncEnabled: !!a.sync_enabled, state: a.sync_state, worker: !!w,
+      connected: !!c?.usable, idling: !!c?.idling, selected: c?.mailbox?.path || null,
+      doing: doing ? { ...doing, ms: t - doing.since } : null,
+      queuedWork: w ? { full: w.fullRequested, folders: [...w.dirtyFolders] } : null,
+      lastFullAt: w?.status.lastFullAt || null, lastFullMs: w?.status.lastFullMs ?? null, lastError: w?.status.lastError || null,
+      pendingOps: ops.get(a.id),
+    };
+  }).filter((a) => a.worker || a.pendingOps.length || a.syncEnabled);
+  return {
+    at: t,
+    process: processStats(),
+    ai: {
+      paused: q.paused, running: q.running, maxConcurrency: q.maxGlobal, lanes: laneStats(),
+      active: q.active.map((j) => ({ ...j, ...who(j.userId) })),
+      queued: q.queued.map((j) => ({ ...j, ...who(j.userId), due: j.runAfter <= t })),
+      counts: q.counts,
+      calls: work.running.filter((w) => w.kind === 'ai-call').map((w) => ({ ...w, ...who(w.meta?.userId) })),
+    },
+    mail, runningOps: runningOps.size,
+    dav: [...davStatus].map(([accountId, s]) => ({ accountId, at: s.at, error: s.error || null, retryAt: s.retryAt || null })),
+    work: work.running.filter((w) => w.kind !== 'ai-call').map((w) => ({ ...w, ...(w.meta?.userId ? who(w.meta.userId) : {}) })),
+    totals: work.totals, slowWork: work.slowWork, slowRequests: work.slowRequests,
+    archives: all("SELECT id, user_id AS userId, type, status, done, total, created_at AS createdAt FROM archive_jobs WHERE status IN ('queued', 'running')"),
+  };
+}
+
+const adminOnly = async (req, reply) => {
+  await requireUser(req, reply);
+  if (reply.sent) return;
+  if (!req.user?.is_admin) return reply.code(403).send({ error: 'Admin only' });
+};
+
 export default async function diagnosticsRoutes(app) {
   app.get('/api/diagnostics', { preHandler: requireUser }, async (req) => diagnostics(req.user.id));
+  app.get('/api/admin/activity', { preHandler: adminOnly }, async () => backgroundActivity());
+  app.post('/api/admin/activity/ai-queue', { preHandler: adminOnly }, async (req) => ({ paused: pauseQueue(!!req.body?.paused) }));
+  app.post('/api/admin/activity/ai-jobs/:id/cancel', { preHandler: adminOnly }, async (req, reply) => {
+    if (!cancelJob(Number(req.params.id))) return reply.code(404).send({ error: 'No such queued or running job' });
+    return { ok: true };
+  });
 }

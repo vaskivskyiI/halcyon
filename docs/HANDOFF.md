@@ -976,3 +976,16 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   context, the assistant's calendar and the brief's events. Web: share button on each calendar in Settings → Calendars
   & tasks (hidden while working in a space). Gap: an owner's event change does not push `calendar:changed` to grantees
   (they see it on their next load).
+- Server activity for admins (no migration, round73): Settings → Server activity (`web/src/settings/ServerActivity.jsx`,
+  admins only) polls GET `/api/admin/activity` (`routes/diagnostics.js` `backgroundActivity`) every few seconds: process
+  load since the previous poll (CPU % of one core, event-loop utilisation and delay from `perf_hooks`, memory), the AI
+  queue (running jobs from memory with user/space, ref, priority, running time and the provider:model call each waits
+  on; next 50 queued; counts; provider lanes), AI calls in flight, mail sync per account (connection, IDLE, `doing` with
+  its duration, requested work, pending_ops), other running work, running archive jobs, time spent per job since start,
+  and the last 50 slow requests (> 0.5 s) and slow background work (> 1 s). Tracking is in memory only:
+  `util/activity.js` `track(kind, label, meta)` → end() / `tracked(...)`; used by every scheduler job (`job(name, fn)`),
+  `syncDav`, `parseRaw` (mailparser) and the AI router (`watch`: also tells the running queue job through `noteCall`,
+  an AsyncLocalStorage scope set in `runJob`). POST `/api/admin/activity/ai-queue` { paused } stops new AI jobs from
+  starting (in memory; a restart resumes). POST `/api/admin/activity/ai-jobs/:id/cancel` marks a queued or running job
+  failed ("Cancelled by an administrator") and frees a running job's slot at once; whatever its handler does later is
+  ignored. The handler itself is not aborted (providers take no signal from the queue).

@@ -1,5 +1,6 @@
 // Background AI job queue (SQLite-backed). Jobs are deduplicated per (type, ref, user) and processed by
 // priority so that the newest/most relevant mail is analysed first. Results are pushed to clients live.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { all, get, run, now } from '../db/index.js';
 import { getSettings } from '../settings.js';
 import { logger } from '../util/log.js';
@@ -11,6 +12,19 @@ let running = 0;
 let timer = null, timerDue = 0;
 const perUser = new Map();
 const MAX_GLOBAL = Number(process.env.HALCYON_AI_CONCURRENCY || 4);
+// Running jobs in memory (admin activity view): since when, and the AI calls each one is making.
+const active = new Map();
+const jobScope = new AsyncLocalStorage();
+let paused = false;
+
+/** Called by the AI router around each provider call: the running job (if any) shows which provider/model it waits on. */
+export function noteCall(provider, model, task) {
+  const a = active.get(jobScope.getStore());
+  if (!a) return () => {};
+  const call = { provider, model, task, since: Date.now() };
+  a.calls.push(call);
+  return () => { a.calls.splice(a.calls.indexOf(call), 1); a.callsDone++; };
+}
 
 export function registerHandler(type, fn) { handlers[type] = fn; }
 
@@ -55,12 +69,15 @@ async function runJob(job) {
   if (!run("UPDATE ai_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ? AND status = 'queued'", now(), job.id).changes) return;
   running++;
   perUser.set(job.user_id, (perUser.get(job.user_id) || 0) + 1);
+  const entry = { job, since: Date.now(), calls: [], callsDone: 0, released: false };
+  active.set(job.id, entry);
   try {
     const h = handlers[job.type];
     if (!h) throw new Error(`No handler for ${job.type}`);
-    await h(job.user_id, job.ref_id, job);
-    run("UPDATE ai_jobs SET status = 'done', error = NULL, updated_at = ? WHERE id = ?", now(), job.id);
+    await jobScope.run(job.id, () => h(job.user_id, job.ref_id, job));
+    if (!entry.released) run("UPDATE ai_jobs SET status = 'done', error = NULL, updated_at = ? WHERE id = ?", now(), job.id);
   } catch (e) {
+    if (entry.released) return;
     if (e.code === 'NO_PROVIDER' || e.code === 'AI_DISABLED') {
       // Parked until the user configures a provider (see resumeWaiting).
       run("UPDATE ai_jobs SET status = 'waiting', error = ?, attempts = 0, updated_at = ? WHERE id = ?", e.message, now(), job.id);
@@ -77,15 +94,20 @@ async function runJob(job) {
       if (job.type === 'analyze') run("UPDATE messages SET ai_status = ? WHERE id = ?", failed ? 'failed' : 'pending', Number(job.ref_id));
     }
   } finally {
-    running--;
-    perUser.set(job.user_id, perUser.get(job.user_id) - 1);
-    kick();
+    if (active.get(job.id) === entry) active.delete(job.id);
+    if (!entry.released) release(job);
   }
+}
+
+function release(job) {
+  running--;
+  perUser.set(job.user_id, perUser.get(job.user_id) - 1);
+  kick();
 }
 
 function tick() {
   timer = null;
-  if (running >= MAX_GLOBAL) return;
+  if (paused || running >= MAX_GLOBAL) return;
   const jobs = all("SELECT * FROM ai_jobs WHERE status = 'queued' AND run_after <= ? ORDER BY priority DESC, id DESC LIMIT 50", now());
   for (const job of jobs) {
     if (running >= MAX_GLOBAL) break;
@@ -119,6 +141,39 @@ export function queueStats(userId) {
   const rows = all('SELECT type, status, COUNT(*) AS n FROM ai_jobs WHERE user_id = ? GROUP BY type, status', userId);
   const lastError = get("SELECT type, error, updated_at FROM ai_jobs WHERE user_id = ? AND error IS NOT NULL AND status != 'done' ORDER BY updated_at DESC LIMIT 1", userId);
   return { rows, lastError, running };
+}
+
+/** Admin: stops starting new jobs (running ones finish); in memory, so a restart resumes. */
+export function pauseQueue(on) { paused = !!on; if (!paused) kick(); return paused; }
+export const queuePaused = () => paused;
+
+/**
+ * Admin: a queued job is dropped; a running one is marked failed and its slot freed at once, so a call that hangs
+ * (a model server that never answers) stops holding up the queue. Its handler may still finish in the background;
+ * what it returns then is ignored.
+ */
+export function cancelJob(id) {
+  const job = get('SELECT * FROM ai_jobs WHERE id = ?', id);
+  if (!job || !['queued', 'running', 'waiting'].includes(job.status)) return false;
+  run("UPDATE ai_jobs SET status = 'failed', error = 'Cancelled by an administrator', updated_at = ? WHERE id = ?", now(), id);
+  if (job.type === 'analyze') run("UPDATE messages SET ai_status = 'failed' WHERE id = ? AND ai_status != 'done'", Number(job.ref_id));
+  const entry = active.get(id);
+  if (entry && !entry.released) { entry.released = true; active.delete(id); release(entry.job); }
+  return true;
+}
+
+/** Running jobs (from memory: since when, current AI calls) and the next queued ones, for the admin view. */
+export function queueActivity(limit = 50) {
+  const t = Date.now();
+  return {
+    paused, running, maxGlobal: MAX_GLOBAL,
+    active: [...active.values()].map(({ job, since, calls, callsDone }) => ({
+      id: job.id, type: job.type, userId: job.user_id, refId: job.ref_id, priority: job.priority, attempts: job.attempts + 1, since, ms: t - since,
+      calls: calls.map((c) => ({ ...c, ms: t - c.since })), callsDone,
+    })),
+    queued: all("SELECT id, type, user_id AS userId, ref_id AS refId, priority, attempts, run_after AS runAfter, created_at AS createdAt FROM ai_jobs WHERE status = 'queued' ORDER BY run_after <= ? DESC, priority DESC, id DESC LIMIT ?", now(), limit),
+    counts: all("SELECT type, status, COUNT(*) AS n FROM ai_jobs WHERE status IN ('queued', 'running', 'waiting') GROUP BY type, status ORDER BY n DESC"),
+  };
 }
 
 export const notifyAI = (userId, type, payload) => notify(userId, type, payload);
