@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
-  Inbox, Star, Clock, History, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon,
+  Inbox, Star, Clock, History, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon, Newspaper,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
   ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal,
 } from 'lucide-react';
@@ -14,6 +14,7 @@ import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
 import Reader from './Reader.jsx';
 import SendersList from './Senders.jsx';
+import SubscriptionsList from './Subscriptions.jsx';
 import AnalyzeOld from '../components/AnalyzeOld.jsx';
 import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
 
@@ -25,12 +26,15 @@ const SMART = [
   ['flagged', Star, 'Flagged'],
   ['snoozed', Clock, 'Snoozed', 'snoozed'],
   ['scheduled', SendIcon, 'Outbox & drafts', 'scheduled'],
+  ['subscriptions', Newspaper, 'Subscriptions'],
 ];
 const MORE_VIEWS = [
   ['important', Flame, 'Important'],
   ['waiting', Hourglass, 'Waiting for reply', 'waiting'],
   ['senders', Users, 'Senders'],
 ];
+// Views that fill the page themselves: no message list or reader.
+const PANES = ['scheduled', 'senders', 'subscriptions'];
 const SORTS = [['date', 'Date', 'desc'], ['from', 'From', 'asc'], ['subject', 'Subject', 'asc'], ['size', 'Size', 'desc'], ['unread', 'Unread first', 'asc'], ['flagged', 'Flagged first', 'desc']];
 // Search results (the best matches, not paged) are put in order here: by how well they match (as found), by date or by
 // sender. Chosen separately for the keyword results and the AI's, and remembered on this device.
@@ -92,9 +96,10 @@ export default function MailView({ route }) {
       {/* On a phone the folder list slides over the mail: tapping beside it closes it. */}
       {sidebarOpen && <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} />}
       {view === 'scheduled' ? <OutboxList onMenu={() => setSidebarOpen(true)} /> : view === 'senders' ? <SendersList onMenu={() => setSidebarOpen(true)} />
+        : view === 'subscriptions' ? <SubscriptionsList onMenu={() => setSidebarOpen(true)} />
         : <MessageList key={view} view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
-      {view !== 'scheduled' && view !== 'senders' && <ColResizer col="list" min={260} max={900} cols={cols} setCols={setCols} selector=".list-pane" />}
-      {view !== 'scheduled' && view !== 'senders' && <Reader id={openId} view={view} />}
+      {!PANES.includes(view) && <ColResizer col="list" min={260} max={900} cols={cols} setCols={setCols} selector=".list-pane" />}
+      {!PANES.includes(view) && <Reader id={openId} view={view} />}
     </div>
   );
 }

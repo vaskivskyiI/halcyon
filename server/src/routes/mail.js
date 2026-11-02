@@ -723,19 +723,22 @@ export default async function mailRoutes(app) {
     const raw = readRaw(m);
     const oneClick = raw && /List-Unsubscribe-Post:\s*List-Unsubscribe=One-Click/i.test(raw.subarray(0, 20000).toString());
     const http = urls.find((u) => /^https:/i.test(u));
+    // Remembered per sender (Mail → Subscriptions), so a list that keeps sending afterwards stands out.
+    const done = (method) => run('INSERT OR REPLACE INTO unsubscribed (user_id, address, method, at) VALUES (?, ?, ?, ?)', req.user.id, (m.from_addr || '').toLowerCase(), method, now());
     if (http && oneClick) {
       try {
         const r = await fetch(http, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click' });
-        if (r.ok) return { ok: true, method: 'one-click' };
+        if (r.ok) { done('one-click'); return { ok: true, method: 'one-click' }; }
       } catch { /* fall through */ }
     }
     const mailto = urls.find((u) => /^mailto:/i.test(u));
     if (mailto) {
       const u = new URL(mailto);
       queueSend(req.user.id, { accountId: m.account_id, to: [u.pathname], subject: u.searchParams.get('subject') || 'unsubscribe', text: u.searchParams.get('body') || 'unsubscribe' });
+      done('mailto');
       return { ok: true, method: 'mailto' };
     }
-    if (http) return { ok: false, method: 'browser', url: http };
+    if (http) { done('browser'); return { ok: false, method: 'browser', url: http }; }
     return httpError(reply, 400, 'Unsubscribe not possible automatically');
   });
 

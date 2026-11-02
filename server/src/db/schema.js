@@ -606,4 +606,8 @@ export const migrations = [
   `
   CREATE INDEX idx_messages_thread_folder ON messages(user_id, thread_id, folder_id);
   `,
+  // 55: lists the user unsubscribed from (Mail → Subscriptions), by sender address: mail that keeps coming is shown.
+  `
+  CREATE TABLE unsubscribed (user_id INTEGER NOT NULL, address TEXT NOT NULL, method TEXT, at INTEGER, PRIMARY KEY (user_id, address));
+  `,
 ];

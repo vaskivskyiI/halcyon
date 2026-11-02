@@ -27,7 +27,7 @@ before(async () => {
   ({ db } = await import('../src/db/index.js'));
   await api('POST', '/api/auth/setup', { email: 'u@example.org', name: 'U', password: 'password123' });
   const acc = db.prepare("INSERT INTO accounts (user_id, email, sync_enabled, created_at) VALUES (1, 'u@example.org', 0, 0)").run().lastInsertRowid;
-  db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'INBOX', 'INBOX', '\Inbox')").run(acc);
+  db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'INBOX', 'INBOX', '\\Inbox')").run(acc);
   account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(acc);
   inbox = db.prepare('SELECT * FROM folders WHERE account_id = ?').get(acc);
 });
@@ -74,4 +74,28 @@ test('mail stored before the fix gets List-Unsubscribe filled in once, from the 
   db.prepare('UPDATE messages SET list_unsubscribe = NULL WHERE id = ?').run(old.id);
   assert.equal(await backfillUnsubscribe(), 0);
   assert.equal(value(old.id), null);
+});
+
+test('Subscriptions lists list mail by sender, remembers unsubscribes and shows a list that keeps sending', async () => {
+  const { ingestMessage } = await import('../src/mail/store.js');
+  const list = (n, from, date) => ingestMessage({ account, folder: inbox, uid: 100 + n, flags: [], internalDate: new Date(),
+    raw: Buffer.from([`From: ${from}`, 'To: u@example.org', `Subject: Issue ${n}`, `Message-ID: <r78-l${n}@x>`, `Date: ${new Date(date).toUTCString()}`,
+      `List-Unsubscribe: <mailto:leave@${from.split('@')[1]}>`, 'Content-Type: text/plain', '', 'News.', ''].join('\r\n')) });
+  const day = 864e5, t = Date.now();
+  await list(1, 'Weekly <weekly@club.example>', t - 3 * day);
+  await list(2, 'Weekly <weekly@club.example>', t - 2 * day);
+  await list(3, 'Daily <daily@paper.example>', t - day);
+  await ingestMessage({ account, folder: inbox, uid: 110, flags: [], internalDate: new Date(), raw: mail(110) }); // no header: not a subscription
+  db.prepare('DELETE FROM unsubscribed').run();
+  let subs = (await api('GET', '/api/subscriptions')).data;
+  const weekly = subs.find((s) => s.address === 'weekly@club.example');
+  assert.ok(!subs.some((s) => s.address === 'u@example.org'));
+  assert.deepEqual([weekly.total, weekly.inbox, weekly.recent.map((m) => m.subject), weekly.unsubscribedAt], [2, 2, ['Issue 2', 'Issue 1'], null]);
+  assert.equal((await api('POST', `/api/messages/${weekly.unsubscribeId}/unsubscribe`)).data.method, 'mailto');
+  subs = (await api('GET', '/api/subscriptions')).data;
+  assert.ok(subs.find((s) => s.address === 'weekly@club.example').unsubscribedAt);
+  assert.equal(subs.find((s) => s.address === 'daily@paper.example').unsubscribedAt, null);
+  // Mail more than a day after unsubscribing counts as "kept sending".
+  db.prepare("UPDATE unsubscribed SET at = ? WHERE address = 'weekly@club.example'").run(t - 10 * day);
+  assert.equal((await api('GET', '/api/subscriptions')).data.find((s) => s.address === 'weekly@club.example').since, 2);
 });
