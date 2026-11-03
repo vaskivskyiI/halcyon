@@ -1040,6 +1040,17 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   icon.png/.ico, Android adaptive foreground + mipmap).
 - NOT verified on a phone: FCM close delivery, delete intents, battery prompt, per-type icons (no emulator here).
 
+### Links between the Halcyon and Inkwell apps; all-day bars (no migration)
+- Android: `LinkActivity` is an invisible, exported activity with action `cc.halcyon.mail.OPEN_LINK` and extra `url`.
+  A link to this app's server opens in MainActivity at its `#/` route; anything else opens in the browser.
+- `Links.outside` sends every http(s) link that leaves the app to `cc.inkwell.notes.OPEN_LINK` first. Inkwell's own
+  LinkActivity decides the same way. If Inkwell is not installed, the link goes to the browser.
+- Windows: each app writes `HKCU\Software\<Halcyon|Inkwell>\Windows` with `Exe` and `Server` (its origin) on every
+  start and on a server change, and accepts `--link <url>` (also through the single-instance pipe).
+- `Shell.OpenLink` starts Inkwell's exe when a link's origin is Inkwell's `Server`; otherwise it opens the browser.
+- Week and day views: all-day and multi-day events are bars across their days, each on the first free line. Grid
+  columns are `minmax(0, 1fr)` so a long title cannot widen a day; the month grid uses the same.
+
 ### Plain-text or HTML mail, links, richer editor (no migration, round84)
 - Composer `format`: 'html' or 'text'. The default comes from `settings.mail.composeFormat` (Settings → Mail), and the
   value is kept in the draft payload. In 'text' mode the user's own text loses its formatting, the toolbar is hidden,

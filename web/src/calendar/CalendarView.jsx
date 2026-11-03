@@ -392,10 +392,28 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
   useEffect(() => { scroller.current.scrollTop = Math.max(0, (ws - 1) * HOUR_PX); }, []);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60e3); return () => clearInterval(t); }, []);
   const dayList = [...Array(days)].map((_, i) => addDays(from, i));
-  const cols = `56px repeat(${days}, 1fr)`;
+  // minmax(0, …): a long title must not widen its day (the all-day row and the hours would no longer line up).
+  const cols = `56px repeat(${days}, minmax(0, 1fr))`;
   const [startSpan, inSpan] = useDaySpan(onNew);
   const allDay = events.filter((e) => e.allDay || e.end - e.start >= 864e5);
   const timed = events.filter((e) => !(e.allDay || e.end - e.start >= 864e5));
+  // All-day and multi-day events as bars across their days, each in the first free line.
+  const bars = (() => {
+    const starts = dayList.map((d) => d.getTime());
+    const ends = starts.map((s) => s + 864e5);
+    const lines = [];
+    return allDay.filter((x) => x.start < ends[days - 1] && x.end > starts[0])
+      .sort((x, y) => x.start - y.start || (y.end - y.start) - (x.end - x.start))
+      .map((ev) => {
+        const a = Math.max(0, ends.findIndex((e) => e > ev.start));
+        let b = starts.findLastIndex((s) => s < ev.end);
+        if (b < a) b = a;
+        let line = lines.findIndex((end) => end < a);
+        if (line < 0) { line = lines.length; lines.push(b); } else lines[line] = b;
+        return { ev, a, b, line, before: ev.start < starts[a], after: ev.end > ends[b] };
+      });
+  })();
+  const allDayRows = Math.max(1, ...bars.map((x) => x.line + 1));
 
   // Drag to move / resize with 15-minute snapping.
   const startDrag = (e, ev, mode) => {
@@ -444,14 +462,16 @@ function TimeGrid({ from, days, events, settings, onNew, onOpen, onMove, onMenu 
         <div />
         {dayList.map((d, i) => <div key={i} className={`d ${d.getTime() === today ? 'today' : ''}`}>{d.toLocaleDateString([], { weekday: 'short' })}<b>{d.getDate()}</b></div>)}
       </div>
-      <div className="allday-row" style={{ gridTemplateColumns: cols }}>
-        <div className="small faint" style={{ padding: 4, textAlign: 'right' }}>all-day</div>
+      <div className="allday-row" style={{ gridTemplateColumns: cols, gridTemplateRows: `repeat(${allDayRows}, auto)` }}>
+        <div className="small faint" style={{ padding: 4, textAlign: 'right', gridRow: `1 / span ${allDayRows}` }}>all-day</div>
         {dayList.map((d, i) => {
-          const s = d.getTime(), e = s + 864e5;
-          return <div key={i} data-day={s} className={`day-col ${inSpan(s) ? 'span-sel' : ''}`} style={{ padding: 2, display: 'flex', flexDirection: 'column', gap: 2 }} onMouseDown={(m) => startSpan(m, s)} onDoubleClick={() => onNew(s, true)}>
-            {allDay.filter((x) => x.start < e && x.end > s).map((ev) => <div key={ev.instanceId} className={`ev-pill show-${ev.showAs || 'busy'}`} style={{ background: ev.color, color: '#fff' }} onClick={() => onOpen(ev)} onContextMenu={(e) => onMenu?.(e, ev)}>{ev.title}</div>)}
-          </div>;
+          const s = d.getTime();
+          return <div key={i} data-day={s} className={`day-col ${inSpan(s) ? 'span-sel' : ''}`} style={{ gridColumn: i + 2, gridRow: `1 / span ${allDayRows}` }}
+            onMouseDown={(m) => startSpan(m, s)} onDoubleClick={() => onNew(s, true)} />;
         })}
+        {bars.map(({ ev, a, b, line, before, after }) => <div key={ev.instanceId} className={`ev-pill allday-bar show-${ev.showAs || 'busy'} ${before ? 'cont-before' : ''} ${after ? 'cont-after' : ''}`}
+          style={{ gridColumn: `${a + 2} / ${b + 3}`, gridRow: line + 1, background: ev.color, color: '#fff' }} title={ev.title}
+          onClick={() => onOpen(ev)} onContextMenu={(e) => onMenu?.(e, ev)}>{before ? '‹ ' : ''}{ev.title}</div>)}
       </div>
       <div className="week-body" ref={scroller}>
         <div className="week-grid" style={{ gridTemplateColumns: cols }}>

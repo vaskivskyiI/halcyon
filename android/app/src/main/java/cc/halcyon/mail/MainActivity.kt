@@ -24,7 +24,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.enableEdgeToEdge
@@ -262,10 +261,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun outside(u: Uri) {
-        try { startActivity(Intent(Intent.ACTION_VIEW, u).addCategory(Intent.CATEGORY_BROWSABLE)) }
-        catch (_: ActivityNotFoundException) { Toast.makeText(this, getString(R.string.no_app, u.toString()), Toast.LENGTH_LONG).show() }
-    }
+    private fun outside(u: Uri) = Links.outside(this, u)
 
     /** A file the page made (blob:), read by the page and handed to the bridge. */
     private fun blob(url: String, name: String) {

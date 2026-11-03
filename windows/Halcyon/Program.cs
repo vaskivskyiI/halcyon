@@ -28,6 +28,7 @@ static class Program
             config.Server = connect.Server;
             config.Save();
         }
+        Shell.Announce(config.Server);
         var main = new MainForm(config, args);
         Listen(main);
         Application.Run(new AppContext(main, args.Contains("--hidden")));

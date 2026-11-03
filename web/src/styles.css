@@ -220,8 +220,8 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .cal { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
 .cal-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .cal-head h2 { margin: 0 8px; font-size: 18px; font-weight: 650; }
-.month-grid { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; min-height: 0; }
-.month-dow { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--border); }
+.month-grid { flex: 1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); min-height: 0; }
+.month-dow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-bottom: 1px solid var(--border); }
 .month-dow div { padding: 6px 8px; font-size: 12px; color: var(--text-2); font-weight: 600; }
 .month-cell { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 4px; overflow: hidden; min-height: 0; cursor: default; display: flex; flex-direction: column; gap: 2px; }
 .month-cell.other { background: var(--panel-2); }
@@ -610,7 +610,11 @@ button.chip.clickable.on { background: var(--accent-soft); border-color: transpa
 .inkwell-notes .btn { text-decoration: none; }
 /* Days being selected for a new multi-day event */
 .span-sel { background: var(--accent-soft) !important; }
-.allday-row { min-height: 26px; }
+.allday-row { min-height: 26px; max-height: 32vh; overflow-y: auto; }
+/* An all-day bar lies over the day cells it spans; ends that go on beyond the week are square. */
+.allday-row .allday-bar { position: relative; z-index: 1; min-width: 0; margin: 2px 3px; align-self: start; }
+.allday-row .allday-bar.cont-before { margin-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.allday-row .allday-bar.cont-after { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 /* Emails behind an assistant answer */
 .sources { margin-top: 6px; }
 .sources summary { cursor: pointer; width: fit-content; }

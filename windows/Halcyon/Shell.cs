@@ -63,7 +63,7 @@ public static class Shell
     /// <summary>Uninstall: Halcyon.exe --unregister.</summary>
     public static void Unregister()
     {
-        foreach (var k in new[] { $@"Software\Classes\AppUserModelId\{AppId}", $@"Software\Classes\{Protocol}", $@"Software\Classes\{MailtoProgId}", Client })
+        foreach (var k in new[] { $@"Software\Classes\AppUserModelId\{AppId}", $@"Software\Classes\{Protocol}", $@"Software\Classes\{MailtoProgId}", Client, Self })
             Registry.CurrentUser.DeleteSubKeyTree(k, false);
         using (var r = Registry.CurrentUser.OpenSubKey(@"Software\RegisteredApplications", true)) r?.DeleteValue("Halcyon", false);
         using (var r = Registry.CurrentUser.OpenSubKey(RunKey, true)) r?.DeleteValue(RunName, false);
@@ -88,6 +88,42 @@ public static class Shell
     }
 
     public static void Open(string target) => Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+
+    // Halcyon and Inkwell (notes) open each other's links in their apps: each one says where it is and which server it
+    // shows (HKCU\Software\<app>\Windows: Exe, Server), and takes links with --link <url>.
+    const string Self = @"Software\Halcyon\Windows", Inkwell = @"Software\Inkwell\Windows";
+
+    public static void Announce(string server)
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(Self);
+            k.SetValue("Exe", Exe);
+            k.SetValue("Server", Config.Origin(server));
+        }
+        catch { /* registry refused: Inkwell's links then open in the browser */ }
+    }
+
+    /// <summary>A web link leaving the app: Inkwell's app for a page of its server when it is installed, else the browser.</summary>
+    public static void OpenLink(string url)
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(Inkwell);
+            if (k?.GetValue("Exe") is string exe && k.GetValue("Server") is string server && server.Length > 0 && File.Exists(exe)
+                && Config.Origin(url).Equals(server, StringComparison.OrdinalIgnoreCase))
+            {
+                AllowAnyForeground();
+                var p = new ProcessStartInfo(exe) { UseShellExecute = false };
+                p.ArgumentList.Add("--link");
+                p.ArgumentList.Add(url);
+                Process.Start(p);
+                return;
+            }
+        }
+        catch (Exception x) { Log.Write("inkwell: " + x.Message); }
+        Open(url);
+    }
 
     public static string Downloads
     {

@@ -30,7 +30,7 @@ public sealed class MainForm : Form
     public MainForm(Config config, string[] args)
     {
         this.config = config;
-        startRoute = RouteOf(args) ?? Home;
+        startRoute = LinkRoute(args) ?? RouteOf(args) ?? Home;
         Text = "Halcyon";
         Icon = Icons.App;
         MinimumSize = new Size(380, 500);
@@ -98,7 +98,7 @@ public sealed class MainForm : Form
             if (Ours(u) || u.StartsWith("about:") || u.StartsWith("data:")) { pageOk = false; return; }
             // The window only ever shows the server; everything else opens in the default browser.
             e.Cancel = true;
-            if (u.StartsWith("http:") || u.StartsWith("https:")) Shell.Open(u);
+            if (u.StartsWith("http:") || u.StartsWith("https:")) Shell.OpenLink(u);
         };
         core.NavigationCompleted += (_, e) =>
         {
@@ -196,7 +196,7 @@ public sealed class MainForm : Form
             return;
         }
         e.Handled = true;
-        if (u.StartsWith("http:") || u.StartsWith("https:")) Shell.Open(u);
+        if (u.StartsWith("http:") || u.StartsWith("https:")) Shell.OpenLink(u);
     }
 
     /// <summary>A file of the server, fetched by the page itself (session cookie, no navigation away).</summary>
@@ -296,6 +296,7 @@ public sealed class MainForm : Form
     {
         hiddenStart = false;
         Shell.Front(this);
+        if (LinkRoute(args) is string link) { Go(link); return; }
         var click = args.FirstOrDefault(a => a.StartsWith(Shell.Protocol + ":", StringComparison.OrdinalIgnoreCase));
         if (click != null && pageOk)
         {
@@ -322,6 +323,18 @@ public sealed class MainForm : Form
             }
         }
         return null;
+    }
+
+    /// <summary>--link &lt;url&gt; (from Inkwell's app): a page of this server → its route; another address opens in the
+    /// browser (Inkwell only hands over links to this server, but any program may start the app).</summary>
+    string? LinkRoute(string[] args)
+    {
+        var i = Array.IndexOf(args, "--link");
+        if (i < 0 || i + 1 >= args.Length) return null;
+        var url = args[i + 1];
+        if (!Ours(url)) { if (url.StartsWith("http:") || url.StartsWith("https:")) Shell.Open(url); return Home; }
+        var rest = url[Math.Min(url.Length, Server.Length)..].TrimStart('/');
+        return url.StartsWith(Server, StringComparison.OrdinalIgnoreCase) && rest.StartsWith("#/") ? rest : Home;
     }
 
     static string Compose(string mailto) => "#/compose?url=" + Uri.EscapeDataString(mailto);
@@ -355,6 +368,7 @@ public sealed class MainForm : Form
         if (f.ShowDialog(this) != DialogResult.OK) return;
         config.Server = f.Server;
         Save();
+        Shell.Announce(Server);
         if (web.CoreWebView2 == null) return;
         _ = Inject().ContinueWith(_ => BeginInvoke(() => web.CoreWebView2.Navigate($"{Server}/{Home}")));
     }
