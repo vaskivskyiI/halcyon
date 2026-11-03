@@ -16,7 +16,9 @@
     <Company>Halcyon</Company>
     <Description>Halcyon for Windows</Description>
     <Version>1.0.0</Version>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Real culture data: WinForms looks up the culture of the keyboard layout on every switch (e.g. Slovenian),
+         which throws in invariant mode and closed the app. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Framework-dependent (needs the .NET 8 Desktop Runtime) keeps the app small. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
