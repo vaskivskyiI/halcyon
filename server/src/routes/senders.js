@@ -7,6 +7,7 @@ import { ownAddresses } from '../ai/open-items.js';
 import * as actions from '../mail/actions.js';
 import { notify } from '../util/events.js';
 import { rareSenders, keptSenders, keepSender } from '../ai/habits.js';
+import { focusSenders, setFocusSender, forgetFocusSender } from '../focus.js';
 
 const SKIP_FOLDERS = "COALESCE(f.special_use, '') NOT IN ('\\Sent', '\\Drafts', '\\Trash', '\\Junk')";
 
@@ -24,9 +25,17 @@ export default async function senderRoutes(app) {
       WHERE m.user_id = ? AND ${inIds('m.account_id', sc?.accountIds)} AND m.date > ? AND ${SKIP_FOLDERS} AND m.from_addr IS NOT NULL
       GROUP BY lower(m.from_addr) HAVING COUNT(*) >= 2 ORDER BY total DESC LIMIT 300`, req.user.id, Date.now() - days * 864e5);
     const rare = rareSenders(req.user.id), kept = keptSenders(req.user.id);
+    const focus = new Set(focusSenders(req.user.id).filter((f) => f.focused).map((f) => f.address));
     return rows.filter((r) => !own.has(r.address)).map((r) => ({ ...r, inbox: r.inbox || 0, readRate: r.total ? Math.round((100 * (r.seen || 0)) / r.total) : 0,
-      learned: rare.has(r.address), kept: kept.has(r.address) }));
+      learned: rare.has(r.address), kept: kept.has(r.address), focused: focus.has(r.address) || focus.has(`@${r.address.split('@')[1]}`) }));
   });
+
+  // Senders always in Focused (Settings → Mail; focus.js).
+  app.get('/api/focus-senders', async (req) => focusSenders(req.user.id));
+  app.post('/api/focus-senders', async (req, reply) => {
+    try { return { address: setFocusSender(req.user.id, req.body?.address, req.body?.focused !== false) }; } catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/focus-senders', async (req) => ({ removed: forgetFocusSender(req.user.id, req.query.address) }));
 
   // Mail → Subscriptions: senders of list mail (List-Unsubscribe) with their latest subjects, and whether the user
   // unsubscribed (and how much came after).

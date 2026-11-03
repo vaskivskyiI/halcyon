@@ -614,4 +614,12 @@ export const migrations = [
   `
   ALTER TABLE fcm_tokens ADD COLUMN app_version INTEGER;
   `,
+  // 57: senders whose mail always goes to Focused (focus.js): learned from the people the user writes to (auto) or added
+  //     by the user; focused = 0 keeps one the user took out from being learned again.
+  `
+  CREATE TABLE focus_senders (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, address TEXT NOT NULL, auto INTEGER DEFAULT 0, focused INTEGER DEFAULT 1,
+    created_at INTEGER, PRIMARY KEY (user_id, address)
+  );
+  `,
 ];

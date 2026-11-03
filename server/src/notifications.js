@@ -98,7 +98,7 @@ export function notifyUser(ownerId, kind, data) {
     };
     notify(r.id, 'notify:show', msg);
     push(r.id, msg).catch((e) => log.warn(`push: ${e.message}`));
-    pushFcm(r.id, kind, msg).catch((e) => log.warn(`fcm: ${e.message}`));
+    pushFcm(r.id, kind, msg, remember(r.id, kind, msg, data.about ? `${ownerId}\n${msg.tag}` : null)).catch((e) => log.warn(`fcm: ${e.message}`));
   }
 }
 
@@ -120,10 +120,13 @@ async function push(userId, msg) {
   }
 }
 
-async function pushFcm(userId, kind, msg) {
+async function pushFcm(userId, kind, msg, entry) {
   const tokens = all('SELECT * FROM fcm_tokens WHERE user_id = ?', userId);
   for (const t of tokens) {
     try {
+      // The app's own connection took it (it answered): Firebase is not needed. No answer in time: Firebase too.
+      const d = live.get(t.token);
+      if (d?.userId === userId && (await deliver(d, entry))) { run('UPDATE fcm_tokens SET last_ok_at = ? WHERE id = ?', now(), t.id); continue; }
       // route: the extra the app reads when the system's own notification is tapped (data travels as intent extras).
       const r = await fcmSend(t.token, { ...msg, kind, as: msg.as || '', route: msg.url }, {
         ttlSeconds: kind === 'reminder' ? 3600 : 6 * 3600,
@@ -146,9 +149,12 @@ export async function closeNotifications(ownerId, tags) {
   for (const t of tags) showing.delete(`${ownerId}\n${t}`);
   for (const r of recipients(ownerId)) {
     notify(r.id, 'notify:close', { tags });
+    for (const e of sent.get(r.id) || []) if (tags.includes(e.msg.tag) && !e.closedAt) e.closedAt = now();
     // Data only and normal priority: nothing is shown, so the phone is not woken for it. Older app versions would
     // draw an empty notification for it, so only versions that know it get it.
     for (const t of all('SELECT * FROM fcm_tokens WHERE user_id = ? AND app_version IS NOT NULL', r.id)) {
+      const d = live.get(t.token);
+      if (d?.userId === r.id) { d.send({ type: 'notify:close', payload: { tags, at: now() } }); continue; }
       try {
         const res = await fcmSend(t.token, { action: 'close', tags: tags.join('\n') }, { ttlSeconds: 6 * 3600, priority: 'NORMAL' });
         if (res.gone) run('DELETE FROM fcm_tokens WHERE id = ?', t.id);
@@ -176,3 +182,55 @@ export async function sweepNotifications() {
 }
 let soon = null;
 export const sweepSoon = () => { if (!soon && showing.size) soon = setTimeout(() => { soon = null; sweepNotifications().catch((e) => log.warn(`sweep: ${e.message}`)); }, 1500); };
+
+// ---- the Android app's own connection (android LiveService): a WebSocket the app keeps open, so notifications do not
+// depend on Firebase alone, which phones hold back for apps not opened in a while. Each notification is answered by
+// the app; one not answered in time goes through Firebase as well. What was sent while the app was away is sent again
+// when it is back (still applying, and not yet answered by that device), and so are the notifications taken back.
+const live = new Map(); // FCM token -> { userId, send, waits: Map(id -> done) }
+const sent = new Map(); // recipient user id -> [{ id, at, kind, msg, key, answered: Set(token), closedAt }]
+let lastId = 0;
+const KEEP = 864e5, RESEND = 6 * 3600e3;
+
+function remember(userId, kind, msg, key) {
+  const e = { id: ++lastId, at: now(), kind, msg, key, answered: new Set(), closedAt: 0 };
+  const list = (sent.get(userId) || []).filter((x) => e.at - x.at < KEEP).slice(-199);
+  list.push(e);
+  sent.set(userId, list);
+  return e;
+}
+
+let answerMs = 15e3;
+export const setAnswerMs = (ms) => { answerMs = ms; }; // tests
+function deliver(d, e, ms = answerMs) {
+  if (!e) return Promise.resolve(false);
+  return new Promise((done) => {
+    const t = setTimeout(() => { d.waits.delete(e.id); done(false); }, ms);
+    d.waits.set(e.id, (ok) => { clearTimeout(t); d.waits.delete(e.id); if (ok) e.answered.add(d.token); done(ok); });
+    d.send({ type: 'notify:show', payload: { ...e.msg, kind: e.kind, id: e.id, at: e.at } });
+  });
+}
+
+/** The app connected (index.js /api/ws?device=…): `since` is the server time it last heard from us. */
+export function attachDevice(userId, token, since, send) {
+  const d = { userId, token, send, waits: new Map() };
+  const before = live.get(token);
+  live.set(token, d);
+  before?.waits.forEach((w) => w(false));
+  since = Number(since) || 0;
+  if (since > 0) {
+    const closed = [];
+    for (const e of sent.get(userId) || []) {
+      if (e.closedAt) { if (e.closedAt > since) closed.push(e.msg.tag); continue; }
+      if (e.at <= since || e.answered.has(token)) continue;
+      if (e.key ? showing.has(e.key) : now() - e.at < RESEND) deliver(d, e);
+    }
+    if (closed.length) send({ type: 'notify:close', payload: { tags: [...new Set(closed)], at: now() } });
+  }
+  send({ type: 'hello', payload: { userId, now: now() } });
+  return {
+    answer: (id) => d.waits.get(Number(id))?.(true),
+    detach: () => { if (live.get(token) === d) live.delete(token); d.waits.forEach((w) => w(false)); },
+  };
+}
+export const isLive = (token) => live.has(token);

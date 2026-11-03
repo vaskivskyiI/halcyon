@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
         downloads = Downloads(this)
         Notifications.channels(this)
         Shortcuts.publish(this)
+        LiveService.start(this) // opened in the foreground: allowed to start it here
 
         web = WebView(this)
         val root = FrameLayout(this)
@@ -358,7 +359,11 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
-        fun setOn(on: Boolean) { if (trusted()) Prefs.setPushOn(this@MainActivity, on) }
+        fun setOn(on: Boolean) {
+            if (!trusted()) return
+            Prefs.setPushOn(this@MainActivity, on)
+            LiveService.start(this@MainActivity) // stops it when off
+        }
 
         @JavascriptInterface
         fun ready() = runOnUiThread {

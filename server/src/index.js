@@ -19,6 +19,8 @@ import mcpRoutes from './mcp/server.js';
 import archiveRoutes from './routes/archives.js';
 import { resumeJobs } from './mail/archive.js';
 import { sharedOf } from './shared.js';
+import { attachDevice } from './notifications.js';
+import { get } from './db/index.js';
 import mailRoutes from './routes/mail.js';
 import accountRoutes from './routes/accounts.js';
 import calendarRoutes, { startSubscriptionRefresh } from './routes/calendar.js';
@@ -89,6 +91,21 @@ export async function buildServer({ background = true } = {}) {
   app.get('/api/ws', { websocket: true }, (socket, req) => {
     const user = userFromRequest(req);
     if (!user) { socket.close(4001, 'unauthorized'); return; }
+    // The Android app's own connection (no page): notifications only, each answered (notifications.js).
+    if (req.query?.device) {
+      const token = String(req.query.device);
+      if (!get('SELECT 1 AS x FROM fcm_tokens WHERE token = ? AND user_id = ?', token, user.id)) { socket.close(4003, 'unknown device'); return; }
+      const send = (m) => { if (socket.readyState === 1) socket.send(JSON.stringify(m)); };
+      const dev = attachDevice(user.id, token, req.query.since, send);
+      socket.on('message', (raw) => { try { const m = JSON.parse(raw); if (m.type === 'ack') dev.answer(m.id); } catch { /* not ours */ } });
+      // A phone that went away without closing: a ping not answered ends it, so Firebase takes over. Pings are
+      // less frequent than for pages (each one wakes the phone), but within the 60 s proxies often allow.
+      let alive = true;
+      socket.on('pong', () => { alive = true; });
+      const ping = setInterval(() => { if (!alive) return socket.terminate(); alive = false; if (socket.readyState === 1) socket.ping(); }, 50e3);
+      socket.on('close', () => { clearInterval(ping); dev.detach(); });
+      return;
+    }
     // Events of the person and of their shared spaces; those of a shared space carry `as` (its user id), so the app
     // can tell new mail in the business mailbox from its own.
     let spaces = new Set(), checked = 0;

@@ -14,6 +14,9 @@
     <string name="ch_mail">New mail</string>
     <string name="ch_mail_quiet">New mail (silent)</string>
     <string name="ch_reminders">Reminders</string>
+    <string name="ch_connection">Connection to your server</string>
+    <string name="live_title">Connected to your server</string>
+    <string name="live_text">Notifications come at once. To hide this, turn off its category in the app\'s notification settings.</string>
     <string name="sc_mail">Mail</string>
     <string name="sc_calendar">Calendar</string>
     <string name="sc_tasks">Tasks</string>

@@ -627,8 +627,10 @@ function MessageList({ view, openId, onMenu }) {
       const idx = shownItems.findIndex((m) => m.id === openId);
       const cur = shownItems[idx];
       const k = e.key;
-      if (k === 'j' || k === 'ArrowDown') { const n = shownItems[Math.min(shownItems.length - 1, idx + 1)]; if (n) open(n); e.preventDefault(); }
-      else if (k === 'k' || k === 'ArrowUp') { const n = shownItems[Math.max(0, idx - 1)]; if (n) open(n); e.preventDefault(); }
+      // The list follows, so the message moved to stays in sight.
+      const step = (n) => { if (!n) return; open(n); requestAnimationFrame(() => listRef.current?.querySelector(`.msg-row[data-id="${n.id}"]`)?.scrollIntoView({ block: 'nearest' })); };
+      if (k === 'j' || k === 'ArrowDown') { step(shownItems[Math.min(shownItems.length - 1, idx + 1)]); e.preventDefault(); }
+      else if (k === 'k' || k === 'ArrowUp') { step(shownItems[Math.max(0, idx - 1)]); e.preventDefault(); }
       else if (k === '/') { e.preventDefault(); searchRef.current?.focus(); }
       else if (k === 'c') { e.preventDefault(); openComposer({}); }
       else if (k === 'e' && selIds.length) act('archive');

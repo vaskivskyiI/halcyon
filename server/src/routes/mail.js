@@ -63,7 +63,13 @@ const ANALYSING = analysing('m');
 const focusedOne = (i, m) => `((${i}.message_id IS NULL AND NOT ${analysing(m)}) OR (${i}.priority >= 40 AND COALESCE(${i}.category, '') NOT IN ${OPEN_NOISE}) OR ${i}.priority >= 70)`;
 // Focused goes by conversation: a message is focused when it or another message of its conversation in an Inbox is, so a
 // conversation is never split between Focused and Other (a reply to a focused conversation stays with it).
-const FOCUSED = `(${focusedOne('i', 'm')} OR (m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages t LEFT JOIN ai_insights ti ON ti.message_id = t.id
+// Always Focused: conversations the user started or replied to (a message of theirs in Sent, or answered), and senders
+// on the user's Focused list (focus.js; an address or a whole @domain).
+const FOCUS_SENDER = `EXISTS (SELECT 1 FROM focus_senders fs WHERE fs.user_id = m.user_id AND fs.focused = 1
+  AND fs.address IN (lower(m.from_addr), '@' || substr(lower(m.from_addr), instr(m.from_addr, '@') + 1)))`;
+const MINE = `(m.is_answered = 1 OR (m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages s WHERE s.user_id = m.user_id AND s.thread_id = m.thread_id
+  AND s.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Sent'))))`;
+const FOCUSED = `(${focusedOne('i', 'm')} OR ${FOCUS_SENDER} OR ${MINE} OR (m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages t LEFT JOIN ai_insights ti ON ti.message_id = t.id
   WHERE t.user_id = m.user_id AND t.thread_id = m.thread_id AND t.id != m.id AND t.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox') AND ${focusedOne('ti', 't')})))`;
 
 function scopeFor(userId, q, sc) {

@@ -293,6 +293,14 @@ table.simple th, table.simple td { text-align: left; padding: 6px 8px; border-bo
 @media (max-width: 860px) {
   .rail { position: fixed; bottom: 0; left: 0; right: 0; top: auto; width: auto; height: 56px; flex-direction: row; justify-content: space-around; z-index: 50; border-top: 1px solid var(--border); border-right: 0; padding: 0; }
   .rail .logo, .rail .spacer { display: none; }
+  /* More buttons than fit on a narrow phone: the bar slides sideways. Auto margins spread the buttons while they fit
+     and become 0 once they do not, so the first ones are never cut off. */
+  .rail { justify-content: flex-start; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  /* A shadow at an edge with more buttons beyond it (the covers scroll with the buttons, the shadows stay put). */
+  .rail { background: linear-gradient(to right, var(--panel-2) 40%, transparent) left / 32px 100% no-repeat local, linear-gradient(to left, var(--panel-2) 40%, transparent) right / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .22), transparent) left / 10px 100% no-repeat scroll, radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .22), transparent) right / 10px 100% no-repeat scroll, var(--panel-2); }
+  .rail::-webkit-scrollbar { display: none; }
+  .rail > * { flex: none; margin: 0 auto; }
   .app { padding-bottom: 56px; }
   .sidebar { position: fixed; z-index: 45; top: 0; bottom: 56px; left: 0; transform: translateX(-100%); transition: .2s; box-shadow: var(--shadow); }
   .sidebar.open { transform: none; }

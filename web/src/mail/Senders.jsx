@@ -1,7 +1,7 @@
 // Mail → More → Senders: who sends the most, and how much of it is read. Mail never read stands out; one click
 // unsubscribes and clears it out of the inbox (archived — nothing is deleted).
 import { useEffect, useState } from 'react';
-import { Menu as MenuIcon, Archive, MailOpen, BellOff, Search } from 'lucide-react';
+import { Menu as MenuIcon, Archive, MailOpen, BellOff, Search, Star } from 'lucide-react';
 import { api } from '../api.js';
 import { Spinner } from '../components/common.jsx';
 import { fmtListDate, navigate, toast, toastError } from '../util.js';
@@ -35,6 +35,11 @@ export default function SendersList({ onMenu }) {
     toast(keep ? 'Their mail is treated normally again' : x.learned ? 'Their mail is held as not important again' : 'Will learn from what you read');
     setRows((cur) => cur.map((y) => (y.address === r.address ? { ...y, kept: keep, learned: x.learned } : y)));
   });
+  const focus = (r) => run(r, 'focus', async () => {
+    await api.post('/api/focus-senders', { address: r.address, focused: !r.focused });
+    toast(r.focused ? 'No longer always in Focused' : 'Their mail always goes to Focused');
+    setRows((cur) => cur.map((y) => (y.address === r.address ? { ...y, focused: !r.focused } : y)));
+  });
   const shown = (rows || []).filter((r) => !unread || r.readRate < 20 || r.learned);
   return (
     <section className="list-pane senders" style={{ flex: 1, width: 'auto' }}>
@@ -58,6 +63,8 @@ export default function SendersList({ onMenu }) {
               <div className="read-bar"><span style={{ width: `${r.readRate}%` }} /></div>
             </div>
             <div className="row" style={{ gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button className={`icon-btn ${r.focused ? 'on' : ''}`} disabled={busy[`${r.address}focus`]} title={r.focused ? 'Always in Focused — click to stop' : 'Always put their mail in Focused'}
+                aria-pressed={r.focused} onClick={() => focus(r)}><Star size={15} fill={r.focused ? 'currentColor' : 'none'} style={r.focused ? { color: 'var(--accent)' } : undefined} /></button>
               <button className="icon-btn" title="Show their mail" onClick={() => { navigate('#/mail/unified'); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${r.address}` } })), 150); }}><Search size={15} /></button>
               {r.unsubscribeId && !r.unsubscribed && <button className="btn sm" disabled={busy[`${r.address}unsub`]} title="Unsubscribe from this sender's list" onClick={() => unsubscribe(r)}><BellOff size={13} /> Unsubscribe</button>}
               {r.unsubscribed && <span className="chip">unsubscribed</span>}

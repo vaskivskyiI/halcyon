@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Pencil } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, Undo2 } from 'lucide-react';
 import { api } from '../api.js';
 import { store } from '../store.js';
 import { saveSettings, loadLabels } from '../data.js';
@@ -46,6 +46,38 @@ function QuickSteps() {
   </>;
 }
 
+/** Senders always in Focused: learned from the people you write to, and tuned here (server/src/focus.js). */
+function FocusSenders() {
+  const [rows, setRows] = useState(null);
+  const [add, setAdd] = useState('');
+  const [all, setAll] = useState(false);
+  const load = () => api.get('/api/focus-senders').then(setRows).catch(toastError);
+  useEffect(() => { load(); }, []);
+  const set = (address, focused) => api.post('/api/focus-senders', { address, focused }).then(load).catch(toastError);
+  const submit = (e) => { e.preventDefault(); if (!add.trim()) return; set(add.trim(), true).then(() => setAdd('')); };
+  if (!rows) return <Spinner />;
+  const on = rows.filter((r) => r.focused), off = rows.filter((r) => !r.focused);
+  const shown = all ? on : on.slice(0, 12);
+  return <>
+    <h3>Always in Focused</h3>
+    <p className="muted small">Conversations you started or replied to always stay in Focused. So does mail from these senders — Halcyon adds the
+      people you write to (two or more emails in a year); add others, or a whole domain like @example.org, and take out who does not belong.</p>
+    <form className="row" style={{ gap: 6, marginBottom: 8 }} onSubmit={submit}>
+      <input className="input grow" placeholder="name@example.org or @example.org" value={add} onChange={(e) => setAdd(e.target.value)} />
+      <button className="btn" type="submit"><Plus size={14} /> Add</button>
+    </form>
+    {!on.length ? <div className="muted small">Nobody yet.</div> : <div className="chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {shown.map((r) => <span key={r.address} className="chip" title={r.auto ? 'Added because you write to them' : 'Added by you'}>
+        {r.name ? `${r.name} · ` : ''}{r.address}{r.auto ? <span className="faint"> · auto</span> : null}
+        <button className="icon-btn inline" aria-label={`Take out ${r.address}`} title="Take out" onClick={() => set(r.address, false)}><X size={12} /></button></span>)}
+      {on.length > shown.length && <button className="link-btn small" onClick={() => setAll(true)}>Show all {on.length}</button>}
+    </div>}
+    {off.length > 0 && <details style={{ marginTop: 8 }}><summary className="small muted">Taken out ({off.length}) — not added again</summary>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>{off.map((r) => <span key={r.address} className="chip faint">{r.address}
+        <button className="icon-btn inline" aria-label={`Put back ${r.address}`} title="Put back" onClick={() => set(r.address, true)}><Undo2 size={12} /></button></span>)}</div></details>}
+  </>;
+}
+
 export function MailPrefs() {
   const s = useSettings();
   const accounts = store.use((x) => x.accounts);
@@ -53,6 +85,7 @@ export function MailPrefs() {
     <div className="settings-section">
       <h2>Mail</h2>
       <Switch label="Focused inbox" hint="Split the inbox into Focused and Other using AI priority" checked={s.mail.focusedInbox} onChange={(v) => save({ mail: { focusedInbox: v } })} />
+      {s.mail.focusedInbox && <FocusSenders />}
       <Switch label="Conversation view" hint="Group messages into threads" checked={s.ui.conversationView} onChange={(v) => save({ ui: { conversationView: v } })} />
       <Switch label="Load remote images automatically" hint="Off protects against tracking pixels. Images from your contacts are always shown." checked={s.mail.loadRemoteImages} onChange={(v) => save({ mail: { loadRemoteImages: v } })} />
       {'registerProtocolHandler' in navigator && !window.halcyonDesktop && <div className="row"><button className="btn" onClick={() => { try { navigator.registerProtocolHandler('mailto', `${location.origin}${location.pathname}#/compose?url=%s`); toast('Confirm the prompt in your browser to open mailto: links in Halcyon'); } catch (e) { toastError(e); } }}>Use Halcyon for mailto: links in this browser</button></div>}

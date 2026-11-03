@@ -19,6 +19,7 @@ import { markRepliedHistory } from './ai/open-items.js';
 import { syncLinked } from './calendar/linked.js';
 import { cleanUploads } from './mail/uploads.js';
 import { notifyUser, sweepNotifications } from './notifications.js';
+import { learnFocusSendersSoon } from './focus.js';
 import { autoRetry } from './mail/retry.js';
 import { scanAll } from './contacts/review.js';
 import { track } from './util/activity.js';
@@ -211,6 +212,7 @@ export function startScheduler() {
   setInterval(job('Purge memory', async () => { await purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); }), 3600e3).unref();
   setInterval(job('Expire insights', expireInsights), 2 * 60e3).unref();
   setInterval(job('Clean uploads', cleanUploads), 864e5).unref();
+  setInterval(job('Focused senders', () => { for (const u of all('SELECT id FROM users')) learnFocusSendersSoon(u.id); }), 3600e3).unref();
   // Linked event copies follow their originals (subscriptions and server calendars change them in the background).
   setInterval(job('Linked event copies', syncLinked), 60e3).unref();
   const style = job('Style, profiles, about me', scheduleStyle);

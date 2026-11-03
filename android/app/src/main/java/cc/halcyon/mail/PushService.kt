@@ -26,7 +26,7 @@ class PushService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         Prefs.setToken(this, token)
         // Registered right away: a token that changes while the app stays closed would otherwise get nothing.
-        if (Prefs.pushOn(this)) Server.register(this, token)
+        if (Prefs.pushOn(this)) { Server.register(this, token); LiveService.start(this) }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -49,6 +49,7 @@ object Notifications {
     const val MAIL = "mail"
     const val MAIL_SILENT = "mail_silent"
     const val REMINDERS = "reminders"
+    const val CONNECTION = "connection"
 
     fun channels(ctx: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -60,6 +61,7 @@ object Notifications {
             NotificationChannel(MAIL, ctx.getString(R.string.ch_mail), NotificationManager.IMPORTANCE_HIGH),
             NotificationChannel(MAIL_SILENT, ctx.getString(R.string.ch_mail_quiet), NotificationManager.IMPORTANCE_HIGH).apply { setSound(null, null); enableVibration(false) },
             NotificationChannel(REMINDERS, ctx.getString(R.string.ch_reminders), NotificationManager.IMPORTANCE_HIGH),
+            NotificationChannel(CONNECTION, ctx.getString(R.string.ch_connection), NotificationManager.IMPORTANCE_MIN).apply { setShowBadge(false) },
         ))
     }
 
@@ -106,6 +108,10 @@ object Notifications {
             .build()
         try { NotificationManagerCompat.from(ctx).notify(tag, 1, n) } catch (_: SecurityException) { }
     }
+
+    /** Shown now under this tag (drawn by the app or by Google Play services)? */
+    fun showing(ctx: Context, tag: String) = tag.isNotEmpty() && Build.VERSION.SDK_INT >= 23 &&
+        runCatching { ctx.getSystemService(NotificationManager::class.java).activeNotifications.any { it.tag == tag } }.getOrDefault(false)
 
     /** Takes notifications back: drawn by the app (id 1) or by Google Play services from the notification part (id 0). */
     fun cancel(ctx: Context, tags: List<String>) {

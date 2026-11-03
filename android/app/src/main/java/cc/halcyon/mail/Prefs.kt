@@ -19,6 +19,10 @@ object Prefs {
     fun token(ctx: Context): String? = p(ctx).getString("fcm_token", null)
     fun setToken(ctx: Context, token: String?) = p(ctx).edit().putString("fcm_token", token).apply()
 
+    /** The server time last heard over the app's own connection (LiveService): what came after is sent again. */
+    fun liveSince(ctx: Context) = p(ctx).getLong("live_since", 0L)
+    fun setLiveSince(ctx: Context, t: Long) { if (t > liveSince(ctx)) p(ctx).edit().putLong("live_since", t).apply() }
+
     fun askedBattery(ctx: Context) = p(ctx).getBoolean("asked_battery", false)
     fun setAskedBattery(ctx: Context) = p(ctx).edit().putBoolean("asked_battery", true).apply()
 

@@ -1040,6 +1040,23 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   icon.png/.ico, Android adaptive foreground + mipmap).
 - NOT verified on a phone: FCM close delivery, delete intents, battery prompt, per-type icons (no emulator here).
 
+### Android app's own connection; always-Focused conversations and senders (migration 57, round81-82)
+- **Android `LiveService`** (foreground service, type remoteMessaging, low-importance "Connection" channel): while
+  notifications are on it keeps `/api/ws?device=<FCM token>&since=<server ms>` open (OkHttp). That socket gets only
+  `notify:show` / `notify:close` / `hello`; every show is answered (`{type:'ack', id}`). `notifications.js` `pushFcm`
+  sends over the socket first and uses Firebase only when no answer comes within 15 s. While away, notifications are
+  kept in memory per recipient for a day (`sent`). On reconnect, those still applying and not answered by that device
+  are sent again, and so are closes since `since`; `hello` comes last and carries the server time.
+  The server pings device sockets every 50 s and drops one that does not answer. A `Watchdog` alarm (15 min,
+  `BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`) restarts the service. Starting it from the background needs the battery
+  optimisation exemption; Firebase remains the fallback.
+- **Focused** (`routes/mail.js` FOCUSED) also includes conversations with a message in Sent or answered (`is_answered`), and
+  senders in `focus_senders` (an address, or `@domain`). `focus.js` learns people the user wrote to two or more times in
+  a year (auto=1), at most once a day (scheduler hourly + Settings page). Taking one out keeps the row with focused=0, so
+  it is not learned again. UI: Settings → Mail → "Always in Focused" (shown with Focused inbox on); star on Mail → Senders.
+- Phones: the bottom bar slides sideways when its buttons do not fit (edge shadows show more). Arrow keys / j k keep
+  the selected message in view.
+
 ### Lightweight Windows app (no migration)
 - `windows/`: C# .NET 8 WinForms + WebView2 app (~1.3 MB single `Halcyon.exe`, framework-dependent: needs the .NET 8
   Desktop Runtime and the WebView2 Runtime) that shows the user's Halcyon server, the Windows counterpart of the Android
