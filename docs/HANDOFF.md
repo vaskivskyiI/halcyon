@@ -974,7 +974,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   title, place or people); owners among the viewers are left out. Viewers = the person, and in a shared space the space.
   Used by `/api/events` (both modes), `/api/calendar/check`, `findFreeSlots` (`viewers` option), the AI scheduling
   context, the assistant's calendar and the brief's events. Web: share button on each calendar in Settings → Calendars
-  & tasks (hidden while working in a space). Gap: an owner's event change does not push `calendar:changed` to grantees
+  & tasks (hidden while working in a space), and "Share availability (busy only)…" in each calendar's right-click menu in
+  the calendar's sidebar (same dialog, `BusyShare` exported from CalendarsTasks.jsx). Gap: an owner's event change does not push `calendar:changed` to grantees
   (they see it on their next load).
 - Server activity for admins (no migration, round73): Settings → Server activity (`web/src/settings/ServerActivity.jsx`,
   admins only) polls GET `/api/admin/activity` (`routes/diagnostics.js` `backgroundActivity`) every few seconds: process

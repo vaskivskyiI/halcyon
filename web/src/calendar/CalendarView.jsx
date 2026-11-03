@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus, Cloud, HardDrive, EyeOff, Settings2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MapPin, Video, Users, Repeat, Bell, Trash2, Download, Upload, RefreshCw, Link2, Clock, Sparkles, Lock, AlertTriangle, Check, Info, CalendarPlus, Cloud, HardDrive, EyeOff, Settings2, Share2 } from 'lucide-react';
 import { api, onEvent, stream } from '../api.js';
 import { store } from '../store.js';
 import { Modal, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import LocalDefault from '../components/LocalDefault.jsx';
 import InkwellNotes from '../components/InkwellNotes.jsx';
+import { BusyShare } from '../settings/CalendarsTasks.jsx';
 import { toast, toastError, startOfDay, addDays, startOfWeek, toLocalInput, toDateInput, fmtTime, navigate } from '../util.js';
 
 const HOUR_PX = 48;
@@ -187,6 +188,8 @@ const localAllDay = (e) => (e.allDay ? { ...e, start: localDate(e.start), end: l
 function CalendarItem({ c, calendars, reload }) {
   const [openMenu, menuNode] = useMenu();
   const fileRef = useRef();
+  const acting = store.use((s) => s.acting);
+  const [sharing, setSharing] = useState(false);
   return (
     <div className="nav-item" onContextMenu={(e) => openMenu(e, [
       { label: 'Set as default', onClick: () => api.patch(`/api/calendars/${c.id}`, { isDefault: true }).then(reload) },
@@ -195,6 +198,8 @@ function CalendarItem({ c, calendars, reload }) {
       { section: 'Show events as' },
       ...SHOW_AS.map(([v, label, hint]) => ({ label, hint, icon: (c.showAs || 'busy') === v ? Check : undefined, onClick: () => api.patch(`/api/calendars/${c.id}`, { showAs: v }).then(reload) })),
       'sep',
+      // Own calendars only (in a shared space they are the space's).
+      !acting && { label: 'Share availability (busy only)…', icon: Share2, hint: 'other logins see when you are busy', onClick: () => setSharing(true) },
       { label: 'Export .ics', icon: Download, onClick: () => window.open(api.url(`/api/calendars/${c.id}/export.ics`)) },
       !c.readonly && { label: 'Import .ics', icon: Upload, onClick: () => fileRef.current.click() },
       c.source !== 'local' && { label: 'Refresh', icon: RefreshCw, onClick: () => api.post(`/api/calendars/${c.id}/refresh`).then(reload) },
@@ -221,6 +226,7 @@ function CalendarItem({ c, calendars, reload }) {
         e.target.value = '';
       }} />
       {menuNode}
+      {sharing && <BusyShare cal={c} onClose={() => setSharing(false)} />}
     </div>
   );
 }

@@ -36,15 +36,6 @@ export default function CalendarsTasks() {
   const act = async (fn, msg) => { try { const r = await fn(); if (msg) toast(typeof msg === 'function' ? msg(r) : msg); await load(); } catch (e) { toastError(e); } };
   const path = (kind, x) => `${KINDS[kind].url}/${x.id}`;
   const busyOf = (c) => busy.filter((g) => g.calendarId === c.id);
-  const shareBusy = async (body) => {
-    try {
-      const g = await api.post('/api/shared/busy', { calendarId: sharing.cal.id, ...body });
-      toast(`${g.grantee} now sees when you are busy in “${sharing.cal.name}”`);
-      setSharing((s) => s && { ...s, email: '' });
-      await load();
-    } catch (e) { toastError(e); }
-  };
-  const unshareBusy = (g) => act(() => api.del(`/api/shared/busy/${g.id}`), `${g.grantee} no longer sees “${g.calendarName}”`);
   const rename = (kind, x) => { const n = prompt('Name', x.name); if (n?.trim() && n.trim() !== x.name) act(() => api.patch(path(kind, x), { name: n.trim() })); };
   const setHidden = (kind, x, hidden) => act(() => api.patch(path(kind, x), { hidden }), hidden ? `“${x.name}” hidden — it stays on its server and can be shown again here` : x.removed ? `“${x.name}” is synced again` : `“${x.name}” is shown again`);
   const remove = (kind, x) => {
@@ -80,7 +71,7 @@ export default function CalendarsTasks() {
                 {x.readonly && <> · <Lock size={10} /> read-only</>} · {n} {k.items}{x.space ? ` · space ${x.space}` : ''}
                 {kind === 'calendar' && busyOf(x).length > 0 && ` · busy shown to ${busyOf(x).map((g) => g.grantee).join(', ')}`}</div>
             </div>
-            {kind === 'calendar' && !acting && <button className="icon-btn" title="Share as busy only with… (another login or a shared space sees when you are busy, nothing else)" onClick={() => setSharing({ cal: x, email: '' })}><Share2 size={14} /></button>}
+            {kind === 'calendar' && !acting && <button className="icon-btn" title="Share as busy only with… (another login or a shared space sees when you are busy, nothing else)" onClick={() => setSharing(x)}><Share2 size={14} /></button>}
             <button className="icon-btn" title="Rename" onClick={() => rename(kind, x)}><Pencil size={14} /></button>
             {!x.readonly && !x.isDefault && <button className="icon-btn" title="Make it the default (new ones go here)" onClick={() => act(() => api.patch(path(kind, x), { isDefault: true }), `New ${k.items} now go to “${x.name}”`)}><Star size={14} /></button>}
             {k.move && x.source === 'local' && n > 0 && targets.length > 0 && <button className="btn sm" onClick={() => setMoving({ kind, from: x, to: targets[0].id, targets })}><FolderInput size={13} /> Move all to…</button>}
@@ -121,7 +112,7 @@ export default function CalendarsTasks() {
       <Section kind="calendar" />
       <Section kind="taskList" />
       <Section kind="addressBook" />
-      {sharing && <BusyShare sharing={sharing} setSharing={setSharing} grants={busyOf(sharing.cal)} onShare={shareBusy} onUnshare={unshareBusy} />}
+      {sharing && <BusyShare cal={sharing} onClose={() => setSharing(null)} onChange={load} />}
       {moving && (
         <Modal title={`Move all ${KINDS[moving.kind].items} of “${moving.from.name}”`} onClose={() => setMoving(null)} footer={<>
           <button className="btn ghost" onClick={() => setMoving(null)}>Cancel</button>
@@ -142,21 +133,35 @@ export default function CalendarsTasks() {
 }
 
 // Who sees when the person is busy in one calendar: other logins on this server (by email) and their shared spaces —
-// only the times, as "Busy · <name>"; titles, places and people stay here.
-function BusyShare({ sharing, setSharing, grants, onShare, onUnshare }) {
+// only the times, as "Busy · <name>"; titles, places and people stay here. Also opened from the calendar's menu.
+export function BusyShare({ cal, onClose, onChange }) {
+  const [all, setAll] = useState([]);
+  const [email, setEmail] = useState('');
+  const load = () => api.get('/api/shared/busy').then(setAll).catch(toastError);
+  useEffect(() => { load(); loadShared().catch(() => {}); }, []);
+  const grants = all.filter((g) => g.calendarId === cal.id);
   const spaces = (store.use((s) => s.shared) || []).filter((sp) => !grants.some((g) => g.granteeId === sp.id));
-  const close = () => setSharing(null);
+  const changed = () => { load(); onChange?.(); };
+  const onShare = async (body) => {
+    try {
+      const g = await api.post('/api/shared/busy', { calendarId: cal.id, ...body });
+      toast(`${g.grantee} now sees when you are busy in “${cal.name}”`);
+      setEmail('');
+      changed();
+    } catch (e) { toastError(e); }
+  };
+  const onUnshare = (g) => api.del(`/api/shared/busy/${g.id}`).then(() => { toast(`${g.grantee} no longer sees “${cal.name}”`); changed(); }).catch(toastError);
   return (
-    <Modal title={`Share “${sharing.cal.name}” as busy only`} onClose={close} footer={<button className="btn" onClick={close}>Done</button>}>
+    <Modal title={`Share availability of “${cal.name}”`} onClose={onClose} footer={<button className="btn" onClick={onClose}>Done</button>}>
       <div style={{ display: 'grid', gap: 10 }}>
         <div className="small muted">They see when you are busy (also tentative and away) as “Busy”, and their free-time search avoids it. Titles, places, people and free or informational events are never shown.</div>
         {grants.map((g) => <div key={g.id} className="row" style={{ gap: 6 }}>
           <span className="grow truncate">{g.grantee}{g.space ? <span className="chip" style={{ marginLeft: 6 }}>shared space</span> : g.email && g.email !== g.grantee ? <span className="faint"> · {g.email}</span> : null}</span>
           <button className="icon-btn danger" title="Stop sharing" onClick={() => onUnshare(g)}><X size={14} /></button>
         </div>)}
-        <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (sharing.email.trim()) onShare({ email: sharing.email.trim() }); }}>
-          <input className="input grow" type="email" placeholder="Email of another Halcyon login" value={sharing.email} onChange={(e) => setSharing({ ...sharing, email: e.target.value })} />
-          <button className="btn" type="submit" disabled={!sharing.email.trim()}><Plus size={14} /> Share</button>
+        <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (email.trim()) onShare({ email: email.trim() }); }}>
+          <input className="input grow" type="email" placeholder="Email of another Halcyon login" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <button className="btn" type="submit" disabled={!email.trim()}><Plus size={14} /> Share</button>
         </form>
         {spaces.length > 0 && <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <span className="small faint">With a shared space:</span>
