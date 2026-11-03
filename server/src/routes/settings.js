@@ -1,4 +1,5 @@
-import { requireUser, publicUser, ownerOnlyMessage } from '../auth.js';
+import { requireUser, publicUser, ownerOnlyMessage, homeSpace } from '../auth.js';
+import { dropPersonalStarters } from '../shared.js';
 import { getSettings, saveSettings, timezoneChanged } from '../settings.js';
 import { resumeWaiting } from '../ai/queue.js';
 import { backfillAnalysis } from '../mail/pipeline.js';
@@ -49,10 +50,14 @@ export default async function settingsRoutes(app) {
     const p = getSettings(req.person.id);
     return { ...s, ...Object.fromEntries(PERSONAL.map((k) => [k, p[k]])), mail: { ...s.mail, ...pick(p.mail, HABITS) } };
   };
-  app.get('/api/me', { preHandler: requireUser }, async (req) => ({
+  app.get('/api/me', { preHandler: requireUser }, async (req) => {
+    // Working in the home space (a login with only shared spaces): its own empty starters are not needed.
+    if (req.person && homeSpace(req.person.id) === req.user.id) dropPersonalStarters(req.person.id);
+    return {
     user: publicUser(req.person || req.user), settings: settingsFor(req), oauth: oauthAvailable(), singleUser: config.singleUser, version: '1.0.0',
     serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, acting: req.person ? { id: req.user.id, name: req.user.name, role: req.spaceRole } : null,
-  }));
+    };
+  });
   app.patch('/api/settings', { preHandler: requireUser }, async (req, reply) => {
     const body = { ...(req.body || {}) };
     if (req.person) {

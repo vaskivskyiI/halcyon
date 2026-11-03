@@ -22,9 +22,9 @@ before(async () => {
   app = await buildServer({ background: false });
   await app.listen({ host: '127.0.0.1', port: 0 });
   base = `http://127.0.0.1:${app.server.address().port}`;
-  ann = (await call('', 'POST', '/api/auth/setup', { email: 'ann@example.org', name: 'Ann', password: 'password123' })).cookie;
+  ann = `${(await call('', 'POST', '/api/auth/setup', { email: 'ann@example.org', name: 'Ann', password: 'password123' })).cookie}; halcyon_as=0`; // works in its own space (no home space)
   await call(ann, 'POST', '/api/admin/users', { email: 'ben@example.org', name: 'Ben', password: 'password123' });
-  ben = (await call('', 'POST', '/api/auth/login', { email: 'ben@example.org', password: 'password123' })).cookie;
+  ben = `${(await call('', 'POST', '/api/auth/login', { email: 'ben@example.org', password: 'password123' })).cookie}; halcyon_as=0`;
   space = (await data(ann, 'POST', '/api/shared', { name: 'Work' })).id;
   await call(ann, 'POST', `/api/shared/${space}/members`, { email: 'ben@example.org' });
   ev = (await data(ann, 'POST', '/api/events', { title: 'Team call', start: Date.UTC(2026, 10, 10, 9), end: Date.UTC(2026, 10, 10, 10) }, space)).id;

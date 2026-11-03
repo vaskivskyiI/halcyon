@@ -72,10 +72,28 @@ const PERSON_ONLY = /^\/api\/(auth|admin|shared|mcp-tokens|integrations)(\/|$|\?
 const OWNER_ONLY = /^\/api\/(accounts(?!\/[^/]+\/(sync|test)\b)|ai\/(providers|rules|preferences|about-me|style|memory)|rules|custom-categories|quick-steps|calendar-sources|archives|spaces\/(assign|rename))(\/|$|\?)/;
 export const ownerOnlyMessage = 'Only an owner of the shared space can change this — it is set once for everyone in the space';
 
+/**
+ * A login with no mail or calendar of its own that belongs to shared spaces works in one of them unless it chose its
+ * own space (cookie "0"): the space is its home, with the space's calendars, task lists and address books as defaults.
+ */
+const homes = new Map(); // person id -> { id, at }
+export function homeSpace(personId) {
+  const c = homes.get(personId);
+  if (c && now() - c.at < 30e3) return c.id;
+  const id = get(`SELECT m.shared_id AS id FROM shared_members m JOIN users u ON u.id = m.shared_id AND u.kind = 'shared'
+    WHERE m.user_id = ? AND NOT EXISTS (SELECT 1 FROM accounts WHERE user_id = ?) AND NOT EXISTS (SELECT 1 FROM calendar_sources WHERE user_id = ?)
+    ORDER BY m.role = 'owner' DESC, u.name, u.id LIMIT 1`, personId, personId, personId)?.id || 0;
+  homes.set(personId, { id, at: now() });
+  return id;
+}
+export const forgetHome = (personId) => (personId ? homes.delete(personId) : homes.clear());
+
 /** The shared-space user this request acts as: a user row, null (acting as oneself) or false (not a member). */
 export function actingAs(req, person, path = req.url) {
-  // Per request (header; on GET also ?as= — images and downloads cannot send headers), else the space entered (cookie).
-  const id = Number(req.headers['x-halcyon-as'] || (req.method === 'GET' && req.query?.as) || req.cookies?.[AS_COOKIE]) || 0;
+  // Per request (header; on GET also ?as= — images and downloads cannot send headers), else the space entered (cookie),
+  // else the home space of a login that has only shared spaces.
+  const cookie = req.cookies?.[AS_COOKIE];
+  const id = Number(req.headers['x-halcyon-as'] || (req.method === 'GET' && req.query?.as) || (cookie === undefined ? homeSpace(person.id) : cookie)) || 0;
   if (!id || id === person.id || PERSON_ONLY.test(path)) return null;
   const m = get(`SELECT u.*, m.role AS member_role FROM shared_members m JOIN users u ON u.id = m.shared_id WHERE m.shared_id = ? AND m.user_id = ? AND u.kind = 'shared'`, id, person.id);
   return m || false;

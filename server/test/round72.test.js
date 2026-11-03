@@ -41,6 +41,7 @@ before(async () => {
   await ok('a', 'POST', '/api/admin/users', { email: 'c@example.org', name: 'Cid', password: 'password123' });
   await ok('b', 'POST', '/api/auth/login', { email: 'b@example.org', password: 'password123' });
   await ok('c', 'POST', '/api/auth/login', { email: 'c@example.org', password: 'password123' });
+  for (const w of ['a', 'b', 'c']) jar[w].halcyon_as = '0'; // works in its own space (no home space)
   for (const w of ['a', 'b', 'c']) await ok(w, 'PATCH', '/api/settings', { calendar: { timezone: 'UTC', tzAuto: false, workStart: '08:00', workEnd: '17:00' } });
   priv = await ok('a', 'POST', '/api/calendars', { name: 'Private' });
   holidays = await ok('a', 'POST', '/api/calendars', { name: 'Holidays', showAs: 'info' });
@@ -112,12 +113,12 @@ test('a grant to a shared space shows to its members while they work in it', asy
   assert.equal(inSpace[0].title, 'Busy · Ann');
   const slots = await ok('c', 'GET', `/api/calendar/free-slots?from=${from}&to=${to}&duration=60`);
   assert.ok(slots.every((s) => s.end <= at(9) || s.start >= at(12)));
-  delete jar.c.halcyon_as;
+  jar.c.halcyon_as = '0';
   assert.equal(busyOf(await ok('c', 'GET', `/api/events?from=${from}&to=${to}`)).length, 0, 'not in their own calendar');
   // The owner working in the space sees their time as their own ("Blocked"), not as a share of themselves.
   jar.a.halcyon_as = String(sharedId);
   const owner = await ok('a', 'GET', `/api/events?from=${from}&to=${to}`);
-  delete jar.a.halcyon_as;
+  jar.a.halcyon_as = '0';
   assert.equal(busyOf(owner).length, 0);
 });
 

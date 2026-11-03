@@ -33,9 +33,9 @@ before(async () => {
   ({ db } = await import('../src/db/index.js'));
   A = await import('../src/ai/assistant.js');
   const s = await call('', 'POST', '/api/auth/setup', { email: 'ann@example.org', name: 'Ann', password: 'password123' });
-  ann = s.cookie; annId = s.data.user.id;
+  ann = `${s.cookie}; halcyon_as=0`; annId = s.data.user.id; // works in its own space (no home space)
   await call(ann, 'POST', '/api/admin/users', { email: 'ben@example.org', name: 'Ben', password: 'password123' });
-  ben = (await call('', 'POST', '/api/auth/login', { email: 'ben@example.org', password: 'password123' })).cookie;
+  ben = `${(await call('', 'POST', '/api/auth/login', { email: 'ben@example.org', password: 'password123' })).cookie}; halcyon_as=0`;
   space = (await data(ann, 'POST', '/api/shared', { name: 'Work' })).id;
   await call(ann, 'POST', `/api/shared/${space}/members`, { email: 'ben@example.org' });
   await call(ann, 'POST', '/api/ai/providers', { type: 'mock', name: 'Mock' });

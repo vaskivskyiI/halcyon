@@ -5,7 +5,7 @@
 // Moving an account / calendar / address book in or out keeps everything already computed for it (no re-analysis).
 import crypto from 'node:crypto';
 import { get, all, run, tx, json, now } from './db/index.js';
-import { createUser } from './auth.js';
+import { createUser, homeSpace, forgetHome } from './auth.js';
 import { getSettings, saveSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
@@ -56,6 +56,7 @@ export function createShared(userId, name) {
   const u = createUser({ email: `shared-${crypto.randomBytes(6).toString('hex')}@shared.halcyon.local`, name });
   run("UPDATE users SET kind = 'shared' WHERE id = ?", u.id);
   run("INSERT INTO shared_members (shared_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)", u.id, userId, now());
+  forgetHome(userId);
   // The same AI: copy the providers (keys stay encrypted, never shown) and point the routes at the copies.
   const cols = all("SELECT name FROM pragma_table_info('ai_providers')").map((c) => c.name).filter((c) => !['id', 'user_id'].includes(c));
   const ids = new Map();
@@ -75,6 +76,7 @@ export function addMember(sharedId, email) {
   const u = get("SELECT id, kind FROM users WHERE email = ?", String(email || '').toLowerCase().trim());
   if (!u || u.kind === 'shared') throw new Error('No Halcyon user with this email on this server (an administrator can add them in Settings → Users)');
   run("INSERT OR IGNORE INTO shared_members (shared_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", sharedId, u.id, now());
+  forgetHome(u.id);
   notify(u.id, 'shared:changed', {});
   return u.id;
 }
@@ -84,7 +86,20 @@ export function removeMember(sharedId, userId) {
     throw new Error('The owner cannot leave while others remain — make someone else owner first, or move everything out and delete the space');
   }
   run('DELETE FROM shared_members WHERE shared_id = ? AND user_id = ?', sharedId, userId);
+  forgetHome(userId);
   notify(userId, 'shared:changed', {});
+}
+
+/**
+ * A login whose home is a shared space (auth.js homeSpace) does not need the empty calendar, address book and task list
+ * every new login gets: they would only stand next to the space's. Made again when the person adds something of their own.
+ */
+export function dropPersonalStarters(userId) {
+  if (!homeSpace(userId)) return false;
+  const a = run("DELETE FROM calendars WHERE user_id = ? AND source = 'local' AND NOT EXISTS (SELECT 1 FROM events e WHERE e.calendar_id = calendars.id)", userId).changes;
+  const b = run("DELETE FROM address_books WHERE user_id = ? AND source = 'local' AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.address_book_id = address_books.id)", userId).changes;
+  const c = run("DELETE FROM task_lists WHERE user_id = ? AND source = 'local' AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.list_id = task_lists.id)", userId).changes;
+  return !!(a || b || c);
 }
 
 /** Deletes an empty shared space (nothing may be lost by accident). */

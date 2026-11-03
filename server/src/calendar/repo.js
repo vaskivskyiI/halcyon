@@ -5,7 +5,8 @@ import { uuid } from '../util/crypto.js';
 import { expand } from './recurrence.js';
 import { getSettings } from '../settings.js';
 import { notify } from '../util/events.js';
-import { queueMemory } from '../ai/queue.js';
+import { queueMemory } from '../ai/queue.js';
+import { ensureDefaults } from '../bootstrap.js';
 
 const COLS = ['calendar_id', 'uid', 'title', 'description', 'location', 'start', 'end', 'all_day', 'timezone', 'rrule', 'exdates_json', 'recurrence_id',
   'attendees_json', 'organizer_json', 'reminders_json', 'status', 'busy', 'url', 'online_meeting', 'etag', 'href', 'dirty', 'deleted', 'source_message_id', 'updated_at',
@@ -41,7 +42,9 @@ export function toRow(e) {
 }
 
 export const userCalendar = (userId, id) => get('SELECT * FROM calendars WHERE id = ? AND user_id = ?', id, userId);
-export const defaultCalendar = (userId) => get('SELECT * FROM calendars WHERE user_id = ? AND readonly = 0 ORDER BY is_default DESC, id LIMIT 1', userId);
+const writableCalendar = (userId) => get('SELECT * FROM calendars WHERE user_id = ? AND readonly = 0 ORDER BY is_default DESC, id LIMIT 1', userId);
+// None left (a login working in a shared space had its empty starter removed): made again when needed.
+export const defaultCalendar = (userId) => writableCalendar(userId) || (ensureDefaults(userId), writableCalendar(userId));
 
 export function eventOf(userId, id) {
   return get('SELECT e.*, c.source, c.readonly FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ?', id, userId);

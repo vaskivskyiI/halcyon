@@ -1040,6 +1040,17 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   icon.png/.ico, Android adaptive foreground + mipmap).
 - NOT verified on a phone: FCM close delivery, delete intents, battery prompt, per-type icons (no emulator here).
 
+### Home space for logins with only shared spaces (no migration, round83)
+- `auth.js homeSpace(personId)`: a login with no `accounts` and no `calendar_sources` that belongs to a shared space works
+  in that space when no `halcyon_as` cookie is set. It picks spaces it owns first, then by name, and caches the answer
+  for 30 s (`forgetHome` on create, join and leave of a space). The space's calendars, task lists and address books
+  are then its defaults.
+- `POST /api/shared/leave` now sets the cookie to `0` (own space chosen) instead of clearing it, so leaving is
+  remembered. Tests that model a login working in its own space set `halcyon_as=0`.
+- `/api/me` in the home space removes the login's own empty local calendar, address book and task list
+  (`shared.js dropPersonalStarters`). They are made again when needed: `repo.defaultCalendar` calls `ensureDefaults`,
+  contact creation does the same, and tasks use `ensureTaskLists`.
+
 ### Android app's own connection; always-Focused conversations and senders (migration 57, round81-82)
 - **Android `LiveService`** (foreground service, type remoteMessaging, low-importance "Connection" channel): while
   notifications are on it keeps `/api/ws?device=<FCM token>&since=<server ms>` open (OkHttp). That socket gets only

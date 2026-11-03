@@ -12,7 +12,8 @@ import { mergeContacts, scanContacts, openSuggestions, decide } from '../contact
 import { queueMemory } from '../ai/queue.js';
 import { syncDav } from '../scheduler.js';
 import { targetsForMessage } from '../targets.js';
-import { withShared, mergedOf } from '../shared.js';
+import { withShared, mergedOf } from '../shared.js';
+import { ensureDefaults } from '../bootstrap.js';
 
 export default async function contactRoutes(app) {
   app.addHook('preHandler', requireUser);
@@ -191,7 +192,11 @@ export default async function contactRoutes(app) {
       const own = sc.bookIds.filter((id) => spaces.books.get(id) === sc.space);
       b.addressBookId = get(`SELECT id FROM address_books WHERE ${inIds('id', own.length ? own : sc.bookIds)} AND readonly = 0 ORDER BY source = 'local' DESC, id LIMIT 1`)?.id;
     }
-    if (!b.addressBookId) b.addressBookId = get('SELECT id FROM address_books WHERE user_id = ? AND is_default = 1 AND readonly = 0', req.user.id)?.id;
+    if (!b.addressBookId) {
+      ensureDefaults(req.user.id);
+      b.addressBookId = (get('SELECT id FROM address_books WHERE user_id = ? AND is_default = 1 AND readonly = 0', req.user.id)
+        || get('SELECT id FROM address_books WHERE user_id = ? AND readonly = 0 ORDER BY id LIMIT 1', req.user.id))?.id;
+    }
     const c = createContact(req.user.id, b);
     notify(req.user.id, 'contacts:changed', {});
     return serializeContact(c);

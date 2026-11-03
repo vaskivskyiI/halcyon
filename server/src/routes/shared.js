@@ -38,7 +38,11 @@ export default async function sharedRoutes(app) {
     reply.setCookie(AS_COOKIE, String(id), { path: '/', httpOnly: true, sameSite: 'lax', secure: config.secureCookies, maxAge: 30 * 86400 });
     return { ok: true };
   });
-  app.post('/api/shared/leave', async (req, reply) => { reply.clearCookie(AS_COOKIE, { path: '/' }); return { ok: true }; });
+  // Back in one's own space: remembered ("0"), so a login with only shared spaces is not taken back to its home space.
+  app.post('/api/shared/leave', async (req, reply) => {
+    reply.setCookie(AS_COOKIE, '0', { path: '/', httpOnly: true, sameSite: 'lax', secure: config.secureCookies, maxAge: 30 * 86400 });
+    return { ok: true };
+  });
 
   // "Busy only": the person lets another login (by email) or one of their shared spaces see when they are busy in one of
   // their own calendars — only the times (calendar/repo.js sharedBusy).
