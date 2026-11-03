@@ -7,7 +7,7 @@ import { findSpecialFolder, setFlags, ensureFolder } from './actions.js';
 import { afterIngest } from './pipeline.js';
 import { readRaw, messageRow, recountFolder, deleteMessages, ingestMessage } from './store.js';
 import { collectAddresses } from '../contacts/service.js';
-import { htmlToText } from './sanitize.js';
+import { linkifyHtml, mailText } from './sanitize.js';
 import { notify } from '../util/events.js';
 import { logger } from '../util/log.js';
 import { crlf } from '../util/crlf.js';
@@ -60,7 +60,8 @@ export async function buildMime(account, p) {
   const mail = new MailComposer({
     from: fmtAddr({ name: fromName, address: fromAddr }),
     to: normAddrs(p.to).map(fmtAddr), cc: normAddrs(p.cc).map(fmtAddr), bcc: normAddrs(p.bcc).map(fmtAddr),
-    subject: p.subject || '', html: p.html || undefined, text: p.text || (p.html ? htmlToText(p.html) : ''),
+    // format 'text': a plain-text message (no HTML part); otherwise HTML with addresses as links and a text part.
+    subject: p.subject || '', html: p.format === 'text' || !p.html ? undefined : linkifyHtml(p.html), text: p.text || (p.html ? mailText(p.html) : ''),
     inReplyTo, references, attachments, headers, priority: p.priority || 'normal',
     icalEvent: p.icalEvent ? { method: p.icalEvent.method, content: p.icalEvent.content } : undefined,
     messageId: p.messageId || `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${fromAddr.split('@')[1] || 'halcyon.local'}>`,

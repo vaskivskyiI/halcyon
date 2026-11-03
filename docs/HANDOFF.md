@@ -1040,6 +1040,19 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   icon.png/.ico, Android adaptive foreground + mipmap).
 - NOT verified on a phone: FCM close delivery, delete intents, battery prompt, per-type icons (no emulator here).
 
+### Plain-text or HTML mail, links, richer editor (no migration, round84)
+- Composer `format`: 'html' or 'text'. The default comes from `settings.mail.composeFormat` (Settings → Mail), and the
+  value is kept in the draft payload. In 'text' mode the user's own text loses its formatting, the toolbar is hidden,
+  and paste is text only. `buildMime` then sends no HTML part.
+- `sanitize.js mailText` (html-to-text) builds the text part: paragraphs, "*" lists, `text <url>` links and "> " quotes.
+  `htmlToText` remains the one-line flattening used for snippets.
+- `linkifyHtml` turns http(s):// and www. addresses in text nodes into links (not inside a, style, script or title).
+  It runs on sent HTML and on received HTML (with target=_blank). The editor also turns a typed address into a link
+  when a space or Enter follows.
+- Toolbar additions: paragraph style, font, size, text colour and highlight (palette in a portal), indent, alignment,
+  horizontal line, undo/redo. execCommand uses `styleWithCSS` for colour, font and size, so mail programs get inline
+  styles. The selection is kept while a list or the palette has the focus.
+
 ### Home space for logins with only shared spaces (no migration, round83)
 - `auth.js homeSpace(personId)`: a login with no `accounts` and no `calendar_sources` that belongs to a shared space works
   in that space when no `halcyon_as` cookie is set. It picks spaces it owns first, then by name, and caches the answer

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X, Minus, Maximize2, Minimize2, Send, Paperclip, Bold, Italic, Underline, Strikethrough, List, ListOrdered, Link2, Quote, RemoveFormatting,
   Sparkles, ChevronDown, Clock, FileText, Trash2, Wand2, Undo2, Languages, Image as ImageIcon, PenLine, ShieldCheck, AlertTriangle, Check,
+  AlignLeft, AlignCenter, AlignRight, IndentIncrease, IndentDecrease, Baseline, Highlighter, Redo2, SeparatorHorizontal, Type,
 } from 'lucide-react';
 import { api, stream } from '../api.js';
 import { store } from '../store.js';
@@ -9,6 +11,38 @@ import { toast, toastError, textToHtml, escapeHtml, addrFull, fileToBase64, fmtS
 import { useMenu, Spinner, Modal } from '../components/common.jsx';
 import { useDismiss } from '../dismiss.js';
 import { afterSend } from './mailActions.js';
+
+// Formatting choices of the editor (inline styles, which mail programs show the same way).
+const COLORS = ['#000000', '#444444', '#666666', '#999999', '#cccccc', '#ffffff', '#b91c1c', '#ea580c', '#d97706', '#ca8a04',
+  '#16a34a', '#0d9488', '#0284c7', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3', '#db2777', '#78350f', '#1e3a8a'];
+const FONTS = [['Arial, Helvetica, sans-serif', 'Sans serif'], ['Georgia, "Times New Roman", serif', 'Serif'], ['"Courier New", Courier, monospace', 'Fixed width'],
+  ['Verdana, Geneva, sans-serif', 'Verdana'], ['Tahoma, Geneva, sans-serif', 'Tahoma'], ['"Trebuchet MS", sans-serif', 'Trebuchet'], ['Garamond, Georgia, serif', 'Garamond'], ['"Comic Sans MS", cursive', 'Comic Sans']];
+const SIZES = [['2', 'Small'], ['3', 'Normal'], ['4', 'Large'], ['5', 'Larger'], ['6', 'Huge']];
+const BLOCKS = [['p', 'Normal text'], ['h1', 'Heading 1'], ['h2', 'Heading 2'], ['h3', 'Heading 3'], ['pre', 'Code'], ['blockquote', 'Quote']];
+const CSS_CMDS = ['foreColor', 'hiliteColor', 'fontName', 'fontSize'];
+
+/** A colour for the text or its background: a palette, "none" and any other colour. */
+function ColorButton({ title, icon: Icon, none, onPick }) {
+  const [open, setOpen] = useState(null); // where it shows: on the page (the composer cuts off what reaches past its edge)
+  const ref = useRef(), pop = useRef();
+  useDismiss([ref, pop], () => setOpen(null), !!open);
+  const toggle = (e) => {
+    e.preventDefault();
+    const r = e.currentTarget.getBoundingClientRect();
+    setOpen(open ? null : { top: r.bottom + 4, left: Math.max(8, Math.min(r.left, innerWidth - 252)) });
+  };
+  const pick = (c) => { setOpen(null); onPick(c); };
+  return <span ref={ref} className="color-pick">
+    <button className="icon-btn" title={title} aria-label={title} aria-expanded={!!open} onMouseDown={toggle}><Icon size={15} /></button>
+    {open && createPortal(<div ref={pop} className="color-pop" style={open} onMouseDown={(e) => { if (e.target.type !== 'color') e.preventDefault(); }}>
+      <div className="swatches">{COLORS.map((c) => <button key={c} style={{ background: c }} title={c} aria-label={c} onClick={() => pick(c)} />)}</div>
+      <div className="row" style={{ gap: 6, marginTop: 6 }}>
+        <button className="btn sm ghost grow" onClick={() => pick(null)}>{none}</button>
+        <label className="btn sm ghost" title="Another colour">Other… <input type="color" onChange={(e) => pick(e.target.value)} style={{ width: 0, height: 0, opacity: 0, position: 'absolute' }} /></label>
+      </div>
+    </div>, document.body)}
+  </span>;
+}
 
 let seq = 0;
 export function openComposer(init = {}) {
@@ -200,6 +234,11 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   const [closing, setClosing] = useState(false);
   const [templates, setTemplates] = useState([]);
   const editor = useRef();
+  // Plain text (no formatting, sent without an HTML part) or HTML; the default is set in Settings → Mail.
+  const [format, setFormat] = useState(init.format || settings.mail.composeFormat || 'html');
+  const plain = format === 'text';
+  // The selection in the editor, kept while a list or colour picker has the focus.
+  const savedRange = useRef(null);
   const abort = useRef();
   const fileInput = useRef();
   // One key per compose window: the server ignores a second send of it (double click, Ctrl+Enter twice).
@@ -309,14 +348,54 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     } catch (e) { toastError(e); } finally { setAiBusy(false); }
   };
 
-  const exec = (cmd, val) => { editor.current.focus(); document.execCommand(cmd, false, val); setDirty(true); };
+  useEffect(() => {
+    const h = () => { const s = getSelection(); if (s.rangeCount && editor.current?.contains(s.anchorNode)) savedRange.current = s.getRangeAt(0).cloneRange(); };
+    document.addEventListener('selectionchange', h);
+    return () => document.removeEventListener('selectionchange', h);
+  }, []);
+  const exec = (cmd, val) => {
+    const el = editor.current, s = getSelection();
+    const inside = s.rangeCount && el.contains(s.anchorNode);
+    el.focus();
+    if (!inside && savedRange.current) { s.removeAllRanges(); s.addRange(savedRange.current); }
+    document.execCommand('styleWithCSS', false, CSS_CMDS.includes(cmd));
+    document.execCommand(cmd, false, val);
+    setDirty(true); scheduleSave();
+  };
+  // An address typed in the text becomes a link when a space or a new line follows it.
+  const autoLink = () => {
+    const s = getSelection();
+    if (plain || !s.rangeCount || !s.isCollapsed) return;
+    const node = s.anchorNode;
+    if (!node || node.nodeType !== 3 || node.parentElement?.closest('a')) return;
+    const before = node.data.slice(0, s.anchorOffset);
+    const m = before.match(/(?:^|[\s(<\u00a0])((?:https?:\/\/|www\.)[^\s<>"\u00a0]+)$/i);
+    if (!m) return;
+    const url = m[1].replace(/[.,;:!?'")\]]+$/, '');
+    if (!/\w\.\w/.test(url)) return;
+    const start = before.length - m[1].length;
+    const r = document.createRange();
+    r.setStart(node, start); r.setEnd(node, start + url.length);
+    const a = document.createElement('a');
+    a.href = /^www\./i.test(url) ? `http://${url}` : url;
+    r.surroundContents(a);
+    const caret = document.createRange();
+    const rest = a.nextSibling;
+    if (rest?.nodeType === 3 && m[1].length > url.length) caret.setStart(rest, m[1].length - url.length); else caret.setStartAfter(a);
+    caret.collapse(true); s.removeAllRanges(); s.addRange(caret);
+  };
+  // To plain text: the user's own text loses its formatting (the quoted message is turned into "> " lines when sent).
+  const switchFormat = () => {
+    if (!plain) { setBodyText(userText()); setFormat('text'); } else setFormat('html');
+    setDirty(true); scheduleSave();
+  };
 
   const payload = () => ({
     accountId: account?.id, from: { address: fromId?.address || account?.email, name: fromId?.name || account?.displayName || '' }, to, cc, bcc, subject,
     html: editor.current.innerHTML, inReplyToId: init.inReplyToId || null,
     attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename }
       : a.uploadId ? { uploadId: a.uploadId, filename: a.filename, contentType: a.contentType, size: a.size } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
-    draftId, sendKey: sendKey.current, priority: importance,
+    draftId, sendKey: sendKey.current, priority: importance, format,
   });
 
   // Saves the draft in Halcyon now; returns its id.
@@ -465,16 +544,41 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
         <div><label>Subject</label><input className="bare" value={subject} onChange={(e) => { setSubject(e.target.value); setDirty(true); }} /></div>
       </div>
       <div className="editor-toolbar">
-        <button className="icon-btn" title="Bold" onMouseDown={(e) => { e.preventDefault(); exec('bold'); }}><Bold size={15} /></button>
-        <button className="icon-btn" title="Italic" onMouseDown={(e) => { e.preventDefault(); exec('italic'); }}><Italic size={15} /></button>
-        <button className="icon-btn" title="Underline" onMouseDown={(e) => { e.preventDefault(); exec('underline'); }}><Underline size={15} /></button>
-        <button className="icon-btn" title="Strikethrough" onMouseDown={(e) => { e.preventDefault(); exec('strikeThrough'); }}><Strikethrough size={15} /></button>
-        <button className="icon-btn" title="Bulleted list" onMouseDown={(e) => { e.preventDefault(); exec('insertUnorderedList'); }}><List size={15} /></button>
-        <button className="icon-btn" title="Numbered list" onMouseDown={(e) => { e.preventDefault(); exec('insertOrderedList'); }}><ListOrdered size={15} /></button>
-        <button className="icon-btn" title="Quote" onMouseDown={(e) => { e.preventDefault(); exec('formatBlock', 'blockquote'); }}><Quote size={15} /></button>
-        <button className="icon-btn" title="Link" onMouseDown={(e) => { e.preventDefault(); insertLink(); }}><Link2 size={15} /></button>
-        <button className="icon-btn" title="Inline image" onMouseDown={(e) => { e.preventDefault(); insertImage(); }}><ImageIcon size={15} /></button>
-        <button className="icon-btn" title="Clear formatting" onMouseDown={(e) => { e.preventDefault(); exec('removeFormat'); }}><RemoveFormatting size={15} /></button>
+        <button className={`btn sm ghost format-toggle ${plain ? 'on' : ''}`} title={plain ? 'Plain text: no formatting, sent as text only. Click to write with formatting (HTML).' : 'With formatting (HTML). Click to send as plain text.'}
+          onMouseDown={(e) => e.preventDefault()} onClick={switchFormat}><Type size={14} /> {plain ? 'Plain text' : 'HTML'}</button>
+        {!plain && <>
+          <span className="tb-sep" />
+          <select className="tb-select" title="Paragraph style" aria-label="Paragraph style" value="" onChange={(e) => exec('formatBlock', e.target.value)}>
+            <option value="" disabled>Style</option>{BLOCKS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          <select className="tb-select" title="Font" aria-label="Font" value="" onChange={(e) => exec('fontName', e.target.value)}>
+            <option value="" disabled>Font</option>{FONTS.map(([v, l]) => <option key={l} value={v} style={{ fontFamily: v }}>{l}</option>)}</select>
+          <select className="tb-select narrow" title="Text size" aria-label="Text size" value="" onChange={(e) => exec('fontSize', e.target.value)}>
+            <option value="" disabled>Size</option>{SIZES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          <span className="tb-sep" />
+          <button className="icon-btn" title="Bold (Ctrl+B)" onMouseDown={(e) => { e.preventDefault(); exec('bold'); }}><Bold size={15} /></button>
+          <button className="icon-btn" title="Italic (Ctrl+I)" onMouseDown={(e) => { e.preventDefault(); exec('italic'); }}><Italic size={15} /></button>
+          <button className="icon-btn" title="Underline (Ctrl+U)" onMouseDown={(e) => { e.preventDefault(); exec('underline'); }}><Underline size={15} /></button>
+          <button className="icon-btn" title="Strikethrough" onMouseDown={(e) => { e.preventDefault(); exec('strikeThrough'); }}><Strikethrough size={15} /></button>
+          <ColorButton title="Text colour" icon={Baseline} none="Automatic" onPick={(c) => exec('foreColor', c || 'inherit')} />
+          <ColorButton title="Highlight" icon={Highlighter} none="No highlight" onPick={(c) => exec('hiliteColor', c || 'transparent')} />
+          <span className="tb-sep" />
+          <button className="icon-btn" title="Bulleted list" onMouseDown={(e) => { e.preventDefault(); exec('insertUnorderedList'); }}><List size={15} /></button>
+          <button className="icon-btn" title="Numbered list" onMouseDown={(e) => { e.preventDefault(); exec('insertOrderedList'); }}><ListOrdered size={15} /></button>
+          <button className="icon-btn" title="Decrease indent" onMouseDown={(e) => { e.preventDefault(); exec('outdent'); }}><IndentDecrease size={15} /></button>
+          <button className="icon-btn" title="Increase indent" onMouseDown={(e) => { e.preventDefault(); exec('indent'); }}><IndentIncrease size={15} /></button>
+          <button className="icon-btn" title="Align left" onMouseDown={(e) => { e.preventDefault(); exec('justifyLeft'); }}><AlignLeft size={15} /></button>
+          <button className="icon-btn" title="Centre" onMouseDown={(e) => { e.preventDefault(); exec('justifyCenter'); }}><AlignCenter size={15} /></button>
+          <button className="icon-btn" title="Align right" onMouseDown={(e) => { e.preventDefault(); exec('justifyRight'); }}><AlignRight size={15} /></button>
+          <span className="tb-sep" />
+          <button className="icon-btn" title="Quote" onMouseDown={(e) => { e.preventDefault(); exec('formatBlock', 'blockquote'); }}><Quote size={15} /></button>
+          <button className="icon-btn" title="Link" onMouseDown={(e) => { e.preventDefault(); insertLink(); }}><Link2 size={15} /></button>
+          <button className="icon-btn" title="Inline image" onMouseDown={(e) => { e.preventDefault(); insertImage(); }}><ImageIcon size={15} /></button>
+          <button className="icon-btn" title="Horizontal line" onMouseDown={(e) => { e.preventDefault(); exec('insertHorizontalRule'); }}><SeparatorHorizontal size={15} /></button>
+          <button className="icon-btn" title="Clear formatting" onMouseDown={(e) => { e.preventDefault(); exec('removeFormat'); }}><RemoveFormatting size={15} /></button>
+        </>}
+        <span className="tb-sep" />
+        <button className="icon-btn" title="Undo (Ctrl+Z)" onMouseDown={(e) => { e.preventDefault(); exec('undo'); }}><Undo2 size={15} /></button>
+        <button className="icon-btn" title="Redo (Ctrl+Y)" onMouseDown={(e) => { e.preventDefault(); exec('redo'); }}><Redo2 size={15} /></button>
         <span className="grow" />
         {templates.length > 0 && <button className="btn ghost sm" onClick={(e) => openMenu(e, templates.map((t) => ({ label: t.name, icon: FileText, onClick: () => { if (t.subject && !subject) setSubject(t.subject); setBodyText(null, { html: t.bodyHtml }); } })))}><FileText size={14} /> Templates</button>}
         {settings.ai.enabled && <button className="btn ai sm" disabled={aiBusy} onClick={(e) => openMenu(e, [
@@ -485,8 +589,13 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
         ])}><Wand2 size={14} /> Rewrite <ChevronDown size={12} /></button>}
         {settings.ai.enabled && aiSteps > 0 && !aiBusy && <button className="btn sm" title="Undo the last AI change" onClick={undoAi}><Undo2 size={13} /> Undo AI</button>}
       </div>
-      <div ref={editor} className="editor" contentEditable suppressContentEditableWarning onInput={() => { setDirty(true); scheduleSave(); }}
-        onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); } }} />
+      <div ref={editor} className={`editor ${plain ? 'plain-text' : ''}`} contentEditable suppressContentEditableWarning onInput={() => { setDirty(true); scheduleSave(); }}
+        onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') autoLink(); }}
+        onPaste={(e) => {
+          if (e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); return; }
+          // Plain text takes only the text of what is pasted.
+          if (plain) { e.preventDefault(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); }
+        }} />
       {attachments.length > 0 && <div className="att-list">{attachments.map((a, i) => (
         <span key={i} className="chip"><Paperclip size={12} />
           <a href="#" className="att-dl" title="Open / download" onClick={(e) => { e.preventDefault(); openAttachment(a); }}>{a.filename}</a> {a.size || a.contentBase64 ? `· ${fmtSize(a.size || Math.round((a.contentBase64.length * 3) / 4))}` : ''}

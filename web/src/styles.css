@@ -176,6 +176,22 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .suggest div.active, .suggest div:hover { background: var(--hover); }
 .editor-toolbar { display: flex; gap: 1px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
 .editor-toolbar .icon-btn { width: 28px; height: 28px; }
+.editor-toolbar .tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.editor-toolbar .tb-select { height: 28px; max-width: 108px; padding: 0 4px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text-2); font-size: 12.5px; cursor: pointer; }
+.editor-toolbar .tb-select:hover { border-color: var(--border); color: var(--text); }
+.editor-toolbar .tb-select.narrow { max-width: 72px; }
+.editor-toolbar .format-toggle { gap: 4px; }
+.editor-toolbar .format-toggle.on { color: var(--accent); }
+.color-pick { position: relative; display: inline-flex; }
+.color-pop { position: fixed; z-index: 120; padding: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); width: 236px; }
+.color-pop .swatches { display: grid; grid-template-columns: repeat(10, 18px); gap: 4px; }
+.color-pop .swatches button { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border-strong); cursor: pointer; padding: 0; }
+.color-pop .swatches button:hover { transform: scale(1.15); }
+.color-pop label.btn { position: relative; cursor: pointer; }
+.editor.plain-text { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+.editor h1 { font-size: 1.6em; margin: .4em 0; } .editor h2 { font-size: 1.35em; margin: .4em 0; } .editor h3 { font-size: 1.15em; margin: .4em 0; }
+.editor pre { background: var(--panel-2); padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; }
+.editor hr { border: 0; border-top: 1px solid var(--border-strong); margin: 10px 0; }
 .editor { flex: 1; overflow: auto; padding: 12px 14px; outline: none; line-height: 1.5; min-height: 120px; }
 .editor blockquote { border-left: 3px solid var(--border-strong); margin: 0 0 0 4px; padding-left: 10px; color: var(--text-2); }
 .editor .signature { color: var(--text-2); }
