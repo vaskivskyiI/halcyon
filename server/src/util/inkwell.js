@@ -23,5 +23,8 @@ export function inkwellNewUrl(base, kind, item) {
   return `${base}/#/new?${q.toString().replace(/\+/g, '%20')}`;
 }
 
+/** Inkwell's "#/link": the same details, linked to a page that already exists (the user picks it there). */
+export const inkwellLinkUrl = (base, kind, item) => inkwellNewUrl(base, kind, item).replace('/#/new?', '/#/link?');
+
 /** Whether a linked note (its `date`: the `day` it was made with) belongs to this occurrence of an event. */
 export const sameOccurrence = (date, start, allDay = false) => !!date && date === occurrenceDay(start, allDay);
