@@ -14,6 +14,11 @@ export function mock() {
           language: 'English', user_writing: greeting ? `Opens with "${greeting.slice(0, 40)}"` : '', their_style: 'brief', notes: [] });
         return { text, usage: { input: 1, output: 1 } };
       }
+      // Link check (mail/links.js): links to a look-alike "paypa1" are suspicious; a link the rules noted is fine (tracking).
+      if (json && /You check the links in an email for phishing/.test(system)) {
+        const links = [...last.matchAll(/^\[(\d+)\] text: .* -> (\S+)/gm)].filter((m) => /paypa1/.test(m[2])).map((m) => ({ i: Number(m[1]), reason: 'Look-alike of paypal.com' }));
+        return { text: JSON.stringify({ links }), usage: { input: 1, output: 1 } };
+      }
       // Sorting past mail into a user's category: emails whose line mentions the category's name.
       if (json && /You sort emails into the user's own category/.test(system)) {
         const name = ((system.match(/own category "([^"]+)"/) || [])[1] || '').toLowerCase();

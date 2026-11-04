@@ -1166,3 +1166,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Sent drafts stay gone: the composer waits for an autosave on its way before sending (it may be what creates the
   draft, and its id must go with the message); `saveDraft` does not re-create a draft id that a message in the outbox
   was sent from (`{ sent: true }`) — a late autosave used to bring it back as a new draft (round86).
+- Link check (migration 59 `link_checks`; `mail/links.js`, `GET /api/messages/:id/links`; web `mail/linkcheck.jsx`): the
+  reader shows where a link goes when the pointer rests on it (also inside the email's frame) and marks suspicious links;
+  opening one asks first. Rules at once (text showing another site, IP host, punycode, user@ host); with AI on, the AI
+  judges the links once per email (cached; its verdict overrides the rules, so tracking links of newsletters pass). Not
+  asked for own mail or when every link stays on the sender's site (round87).

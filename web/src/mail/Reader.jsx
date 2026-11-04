@@ -21,6 +21,7 @@ import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js'
 import { topicView, categoryView } from './MailView.jsx';
 import { useHits, markText, markDom, unmarkDom, hasHit } from './highlight.js';
 import { printConversations } from './print.js';
+import { useLinkChecks, verdictOf, showTip, hideTip, guardOpen, markLinks, watchFrame, LinkTip } from './linkcheck.jsx';
 
 // Recently opened conversations (per page load), shown instantly when reopened.
 const threadCache = new Map();
@@ -441,6 +442,7 @@ export default function Reader({ id, view }) {
 
   return (
     <section className="reader">
+      <LinkTip />
       <div className="reader-toolbar">
         <button className="icon-btn mobile-only" onClick={() => navigate(`#/mail/${view}`)}><ArrowLeft size={18} /></button>
         <BackButton />
@@ -986,6 +988,7 @@ function dragOut(m, a) {
 function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, translation, onInviteChanged, onExtractEvent }) {
   const realAtts = (m.attachments || []).filter((a) => !a.inline);
   const recent = useRecentWith(m.id);
+  const links = useLinkChecks(m, expanded);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`} data-msg={m.id}>
       <div className="msg-card-head" onClick={toggle}>
@@ -1019,7 +1022,7 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
         {m.hasInvite && <Invitation messageId={m.id} onChanged={onInviteChanged} onExtract={onExtractEvent} />}
         {m.blockedRemote > 0 && <div className="notice"><ImageIcon size={15} /> Remote images were blocked to protect your privacy.<span className="grow" /><button className="btn sm" onClick={onShowImages}>Show images</button></div>}
         {translation && <div className="notice" style={{ display: 'block' }}><div className="small" style={{ fontWeight: 600, marginBottom: 4 }}><Languages size={13} /> Translation</div><div style={{ whiteSpace: 'pre-wrap' }}>{translation}</div></div>}
-        <div className="msg-body">{m.partial ? <Spinner size={16} /> : m.html ? <HtmlFrame html={m.html} /> : <PlainBody text={m.text} />}</div>
+        <div className="msg-body">{m.partial ? <Spinner size={16} /> : m.html ? <HtmlFrame html={m.html} links={links} /> : <PlainBody text={m.text} links={links} />}</div>
         {m.attachments?.length > 0 && <div className="attachments">{m.attachments.map((a) => (
           <a key={a.index} className="attachment" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title="Open — or drag to a folder (Explorer, desktop) to save it there" {...dragOut(m, a)}>
             <Paperclip size={15} /><span className="truncate grow">{a.filename}</span><span className="faint small">{fmtSize(a.size || 0)}</span>
@@ -1030,9 +1033,11 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
   );
 }
 
-function linkify(text = '', hits = []) {
+function linkify(text = '', hits = [], links = null) {
   const parts = String(text).split(/(https?:\/\/[^\s<>"]+)/g);
-  return parts.map((p, i) => (i % 2 ? <a key={i} href={p} target="_blank" rel="noopener noreferrer">{p}</a> : <span key={i}>{markText(p, hits)}</span>));
+  return parts.map((p, i) => (i % 2 ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" className={verdictOf(links?.checks, p)?.suspicious ? 'hl-suspicious' : undefined}
+    onMouseEnter={links ? (e) => showTip(p, e.currentTarget.getBoundingClientRect(), links) : undefined} onMouseLeave={links ? hideTip : undefined}
+    onClick={links ? (e) => guardOpen(e, p, links.checks) : undefined}>{p}</a> : <span key={i}>{markText(p, hits)}</span>));
 }
 
 /** Email HTML rendered in a sandboxed iframe (no scripts) with auto height. */
@@ -1062,9 +1067,15 @@ function setQuoteHidden(doc, start, hidden) {
   for (const n of nodes) n.style.display = hidden ? 'none' : '';
 }
 
-function HtmlFrame({ html }) {
+function HtmlFrame({ html, links }) {
   const ref = useRef();
   const hits = useHits();
+  // Links: where they go on hover, suspicious ones marked (watchFrame reads the newest verdicts through the ref).
+  const linksNow = useRef(links);
+  linksNow.current = links;
+  const unwatch = useRef(null);
+  useEffect(() => { if (links) markLinks(ref.current?.contentDocument, links.checks); }, [links?.checks]);
+  useEffect(() => () => { unwatch.current?.(); hideTip(); }, []);
   const [h, setH] = useState(120);
   const [quote, setQuote] = useState(null); // { el, hidden }
   const doc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
@@ -1072,6 +1083,7 @@ function HtmlFrame({ html }) {
     body{padding:4px 2px} img{max-width:100%;height:auto} img[data-remote-src]{display:none} table{max-width:100%} pre{white-space:pre-wrap}
     blockquote{margin:0 0 0 6px;padding-left:10px;border-left:3px solid #d0d5dd;color:#5b6474} a{color:#2563eb}
     mark.hit{background:#fde68a;color:inherit;border-radius:2px}
+    a.hl-suspicious{color:#b91c1c;background:#fee2e2;outline:1px dashed #dc2626;border-radius:2px} a.hl-suspicious::before{content:"⚠︎ "}
   </style></head><body>${html}</body></html>`;
   const measure = () => {
     const d = ref.current?.contentDocument;
@@ -1089,6 +1101,8 @@ function HtmlFrame({ html }) {
     const el = d?.body && findQuoteStart(d);
     if (el) { setQuoteHidden(d, el, true); setQuote({ el, hidden: true }); } else setQuote(null);
     showHits(el);
+    unwatch.current?.();
+    if (links) { unwatch.current = watchFrame(ref.current, () => linksNow.current); markLinks(d, links.checks); }
     measure(); setTimeout(measure, 300);
   };
   // The words searched for: marked; when they are only in the folded quoted text, it is shown.
@@ -1114,16 +1128,16 @@ function HtmlFrame({ html }) {
 }
 
 /** Plain-text body with the quoted history ("On … wrote:", "> …") folded. */
-function PlainBody({ text }) {
+function PlainBody({ text, links }) {
   const hits = useHits();
   const q = splitPlainQuote(text);
   // Open when the words searched for are only in the quoted text.
   const [open, setOpen] = useState(() => !!q && hits.length > 0 && !hasHit(q.own, hits) && hasHit(q.quoted, hits));
-  if (!q) return <pre className="plain">{linkify(text, hits)}</pre>;
+  if (!q) return <pre className="plain">{linkify(text, hits, links)}</pre>;
   return <>
-    <pre className="plain">{linkify(q.own, hits)}</pre>
+    <pre className="plain">{linkify(q.own, hits, links)}</pre>
     <button className="quote-toggle" onClick={() => setOpen(!open)}>{open ? 'Hide quoted text' : `··· Show quoted text (${q.lines} lines)`}</button>
-    {open && <pre className="plain quoted">{linkify(q.quoted, hits)}</pre>}
+    {open && <pre className="plain quoted">{linkify(q.quoted, hits, links)}</pre>}
   </>;
 }
 

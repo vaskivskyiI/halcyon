@@ -18,6 +18,7 @@ import { scope, reqSpace, inIds } from '../spaces.js';
 import { sharedOf, mergedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
+import { checkLinks } from '../mail/links.js';
 import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
@@ -445,6 +446,13 @@ export default async function mailRoutes(app) {
     await senderOf(m);
     await icsOf(m);
     return asLinks(req, { ...fullMessage(req.user.id, m, req.query.images === '1'), related: relatedTo(req.user.id, [m.id]) });
+  });
+
+  // Where the links of an email go, and whether they look like phishing (rules at once, the AI once per email).
+  app.get('/api/messages/:id/links', async (req, reply) => {
+    const m = get('SELECT id, from_addr, from_name, subject, body_text, body_html FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!m) return reply.code(404).send({ error: 'Not found' });
+    return checkLinks(req.user.id, m);
   });
 
   // "Needs reply" set or cleared by the user, for one or many messages; it survives re-analysis.

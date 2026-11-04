@@ -631,4 +631,10 @@ export const migrations = [
   );
   CREATE INDEX idx_deleted_hold_user ON deleted_hold(user_id);
   `,
+  // 59: the AI's verdict on the links of an email (mail/links.js), asked once when the email is first read.
+  `
+  CREATE TABLE link_checks (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, links_json TEXT, model TEXT, created_at INTEGER
+  );
+  `,
 ];

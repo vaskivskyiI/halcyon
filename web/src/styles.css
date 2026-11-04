@@ -354,6 +354,13 @@ table.simple th, table.simple td { text-align: left; padding: 6px 8px; border-bo
 .quote-toggle { display: inline-block; margin: 6px 0 2px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text-2); font-size: 12px; cursor: pointer; }
 .quote-toggle:hover { color: var(--accent); border-color: var(--accent); }
 mark.hit { background: color-mix(in srgb, var(--warning) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.link-tip { position: fixed; z-index: 1000; max-width: min(430px, calc(100vw - 16px)); padding: 6px 9px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border);
+  box-shadow: var(--shadow); font-size: 12px; pointer-events: none; overflow-wrap: anywhere; }
+.link-tip-url b { color: var(--text); font-weight: 650; }
+.link-tip.bad { border-color: var(--danger); }
+.link-tip-why { color: var(--danger); font-weight: 600; margin-top: 3px; display: flex; gap: 5px; align-items: flex-start; }
+.link-tip-why svg { flex: none; margin-top: 2px; }
+a.hl-suspicious { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); outline: 1px dashed var(--danger); border-radius: 2px; }
 pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); padding-left: 10px; }
 .thread-fold { display: block; width: 100%; margin: 4px 0 10px; padding: 6px; border: 1px dashed var(--border); border-radius: 10px; background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
 .thread-fold:hover { color: var(--accent); border-color: var(--accent); }
