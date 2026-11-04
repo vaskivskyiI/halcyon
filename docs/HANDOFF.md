@@ -1160,3 +1160,6 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   results. The reader marks the words searched for (`web/src/mail/highlight.js`: words, phrases, subject:/body: values,
   from a word start, accents ignored) in the subject, HTML (inside the iframe) and plain bodies; quoted text opens when
   the words are only there. MailView puts the active query in `store.searchHighlight` (round86).
+- Printing (`web/src/mail/print.js`): a hidden iframe in the page (new windows go to the browser in the Windows/desktop
+  apps). Ctrl/⌘+P in the mail view prints the selected conversations (whole, in conversation view), else the open one
+  (`halcyon:print` → Reader, which loads folded bodies first); "Print" in the list's context menu and the reader's menu.

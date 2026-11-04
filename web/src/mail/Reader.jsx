@@ -20,6 +20,7 @@ import { loadFolders, setSpace } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 import { topicView, categoryView } from './MailView.jsx';
 import { useHits, markText, markDom, unmarkDom, hasHit } from './highlight.js';
+import { printConversations } from './print.js';
 
 // Recently opened conversations (per page load), shown instantly when reopened.
 const threadCache = new Map();
@@ -34,6 +35,13 @@ const cacheBody = (k, f) => { bodyCache.delete(k); bodyCache.set(k, f); if (body
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
   const hits = useHits();
+  // Ctrl+P in the mail view (MailView) prints the open conversation.
+  const printRef = useRef();
+  useEffect(() => {
+    const h = () => printRef.current?.();
+    window.addEventListener('halcyon:print', h);
+    return () => window.removeEventListener('halcyon:print', h);
+  }, []);
   // Pin and note state of the open conversation (hooks stay above the early returns below).
   const [pinned, setPinned] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -261,6 +269,8 @@ export default function Reader({ id, view }) {
 
   // Discarded draft versions (in Trash etc.) are left out of the conversation, unless that is what was opened.
   const msgs = thread.messages.filter((m) => !isLeftoverDraft(m) || m.id === Number(id));
+  // Bodies not loaded yet (folded messages of a long conversation) are fetched first.
+  printRef.current = async () => printConversations([await Promise.all(msgs.map((m) => (m.partial ? fullOf(m).catch(() => m) : m)))]);
   // Drafts are shown as editors: Halcyon drafts of this conversation, and drafts in the Drafts folder (also from other
   // mail apps) — one editor per draft (a Halcyon draft's copy in the Drafts folder is not shown twice).
   const latest = [...msgs].reverse().find((m) => !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent') || msgs[msgs.length - 1];
@@ -407,7 +417,7 @@ export default function Reader({ id, view }) {
     { label: latest.insight?.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply', icon: CornerUpLeft, onClick: () => setNeedsReply(!latest.insight?.needsReply) },
     settings.ai.enabled && { label: 'Mark as important', icon: ThumbsUp, hint: 'AI learns', onClick: () => feedback('important') },
     settings.ai.enabled && { label: 'Mark as not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => feedback('unimportant') },
-    { label: 'Print', icon: Printer, onClick: async () => printThread(await Promise.all(msgs.map((m) => (m.partial ? fullOf(m).catch(() => m) : m)))) },
+    { label: 'Print', icon: Printer, hint: 'Ctrl+P', onClick: () => printRef.current() },
     { label: 'Download .eml', icon: FileCode, onClick: () => window.open(api.url(`/api/messages/${target.id}/raw`)) },
     target.folder?.specialUse === '\\Junk' ? { label: 'Not spam', icon: AlertOctagon, onClick: () => act('notspam') } : { label: 'Report spam', icon: AlertOctagon, onClick: () => act('spam') },
     { label: 'Delete permanently', icon: Trash2, danger: true, onClick: () => confirm('Delete permanently?') && act('delete') },
@@ -1341,12 +1351,4 @@ function ThreadNote({ threadKey, messageId, open, onOpen }) {
       <textarea className="input" rows={Math.min(8, Math.max(2, note.split('\n').length))} autoFocus={open && !saved} placeholder="What to remember about this conversation…" value={note}
         onChange={(e) => { typed.current = true; setNote(e.target.value); }} />
     </div>);
-}
-
-function printThread(msgs) {
-  const w = window.open('', '_blank');
-  if (!w) return;
-  w.document.write(`<html><head><title>${escapeHtml(msgs[0].subject)}</title><style>body{font-family:system-ui;padding:20px;max-width:800px;margin:auto}hr{margin:24px 0}.h{color:#555;font-size:13px}</style></head><body><h2>${escapeHtml(msgs[0].subject)}</h2>${msgs.map((m) => `<div class="h"><b>${escapeHtml(addrFull(m.from))}</b><br>To: ${escapeHtml(m.to.map(addrFull).join(', '))}${m.cc?.length ? `<br>Cc: ${escapeHtml(m.cc.map(addrFull).join(', '))}` : ''}<br>${fmtFull(m.date)}</div>${m.html || `<pre style="white-space:pre-wrap">${escapeHtml(m.text)}</pre>`}`).join('<hr>')}</body></html>`);
-  w.document.close();
-  setTimeout(() => w.print(), 400);
 }

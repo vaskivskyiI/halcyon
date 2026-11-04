@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, History, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon, Newspaper,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
-  ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal,
+  ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal, Printer,
 } from 'lucide-react';
+import { printMail } from './print.js';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { BackButton } from '../back.js';
@@ -628,6 +629,20 @@ function MessageList({ view, openId, onMenu }) {
     mailAction(action, ids, extra, { threads: threaded });
   };
 
+  // Ctrl+P: the selected messages (conversations), else the one open — not the page.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'p') return;
+      if (store.get().composers.some((c) => !c.minimized)) return;
+      e.preventDefault();
+      if (selected.size) printMail(items.filter((m) => selected.has(m.id)), threaded);
+      else if (openId) window.dispatchEvent(new Event('halcyon:print'));
+      else toast('Open or select a message to print');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e) => {
@@ -712,6 +727,7 @@ function MessageList({ view, openId, onMenu }) {
       { label: m.isRead ? 'Mark as unread' : 'Mark as read', icon: m.isRead ? MailIcon : MailOpen, onClick: () => act(m.isRead ? 'unread' : 'read', {}, ids) },
       { label: m.isFlagged ? 'Unflag' : 'Flag', icon: Star, onClick: () => act(m.isFlagged ? 'unflag' : 'flag', {}, ids) },
       { label: m.pinned ? 'Unpin' : 'Pin to top', icon: Pin, onClick: () => togglePin(m) },
+      { label: 'Print', icon: Printer, hint: 'Ctrl+P', onClick: () => printMail(ids.map((i) => items.find((x) => x.id === i) || m), threaded) },
       { label: 'Create task…', icon: ClipboardCheck, onClick: () => store.set({ taskDialog: m.id }) },
       m.ai?.needsAction && { label: 'Action: done', icon: ClipboardCheck, onClick: () => settleMany(ids, 'done') },
       m.ai?.needsAction && { label: 'Action: not doing it', icon: X, onClick: () => settleMany(ids, 'skipped') },
