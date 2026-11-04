@@ -1152,3 +1152,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   `deleted_hold` and removes the message locally; `undeleteMessages` (action `undelete`, `held` ids) puts it back with
   the same id; `finishDeletes` (scheduler, every 30 s) queues the IMAP delete when the hold ends (round85). The reader
   marks each message read only once per opening (no read/unread loop when the server keeps it unread).
+- Read/unread follows copies of the same Message-ID in every account of the user (was: the same account only). The
+  conversation view (`/api/threads`) merges such copies into one message, unread while any copy is, so a copy in another
+  account (forwarded mail) kept the conversation unread right after it was read (round86).
+- Search in conversation view: `oneByThread` (routes/mail.js) keeps each conversation once, at its best-ranked match, with
+  thread count/unread over the whole conversation; the AI (semantic) results skip conversations already in the keyword
+  results. The reader marks the words searched for (`web/src/mail/highlight.js`: words, phrases, subject:/body: values,
+  from a word start, accents ignored) in the subject, HTML (inside the iframe) and plain bodies; quoted text opens when
+  the words are only there. MailView puts the active query in `store.searchHighlight` (round86).

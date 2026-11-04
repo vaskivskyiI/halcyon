@@ -19,6 +19,7 @@ import InkwellNotes from '../components/InkwellNotes.jsx';
 import { loadFolders, setSpace } from '../data.js';
 import { QUOTE_HEAD, splitPlainQuote } from '../../../server/src/util/quotes.js';
 import { topicView, categoryView } from './MailView.jsx';
+import { useHits, markText, markDom, unmarkDom, hasHit } from './highlight.js';
 
 // Recently opened conversations (per page load), shown instantly when reopened.
 const threadCache = new Map();
@@ -32,6 +33,7 @@ const cacheBody = (k, f) => { bodyCache.delete(k); bodyCache.set(k, f); if (body
 
 export default function Reader({ id, view }) {
   const [thread, setThread] = useState(null);
+  const hits = useHits();
   // Pin and note state of the open conversation (hooks stay above the early returns below).
   const [pinned, setPinned] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -445,7 +447,7 @@ export default function Reader({ id, view }) {
         <button className="icon-btn" title="More" onClick={moreMenu}><MoreHorizontal size={17} /></button>
       </div>
       <div className="reader-scroll" ref={scroller}>
-        <h1>{target.subject || '(no subject)'}</h1>
+        <h1>{markText(target.subject || '(no subject)', hits)}</h1>
         <div className="row" style={{ gap: 6, marginTop: -6, marginBottom: 12, flexWrap: 'wrap' }}>
           {target.folder && <span className="chip"><Folder size={11} /> {target.folder.name}</span>}
           <button className={`chip clickable ${pinned ? 'on' : ''}`} title={pinned ? 'Unpin' : 'Pin to the top of the inbox'} onClick={togglePin}><Pin size={11} /> {pinned ? 'Pinned' : 'Pin'}</button>
@@ -1018,9 +1020,9 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
   );
 }
 
-function linkify(text = '') {
+function linkify(text = '', hits = []) {
   const parts = String(text).split(/(https?:\/\/[^\s<>"]+)/g);
-  return parts.map((p, i) => (i % 2 ? <a key={i} href={p} target="_blank" rel="noopener noreferrer">{p}</a> : p));
+  return parts.map((p, i) => (i % 2 ? <a key={i} href={p} target="_blank" rel="noopener noreferrer">{p}</a> : <span key={i}>{markText(p, hits)}</span>));
 }
 
 /** Email HTML rendered in a sandboxed iframe (no scripts) with auto height. */
@@ -1052,12 +1054,14 @@ function setQuoteHidden(doc, start, hidden) {
 
 function HtmlFrame({ html }) {
   const ref = useRef();
+  const hits = useHits();
   const [h, setH] = useState(120);
   const [quote, setQuote] = useState(null); // { el, hidden }
   const doc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
     html,body{margin:0;padding:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;color:#1d2433;word-wrap:break-word;overflow-wrap:anywhere}
     body{padding:4px 2px} img{max-width:100%;height:auto} img[data-remote-src]{display:none} table{max-width:100%} pre{white-space:pre-wrap}
     blockquote{margin:0 0 0 6px;padding-left:10px;border-left:3px solid #d0d5dd;color:#5b6474} a{color:#2563eb}
+    mark.hit{background:#fde68a;color:inherit;border-radius:2px}
   </style></head><body>${html}</body></html>`;
   const measure = () => {
     const d = ref.current?.contentDocument;
@@ -1074,8 +1078,18 @@ function HtmlFrame({ html }) {
     const d = ref.current?.contentDocument;
     const el = d?.body && findQuoteStart(d);
     if (el) { setQuoteHidden(d, el, true); setQuote({ el, hidden: true }); } else setQuote(null);
+    showHits(el);
     measure(); setTimeout(measure, 300);
   };
+  // The words searched for: marked; when they are only in the folded quoted text, it is shown.
+  const showHits = (el = quote?.el) => {
+    const d = ref.current?.contentDocument;
+    if (!d?.body) return;
+    unmarkDom(d.body);
+    const marks = markDom(d.body, hits);
+    if (el && marks.length && marks.every((m) => !m.getClientRects().length)) { setQuoteHidden(d, el, false); setQuote({ el, hidden: false }); }
+  };
+  useEffect(() => { if (ref.current?.contentDocument?.readyState === 'complete') { showHits(); measure(); } }, [hits]);
   const toggle = () => {
     const d = ref.current?.contentDocument;
     if (!d || !quote) return;
@@ -1091,13 +1105,15 @@ function HtmlFrame({ html }) {
 
 /** Plain-text body with the quoted history ("On … wrote:", "> …") folded. */
 function PlainBody({ text }) {
-  const [open, setOpen] = useState(false);
+  const hits = useHits();
   const q = splitPlainQuote(text);
-  if (!q) return <pre className="plain">{linkify(text)}</pre>;
+  // Open when the words searched for are only in the quoted text.
+  const [open, setOpen] = useState(() => !!q && hits.length > 0 && !hasHit(q.own, hits) && hasHit(q.quoted, hits));
+  if (!q) return <pre className="plain">{linkify(text, hits)}</pre>;
   return <>
-    <pre className="plain">{linkify(q.own)}</pre>
+    <pre className="plain">{linkify(q.own, hits)}</pre>
     <button className="quote-toggle" onClick={() => setOpen(!open)}>{open ? 'Hide quoted text' : `··· Show quoted text (${q.lines} lines)`}</button>
-    {open && <pre className="plain quoted">{linkify(q.quoted)}</pre>}
+    {open && <pre className="plain quoted">{linkify(q.quoted, hits)}</pre>}
   </>;
 }
 

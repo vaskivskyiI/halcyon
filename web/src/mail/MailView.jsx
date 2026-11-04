@@ -465,6 +465,8 @@ function MessageList({ view, openId, onMenu }) {
   }, [openId]);
 
   useEffect(() => setSearchTab(null), [activeQuery]);
+  // The reader marks the words searched for in what it shows.
+  useEffect(() => { store.set({ searchHighlight: activeQuery }); return () => store.set({ searchHighlight: '' }); }, [activeQuery]);
 
   const load = useCallback(async (append = false) => {
     setLoading(true);
@@ -489,7 +491,7 @@ function MessageList({ view, openId, onMenu }) {
       } else if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
         aiQuery.current = q;
         setAiResults({ status: 'loading', items: [] });
-        api.get(`/api/search/semantic?q=${encodeURIComponent(q)}&exclude=${r.items.map((m) => m.id).join(',')}`)
+        api.get(`/api/search/semantic?q=${encodeURIComponent(q)}&exclude=${r.items.map((m) => m.id).join(',')}${threaded ? '' : '&threads=0'}`)
           .then((s) => { if (aiQuery.current === q) setAiResults({ status: s.unavailable ? 'unavailable' : 'done', items: s.items }); })
           .catch(() => { if (aiQuery.current === q) setAiResults({ status: 'unavailable', items: [] }); });
       } else if (!activeQuery) { aiQuery.current = ''; setAiResults(null); }

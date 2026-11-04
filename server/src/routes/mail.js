@@ -57,6 +57,18 @@ function listItem(r, open) {
   });
 }
 
+// Search in conversation view: each conversation once, at its best match (rows come in rank order), counted over the
+// whole conversation; skip: conversations already shown (the keyword results, when these are the matches by meaning).
+function oneByThread(uid, rows, sc, skip = new Set()) {
+  const seen = new Set(skip);
+  const out = rows.filter((r) => !r.thread_id || (!seen.has(r.thread_id) && seen.add(r.thread_id)));
+  const threads = [...new Set(out.map((r) => r.thread_id).filter(Boolean))];
+  if (!threads.length) return out;
+  const stats = new Map(all(`SELECT thread_id AS t, COUNT(*) AS n, SUM(1 - is_read) AS u FROM messages m WHERE user_id = ? AND ${inIds('m.account_id', sc?.accountIds)}
+    AND thread_id IN (${threads.map(() => '?').join(',')}) GROUP BY thread_id`, uid, ...threads).map((x) => [x.t, x]));
+  return out.map((r) => ({ ...r, thread_count: stats.get(r.thread_id)?.n || 1, thread_unread: stats.get(r.thread_id)?.u || 0 }));
+}
+
 // Mail the AI is about to read waits in Other, visible, and moves when the analysis says so. Mail it will not read stays in Focused.
 const analysing = (m) => `EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = ${m}.user_id AND j.type = 'analyze' AND j.ref_id = CAST(${m}.id AS TEXT) AND j.status IN ('queued', 'running'))`;
 const ANALYSING = analysing('m');
@@ -303,7 +315,9 @@ export default async function mailRoutes(app) {
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
       const byId = new Map(rows.map((r) => [r.id, r]));
       const open = openChecker(uid);
-      return { items: found.map((id) => byId.get(id)).filter(Boolean).map((r) => listItem(r, open)), hasMore: false };
+      let hits = found.map((id) => byId.get(id)).filter(Boolean);
+      if (q.threads !== '0' && getSettings(uid).ui.conversationView) hits = oneByThread(uid, hits, sc);
+      return { items: hits.map((r) => listItem(r, open)), hasMore: false };
     }
     const { where, params } = scopeFor(uid, q, sc);
     const threaded = q.threads !== '0' && getSettings(uid).ui.conversationView;
@@ -573,10 +587,11 @@ export default async function mailRoutes(app) {
       target = [...new Set([...target, ...list])];
     }
     const u = req.user.id;
-    // Read / unread: the same email in other folders of the account (a copy in Archive, Gmail labels) follows, so it
-    // does not stay unread elsewhere after it was read.
+    // Read / unread: the same email in other folders or accounts (a copy in Archive, Gmail labels, mail forwarded from
+    // another account) follows. The conversation shows these copies as one message, unread while any copy is: one left
+    // unread kept the conversation unread right after it was read.
     if ((action === 'read' || action === 'unread') && target.length) {
-      const copies = all(`SELECT c.id FROM messages c JOIN messages m ON m.account_id = c.account_id AND m.message_id = c.message_id
+      const copies = all(`SELECT c.id FROM messages c JOIN messages m ON m.user_id = c.user_id AND m.message_id = c.message_id
         WHERE m.user_id = ? AND m.id IN (${target.map(() => '?').join(',')}) AND c.id != m.id AND c.is_read = ?`, u, ...target, action === 'read' ? 0 : 1).map((r) => r.id);
       target = [...new Set([...target, ...copies])];
     }
@@ -942,7 +957,12 @@ export default async function mailRoutes(app) {
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
       const byId = new Map(rows.map((r) => [r.id, r]));
       const open = openChecker(uid);
-      return { items: hits.map((h) => byId.get(h.id)).filter(Boolean).slice(0, 20).map((r) => listItem(r, open)) };
+      let found = hits.map((h) => byId.get(h.id)).filter(Boolean);
+      if (req.query.threads !== '0' && getSettings(uid).ui.conversationView) {
+        const shown = exclude.size ? all(`SELECT DISTINCT thread_id AS t FROM messages WHERE user_id = ? AND id IN (${[...exclude].map(() => '?').join(',')})`, uid, ...exclude).map((r) => r.t) : [];
+        found = oneByThread(uid, found, sc, new Set(shown));
+      }
+      return { items: found.slice(0, 20).map((r) => listItem(r, open)) };
     };
     const own = await search(req.user.id, sc);
     const rest = await Promise.all((sc ? [] : mergedSpaces(req)).map(async (sp) => ({ sp, r: await search(sp.id, null).catch(() => ({ items: [] })) })));

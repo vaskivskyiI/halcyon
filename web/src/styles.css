@@ -353,6 +353,7 @@ table.simple th, table.simple td { text-align: left; padding: 6px 8px; border-bo
 /* Folded quoted history in messages */
 .quote-toggle { display: inline-block; margin: 6px 0 2px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text-2); font-size: 12px; cursor: pointer; }
 .quote-toggle:hover { color: var(--accent); border-color: var(--accent); }
+mark.hit { background: color-mix(in srgb, var(--warning) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
 pre.plain.quoted { color: var(--text-2); border-left: 3px solid var(--border); padding-left: 10px; }
 .thread-fold { display: block; width: 100%; margin: 4px 0 10px; padding: 6px; border: 1px dashed var(--border); border-radius: 10px; background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
 .thread-fold:hover { color: var(--accent); border-color: var(--accent); }
