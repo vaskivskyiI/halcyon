@@ -19,6 +19,7 @@ public static unsafe class Toasts
     /// <summary>Shows (or, with the same tag, replaces) a toast. kind picks the icon: mail, calendar, task, other.</summary>
     public static void Show(string title, string body, string tag, bool silent, string kind, string launch)
     {
+        try { Shell.EnsureRegistered(); } catch (Exception e) { Log.Write("toast app id: " + e.Message); }
         var icon = Icons.ToastIcon(kind);
         var x = $"<toast launch=\"{Esc(launch)}\" activationType=\"protocol\"><visual><binding template=\"ToastGeneric\">" +
                 $"<text hint-maxLines=\"2\">{Esc(title)}</text>" + (body.Length > 0 ? $"<text>{Esc(body)}</text>" : "") +

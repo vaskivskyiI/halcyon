@@ -438,10 +438,13 @@ function MessageList({ view, openId, onMenu }) {
   // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one —
   // not in the AI views: an action done or a reply sent takes it off Action needed / Needs reply at once. A
   // conversation already in the new list (with another of its messages) is not added a second time.
+  // Only in the list it was opened in: after a change of folder or view it would look as if it were in the new one.
   const openRef = useRef(openId);
+  const listKey = `${view}|${effectiveTab}|${activeQuery}`;
+  const openedIn = useRef(listKey);
   const keepOpen = (next, cur) => {
     const id = openRef.current;
-    if (!id || next.some((m) => m.id === id) || ['needsaction', 'suggested', 'needsreply', 'waiting', 'important', 'snoozed'].includes(view)) return next;
+    if (!id || openedIn.current !== listKey || next.some((m) => m.id === id) || ['needsaction', 'suggested', 'needsreply', 'waiting', 'important', 'snoozed'].includes(view)) return next;
     const i = cur.findIndex((m) => m.id === id);
     if (i < 0 || (threaded && cur[i].threadId && next.some((m) => m.threadId === cur[i].threadId))) return next;
     const out = [...next];
@@ -451,6 +454,7 @@ function MessageList({ view, openId, onMenu }) {
   useEffect(() => {
     const prev = openRef.current;
     openRef.current = openId;
+    openedIn.current = listKey;
     // Leaving a message: let filtered views drop it now if it no longer matches.
     if (prev && prev !== openId && ['unread', 'focused', 'other'].includes(effectiveTab)) {
       api.get(`/api/messages?${params(null)}`).then((r) => setItems((cur) => keepOpen(r.items, cur))).catch(() => {});

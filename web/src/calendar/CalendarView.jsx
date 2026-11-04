@@ -31,17 +31,17 @@ function rangeFor(view, date, weekStart) {
   return [s, addDays(s, 42)];
 }
 
-let shownDate = Date.now();
-/** Opens the calendar on a given day next time it is shown (e.g. "Show" after accepting an invitation). */
+let shownDate = null;
+/** Opens the calendar on a given day next time it is shown (e.g. "Show" after accepting an invitation); otherwise it opens on today. */
 export const showCalendarDate = (t) => { shownDate = t; };
 
 export default function CalendarView() {
   const settings = store.use((s) => s.settings);
   const weekStart = settings.ui.weekStart ?? 1;
   const [view, setView] = useState(() => localStorage.getItem('cal.view') || (innerWidth < 860 ? 'agenda' : 'week'));
-  // The shown date survives switching to Mail and back (module state, per page load).
-  const [date, setDateState] = useState(() => new Date(shownDate));
-  const setDate = (d) => { shownDate = new Date(typeof d === 'function' ? d(new Date(shownDate)) : d).getTime(); setDateState(new Date(shownDate)); };
+  // Back from another page it opens on today again, unless a day was asked for (showCalendarDate).
+  const [date, setDateState] = useState(() => { const d = new Date(shownDate ?? Date.now()); shownDate = null; return d; });
+  const setDate = (d) => setDateState((cur) => new Date(typeof d === 'function' ? d(cur) : d));
   const [events, setEvents] = useState([]);
   const [calendars, setCalendars] = useState([]);
   const [editing, setEditing] = useState(null);

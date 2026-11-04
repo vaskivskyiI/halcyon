@@ -21,13 +21,7 @@ public static class Shell
     public static void Register()
     {
         SetCurrentProcessExplicitAppUserModelID(AppId);
-        using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\AppUserModelId\{AppId}"))
-        {
-            k.SetValue("DisplayName", "Halcyon");
-            var icon = Icons.ToastIcon("mail");
-            if (icon != null) k.SetValue("IconUri", icon);
-            k.SetValue("IconBackgroundColor", "FF2563EB");
-        }
+        RegisterAppId();
         using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{Protocol}"))
         {
             k.SetValue("", "URL:Halcyon");
@@ -58,6 +52,24 @@ public static class Shell
         // Start at login keeps pointing at this copy of the app.
         if (StartsAtLogin) StartsAtLogin = true;
         SHChangeNotify(0x08000000, 0, 0, 0); // SHCNE_ASSOCCHANGED
+    }
+
+    /// <summary>Before a toast: without the name it shows under (AppUserModelId) Windows drops toasts without an error,
+    /// so everything is written again when something removed it meanwhile (an older copy's uninstaller runs --unregister).</summary>
+    public static void EnsureRegistered()
+    {
+        using (var r = Registry.CurrentUser.OpenSubKey($@"Software\Classes\AppUserModelId\{AppId}")) if (r?.GetValue("DisplayName") is string) return;
+        Log.Write("registration was removed: written again");
+        Register();
+    }
+
+    static void RegisterAppId()
+    {
+        using var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\AppUserModelId\{AppId}");
+        k.SetValue("DisplayName", "Halcyon");
+        var icon = Icons.ToastIcon("mail");
+        if (icon != null) k.SetValue("IconUri", icon);
+        k.SetValue("IconBackgroundColor", "FF2563EB");
     }
 
     /// <summary>Uninstall: Halcyon.exe --unregister.</summary>

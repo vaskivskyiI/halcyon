@@ -18,7 +18,7 @@ static class Program
         if (!first) { HandOver(args); return; }
 
         ApplicationConfiguration.Initialize();
-        try { Shell.Register(); } catch { /* registry refused: links and toast clicks just won't reach the app */ }
+        try { Shell.Register(); } catch (Exception x) { Log.Write("register: " + x.Message); /* links and toast clicks won't reach the app */ }
 
         var config = Config.Load();
         if (string.IsNullOrEmpty(config.Server))

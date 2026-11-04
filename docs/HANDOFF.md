@@ -1139,3 +1139,9 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   Change server, Start at login after a real login), signing in and real server notifications, a private-CA server,
   OAuth pop-ups, dragging attachments out, the Inno Setup installer and the GitHub workflow itself (Inno Setup was not
   available locally).
+
+- Calendar opens on today whenever it is shown again (CalendarView: module `shownDate` is one-shot, only for
+  `showCalendarDate`). Mail list: the open message is kept in the list (keepOpen) only in the list it was opened in;
+  after a change of folder, tab or search it no longer shows up there. Windows app 2.0.3: before each toast
+  `Shell.EnsureRegistered` checks the AppUserModelId key and writes all registrations again when it was removed (an
+  older copy's uninstaller runs `--unregister`; Windows then drops toasts without an error); registration errors are logged.
