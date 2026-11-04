@@ -1171,3 +1171,6 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   opening one asks first. Rules at once (text showing another site, IP host, punycode, user@ host); with AI on, the AI
   judges the links once per email (cached; its verdict overrides the rules, so tracking links of newsletters pass). Not
   asked for own mail or when every link stays on the sender's site (round87).
+- Popups (`dismiss.js`): Escape closes only the popup opened last, and the key press goes no further (it used to
+  also close the open message); a click into an email's frame (no pointerdown reaches the page; the frame takes the
+  focus) closes them too.

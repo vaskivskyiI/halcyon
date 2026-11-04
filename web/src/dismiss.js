@@ -14,6 +14,16 @@ function swallowNextClick() {
   window.addEventListener('pointerdown', done, true);
 }
 
+// Escape closes the popup opened last only (a menu opened from a panel, then the panel), and nothing else reacts to
+// that key press (the mail view would otherwise also close the open message).
+const stack = [];
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !stack.length) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  stack.at(-1).current(e);
+}, true);
+
 /**
  * Calls onClose while `open` on: a pointerdown outside `refs` (an element ref or a list of them — the popup and its
  * toggle button, so tapping the toggle toggles instead of closing and re-opening), Escape, or a hash change.
@@ -34,11 +44,16 @@ export function useDismiss(refs, onClose, open = true, { ignore = '', swallow = 
       if (swallow && e.pointerType !== 'mouse') swallowNextClick();
       cb.current(e);
     };
-    const key = (e) => { if (e.key === 'Escape') cb.current(e); };
     const route = () => cb.current();
+    // A click into an email (its own frame: no pointerdown reaches this window) or into another app moves the focus away.
+    const blur = () => setTimeout(() => { if (!document.hasFocus() || document.activeElement?.tagName === 'IFRAME') cb.current(); }, 0);
+    stack.push(cb);
     window.addEventListener('pointerdown', down, true);
-    window.addEventListener('keydown', key);
     window.addEventListener('hashchange', route);
-    return () => { window.removeEventListener('pointerdown', down, true); window.removeEventListener('keydown', key); window.removeEventListener('hashchange', route); };
+    window.addEventListener('blur', blur);
+    return () => {
+      stack.splice(stack.indexOf(cb), 1);
+      window.removeEventListener('pointerdown', down, true); window.removeEventListener('hashchange', route); window.removeEventListener('blur', blur);
+    };
   }, [open, ignore, swallow]);
 }
