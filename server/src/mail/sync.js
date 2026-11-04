@@ -285,13 +285,17 @@ export class AccountSync {
           const opts = { uid: true };
           if (useModseq) opts.changedSince = BigInt(folder.highest_modseq);
           const updates = [];
+          // Flag changes made here and not yet on the server win over what the server reports (see below); taken also
+          // before the fetch: one that reached the server while it ran is not in its answer yet.
+          const pendingUids = () => all("SELECT payload_json FROM pending_ops WHERE account_id = ? AND op = 'flags'", this.accountId)
+            .map((o) => json(o.payload_json, {})).filter((p) => p.folder === folder.path).flatMap((p) => p.uids || []);
+          const before = pendingUids();
           // A server without CONDSTORE lists every message: only the recent ones, except in the hourly pass.
           const first = useModseq || deep ? 1 : Math.max(1, folder.last_uid - RECENT_FLAGS);
           for await (const msg of client.fetch(`${first}:${folder.last_uid}`, { uid: true, flags: true }, opts)) updates.push(msg);
           // Changes made here that have not reached the server yet win over what the server reported a moment ago
           // (otherwise a conversation marked read during a sync shows unread again until the next one).
-          const pending = new Set(all("SELECT payload_json FROM pending_ops WHERE account_id = ? AND op = 'flags'", this.accountId)
-            .map((o) => json(o.payload_json, {})).filter((p) => p.folder === folder.path).flatMap((p) => p.uids || []));
+          const pending = new Set([...before, ...pendingUids()]);
           // In slices with requests answered in between: the hourly pass over a folder of 100 000 messages is as many
           // updates.
           for (let i = 0; i < updates.length; i += 2000) {
