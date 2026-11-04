@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { toast, toastError } from '../util.js';
+import { toast, toastError, pushUndo } from '../util.js';
 import { loadFolders } from '../data.js';
 
 export function snoozeOptions() {
@@ -25,7 +25,7 @@ export function snoozeOptions() {
 /** "Delete" on mail already in Trash/Junk means permanent deletion: returns 'delete' after confirmation, null if declined. */
 export function confirmDelete(action, folderSpecial, count) {
   if (action !== 'trash' || !['\\Trash', '\\Junk'].includes(folderSpecial)) return action;
-  return confirm(`Permanently delete ${count > 1 ? `${count} messages` : 'this message'}? This cannot be undone.`) ? 'delete' : null;
+  return confirm(`Permanently delete ${count > 1 ? `${count} messages` : 'this message'}? You can undo it for 30 minutes (Ctrl+Z).`) ? 'delete' : null;
 }
 
 export async function mailAction(action, ids, extra = {}, { threads = false, onDone } = {}) {
@@ -34,13 +34,26 @@ export async function mailAction(action, ids, extra = {}, { threads = false, onD
     const r = await api.post('/api/messages/actions', { action, ids, threads, ...extra });
     const labels = { archive: 'Archived', trash: 'Moved to Trash', spam: 'Marked as spam', notspam: 'Moved to Inbox', move: 'Moved', snooze: 'Snoozed', delete: 'Deleted permanently' };
     const what = `${labels[action] || ''} ${ids.length > 1 ? `${ids.length} conversations` : ''}`.trim();
-    if (r.undo?.length) {
+    if (r.undoDelete?.length) toast(what, { duration: 10000, action: { label: 'Undo', onClick: () => undelete(r.undoDelete, onDone) } });
+    else if (r.undo?.length) {
       toast(what, { duration: 10000, action: { label: 'Undo', onClick: async () => {
         try { await api.post('/api/messages/actions', { action: 'restore', items: r.undo }); toast('Restored'); onDone?.(true); loadFolders(); } catch (e) { toastError(e); }
       } } });
     } else if (labels[action]) toast(what);
+    // Quiet ones: no toast, but Ctrl+Z turns them back.
+    const inverse = { read: 'unread', unread: 'read', flag: 'unflag', unflag: 'flag', label: 'unlabel', unlabel: 'label' }[action];
+    if (inverse) pushUndo(action, () => api.post('/api/messages/actions', { action: inverse, ids, threads, ...extra }).then(() => { window.dispatchEvent(new Event('halcyon:mutated')); loadFolders(); }).catch(toastError));
     onDone?.();
     loadFolders();
+  } catch (e) { toastError(e); }
+}
+
+/** Undo of a permanent deletion (kept 30 minutes on the server before it reaches the mail server). */
+export async function undelete(held, onDone) {
+  try {
+    const r = await api.post('/api/messages/actions', { action: 'undelete', held });
+    toast(r.count ? 'Restored' : 'Too late — already deleted on the mail server', r.count ? {} : { kind: 'error' });
+    onDone?.(true); loadFolders(); window.dispatchEvent(new Event('halcyon:mutated'));
   } catch (e) { toastError(e); }
 }
 

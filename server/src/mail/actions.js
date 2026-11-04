@@ -13,7 +13,7 @@ function ownedMessages(userId, ids) {
     FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND m.id IN (${ph})`, userId, ...ids.map(Number));
 }
 
-const groupBy = (arr, key) => arr.reduce((m, x) => { (m[x[key]] ||= []).push(x); return m; }, {});
+const groupBy = (arr, key) => arr.reduce((m, x) => { (m[typeof key === 'function' ? key(x) : x[key]] ||= []).push(x); return m; }, {});
 
 export function setFlags(userId, ids, { read, flagged, answered, forwarded }) {
   const msgs = ownedMessages(userId, ids);
@@ -153,15 +153,66 @@ export async function restoreMessages(userId, items) {
   notify(userId, 'mail:changed', { ids: (items || []).map((x) => x.id) });
 }
 
+// Permanent deletion can be undone for a while: the messages leave Halcyon at once but stay on the mail server (in
+// Trash / Junk, where they already are) until the hold ends; what Halcyon knew of them waits in deleted_hold, so
+// Undo puts back the same messages with the same ids. Returns the hold ids (for undeleteMessages).
+export const DELETE_HOLD_MS = 30 * 60e3;
+
 export function deletePermanently(userId, ids) {
   const msgs = ownedMessages(userId, ids);
-  for (const group of Object.values(groupBy(msgs, 'folder_id'))) {
-    const uids = group.map((m) => m.uid).filter(Boolean);
-    if (uids.length) queueOp(group[0].account_id, 'delete', { folder: group[0].folder_path, uids });
-    deleteMessages(group.map((m) => m.id));
-    recountFolder(group[0].folder_id);
-  }
+  const held = [];
+  tx(() => {
+    for (const m of msgs) {
+      const data = {
+        row: get('SELECT * FROM messages WHERE id = ?', m.id),
+        fts: get('SELECT subject, sender, recipients, body FROM messages_fts WHERE rowid = ?', m.id),
+        insight: get('SELECT * FROM ai_insights WHERE message_id = ?', m.id),
+        tags: all('SELECT category_id, source, created_at FROM message_tags WHERE message_id = ?', m.id),
+      };
+      held.push(Number(run('INSERT INTO deleted_hold (user_id, account_id, folder_path, uid, message_id, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        userId, m.account_id, m.folder_path, m.uid ?? null, m.id, JSON.stringify(data), now()).lastInsertRowid));
+    }
+    deleteMessages(msgs.map((m) => m.id));
+  });
+  for (const folderId of new Set(msgs.map((m) => m.folder_id))) recountFolder(folderId);
   notify(userId, 'mail:changed', { ids });
+  return held;
+}
+
+/** Undo of a permanent deletion still on hold: the messages come back as they were. */
+export function undeleteMessages(userId, holdIds) {
+  const rows = (holdIds || []).length ? all(`SELECT * FROM deleted_hold WHERE user_id = ? AND id IN (${holdIds.map(() => '?').join(',')})`, userId, ...holdIds.map(Number)) : [];
+  const folders = new Set();
+  tx(() => {
+    for (const h of rows) {
+      run('DELETE FROM deleted_hold WHERE id = ?', h.id);
+      const { row, fts, insight, tags } = json(h.data_json, {});
+      // Not when its folder is gone, or the same message came back meanwhile (a full new download of the folder).
+      if (!row || !get('SELECT 1 AS x FROM folders WHERE id = ?', row.folder_id) || get('SELECT 1 AS x FROM messages WHERE id = ?', row.id)
+        || (row.uid != null && get('SELECT 1 AS x FROM messages WHERE folder_id = ? AND uid = ?', row.folder_id, row.uid))) continue;
+      const cols = Object.keys(row);
+      run(`INSERT INTO messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, ...cols.map((c) => row[c]));
+      if (fts) run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', row.id, fts.subject, fts.sender, fts.recipients, fts.body);
+      if (insight) { const k = Object.keys(insight); run(`INSERT OR REPLACE INTO ai_insights (${k.join(', ')}) VALUES (${k.map(() => '?').join(', ')})`, ...k.map((c) => insight[c])); }
+      for (const t of tags || []) run('INSERT OR IGNORE INTO message_tags (message_id, category_id, source, created_at) VALUES (?, ?, ?, ?)', row.id, t.category_id, t.source, t.created_at);
+      folders.add(row.folder_id);
+    }
+  });
+  for (const f of folders) recountFolder(f);
+  notify(userId, 'mail:changed', {});
+  return rows.length;
+}
+
+/** Holds that ended: the deletion goes to the mail server now (scheduler). */
+export function finishDeletes(at = now()) {
+  const due = all('SELECT * FROM deleted_hold WHERE created_at <= ?', at - DELETE_HOLD_MS);
+  for (const group of Object.values(groupBy(due, (h) => `${h.account_id}
+${h.folder_path}`))) {
+    const uids = group.map((h) => h.uid).filter(Boolean);
+    if (uids.length && get('SELECT 1 AS x FROM accounts WHERE id = ?', group[0].account_id)) queueOp(group[0].account_id, 'delete', { folder: group[0].folder_path, uids });
+  }
+  if (due.length) run(`DELETE FROM deleted_hold WHERE id IN (${due.map(() => '?').join(',')})`, ...due.map((h) => h.id));
+  return due.length;
 }
 
 export function snoozeMessages(userId, ids, until) {

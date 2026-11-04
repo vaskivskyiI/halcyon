@@ -2,7 +2,7 @@
 import { db, all, get, run, json, now } from './db/index.js';
 import { processOutbox, syncDraftsToServer } from './mail/send.js';
 import { regroupConversations } from './mail/store.js';
-import { wakeSnoozed } from './mail/actions.js';
+import { wakeSnoozed, finishDeletes } from './mail/actions.js';
 import { listRange } from './calendar/repo.js';
 import { syncCalDav } from './calendar/caldav.js';
 import { dropStarters } from './bootstrap.js';
@@ -197,7 +197,7 @@ export function startScheduler() {
   setInterval(job('Outbox', processOutbox), 2000).unref();
   setInterval(job('Drafts to server', syncDraftsToServer), 30e3).unref();
   setInterval(job('Notifications taken back', sweepNotifications), 10e3).unref();
-  setInterval(job('Snoozes, reminders, briefs', () => { wakeSnoozed(); checkReminders(); scheduleBriefs(); }), 30e3).unref();
+  setInterval(job('Snoozes, reminders, briefs', () => { wakeSnoozed(); finishDeletes(); checkReminders(); scheduleBriefs(); }), 30e3).unref();
   const davAll = job('Start calendar & contacts syncs', () => { for (const a of all('SELECT * FROM accounts WHERE caldav_url IS NOT NULL OR carddav_url IS NOT NULL')) syncDav(a); });
   setTimeout(davAll, 5e3).unref();
   // Catch up on mail that was never queued for AI (e.g. arrived while AI was off); cheap when nothing is missing.

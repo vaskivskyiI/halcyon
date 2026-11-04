@@ -622,4 +622,13 @@ export const migrations = [
     created_at INTEGER, PRIMARY KEY (user_id, address)
   );
   `,
+  // 58: mail deleted permanently, kept for a while so it can be undone (actions.js deletePermanently): the message row,
+  //     its search text, analysis and tags; the deletion reaches the mail server when the hold ends.
+  `
+  CREATE TABLE deleted_hold (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, account_id INTEGER, folder_path TEXT, uid INTEGER, message_id INTEGER,
+    data_json TEXT, created_at INTEGER
+  );
+  CREATE INDEX idx_deleted_hold_user ON deleted_hold(user_id);
+  `,
 ];

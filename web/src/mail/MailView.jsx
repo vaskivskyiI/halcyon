@@ -17,7 +17,7 @@ import Reader from './Reader.jsx';
 import SendersList from './Senders.jsx';
 import SubscriptionsList from './Subscriptions.jsx';
 import AnalyzeOld from '../components/AnalyzeOld.jsx';
-import { mailAction, snoozeOptions, confirmDelete } from './mailActions.js';
+import { mailAction, snoozeOptions, confirmDelete, undelete } from './mailActions.js';
 
 // The views used every day; the others are one click away under "More" (and shown while open).
 const SMART = [
@@ -179,7 +179,10 @@ function FolderNav({ view, open, onNavigate }) {
     { label: 'New subfolder', icon: Plus, onClick: () => setNewFolder({ accountId: acc.accountId, parentPath: f.path }) },
     !f.specialUse && { label: 'Rename', icon: PenSquare, onClick: () => { const n = prompt('New name', f.name); if (n) api.patch(`/api/folders/${f.id}`, { name: n }).then(() => toast('Renaming…')); } },
     { label: f.syncEnabled ? 'Stop syncing this folder' : 'Sync this folder', icon: RefreshCw, onClick: () => api.patch(`/api/folders/${f.id}`, { syncEnabled: !f.syncEnabled }).then(loadFolders) },
-    ['\\Trash', '\\Junk'].includes(f.specialUse) && { label: 'Empty folder', icon: Trash2, danger: true, onClick: () => confirm(`Permanently delete all messages in ${f.name}?`) && api.post(`/api/folders/${f.id}/empty`).then(loadFolders) },
+    ['\\Trash', '\\Junk'].includes(f.specialUse) && { label: 'Empty folder', icon: Trash2, danger: true, onClick: () => confirm(`Permanently delete all messages in ${f.name}? You can undo it for 30 minutes (Ctrl+Z).`) && api.post(`/api/folders/${f.id}/empty`).then((r) => {
+      loadFolders(); window.dispatchEvent(new Event('halcyon:mutated'));
+      if (r.undoDelete?.length) toast(`${f.name} emptied`, { duration: 10000, action: { label: 'Undo', onClick: () => undelete(r.undoDelete) } });
+    }).catch(toastError) },
     !f.specialUse && { label: 'Delete folder', icon: Trash2, danger: true, onClick: () => confirm(`Delete folder ${f.name} and its messages?`) && api.del(`/api/folders/${f.id}`).then(() => toast('Deleting…')) },
   ]);
 

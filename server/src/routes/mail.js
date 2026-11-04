@@ -241,8 +241,8 @@ export default async function mailRoutes(app) {
   app.post('/api/folders/:id/empty', async (req, reply) => {
     const f = get('SELECT f.* FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.user_id = ?', req.params.id, req.user.id);
     if (!f) return httpError(reply, 404, 'Not found');
-    actions.deletePermanently(req.user.id, all('SELECT id FROM messages WHERE folder_id = ?', f.id).map((r) => r.id));
-    return { ok: true };
+    const held = actions.deletePermanently(req.user.id, all('SELECT id FROM messages WHERE folder_id = ?', f.id).map((r) => r.id));
+    return { ok: true, undoDelete: held };
   });
 
   app.post('/api/folders/:id/read-all', async (req) => {
@@ -584,6 +584,7 @@ export default async function mailRoutes(app) {
     // (Not a move into or out of an archive: those copy — undo would leave the mail twice.)
     const archiveMove = action === 'move' && get("SELECT 1 AS x FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.kind = 'archive'", Number(req.body?.folderId));
     const undo = ['archive', 'trash', 'spam', 'notspam', 'move'].includes(action) && !archiveMove ? actions.folderSnapshot(u, target) : null;
+    let undoDelete = null;
     switch (action) {
       case 'read': actions.setFlags(u, target, { read: true }); break;
       case 'unread': actions.setFlags(u, target, { read: false }); break;
@@ -591,7 +592,8 @@ export default async function mailRoutes(app) {
       case 'unflag': actions.setFlags(u, target, { flagged: false }); break;
       case 'archive': await actions.archiveMessages(u, target); break;
       case 'trash': await actions.trashMessages(u, target); break;
-      case 'delete': actions.deletePermanently(u, target); break;
+      case 'delete': undoDelete = actions.deletePermanently(u, target); break;
+      case 'undelete': return { ok: true, count: actions.undeleteMessages(u, req.body?.held) };
       case 'spam': case 'notspam':
         // The user's verdict is remembered per sender (see ai/learning.js); the latest one wins.
         for (const id of list) recordFeedback(u, get('SELECT * FROM messages WHERE id = ? AND user_id = ?', id, u), action);
@@ -605,7 +607,7 @@ export default async function mailRoutes(app) {
       case 'unlabel': actions.setLabels(u, target, { remove: [labelId] }); break;
       default: return httpError(reply, 400, 'Unknown action');
     }
-    return { ok: true, count: target.length, undo };
+    return { ok: true, count: target.length, undo, undoDelete };
   });
 
   // "Done" in the brief: the message leaves the brief, Important and Needs reply (it stays in its folder).

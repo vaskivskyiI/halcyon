@@ -1145,3 +1145,10 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   after a change of folder, tab or search it no longer shows up there. Windows app 2.0.3: before each toast
   `Shell.EnsureRegistered` checks the AppUserModelId key and writes all registrations again when it was removed (an
   older copy's uninstaller runs `--unregister`; Windows then drops toasts without an error); registration errors are logged.
+- Undo with Ctrl+Z (no migration in web; migration 58 on the server): `util.js` keeps an undo stack — every toast with
+  an "Undo" button adds its undo (`pushUndo`), quiet mail actions (read/unread, flag, label) add their inverse in
+  `mailActions.js`; App.jsx runs the last one on Ctrl/⌘+Z outside text fields. Permanent deletion (delete in Trash/Junk,
+  Empty folder) is held for `DELETE_HOLD_MS` (30 min): `deletePermanently` stores row, FTS text, insight and tags in
+  `deleted_hold` and removes the message locally; `undeleteMessages` (action `undelete`, `held` ids) puts it back with
+  the same id; `finishDeletes` (scheduler, every 30 s) queues the IMAP delete when the hold ends (round85). The reader
+  marks each message read only once per opening (no read/unread loop when the server keeps it unread).

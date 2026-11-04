@@ -8,7 +8,7 @@ import { store } from './store.js';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, loadInkwell, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setSharedShown, inMyMail, applyMergedSpaces } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
-import { toast, notifyDesktop, closeShown, navigate, textToHtml } from './util.js';
+import { toast, notifyDesktop, closeShown, navigate, textToHtml, undoLast } from './util.js';
 import Login from './Login.jsx';
 import MailView from './mail/MailView.jsx';
 import ComposerDock from './mail/Composer.jsx';
@@ -76,6 +76,16 @@ function Shell() {
   const readOnly = store.use((s) => s.readOnly);
   const acting = store.use((s) => s.acting);
   const [offline, setOffline] = useState(offlineState);
+  // Ctrl+Z (⌘Z): undo the last action, anywhere but in text being written (there it undoes the typing).
+  useEffect(() => {
+    const h = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z') return;
+      if (e.target.closest?.('input, textarea, select, [contenteditable=true], [contenteditable=""]')) return;
+      e.preventDefault(); undoLast();
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
   useEffect(() => { const h = (e) => setOffline(e.detail); window.addEventListener('halcyon:offline', h); return () => window.removeEventListener('halcyon:offline', h); }, []);
   const reloadTimer = useRef();
   const insightTimer = useRef();

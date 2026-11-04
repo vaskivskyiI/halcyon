@@ -1,6 +1,24 @@
 import { store } from './store.js';
 
+// Ctrl+Z undoes what was done last, step by step: every toast with an Undo button adds its undo here (also after the
+// toast is gone), and actions without a toast (read, flag…) add theirs with pushUndo. Each one runs at most once.
+const undoStack = [];
+export function pushUndo(label, fn) {
+  let done = false;
+  const once = () => { if (done) return undefined; done = true; const i = undoStack.indexOf(entry); if (i >= 0) undoStack.splice(i, 1); return fn(); };
+  const entry = { label, run: once };
+  undoStack.push(entry);
+  if (undoStack.length > 50) undoStack.shift();
+  return once;
+}
+export async function undoLast() {
+  const u = undoStack[undoStack.length - 1];
+  if (!u) { toast('Nothing to undo'); return; }
+  try { await u.run(); } catch (e) { toastError(e); }
+}
+
 export function toast(message, opts = {}) {
+  if (opts.action?.label === 'Undo') opts = { ...opts, action: { ...opts.action, onClick: pushUndo(message, opts.action.onClick) } };
   const id = Math.random().toString(36).slice(2);
   store.set((s) => ({ toasts: [...s.toasts, { id, message, ...opts }] }));
   if (!opts.sticky) setTimeout(() => dismissToast(id), opts.duration || (opts.action ? 8000 : 4000));
