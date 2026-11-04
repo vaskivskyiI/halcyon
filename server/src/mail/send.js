@@ -116,6 +116,8 @@ export function saveDraft(userId, b) {
     run('UPDATE drafts SET account_id = ?, payload_json = ?, in_reply_to = ?, updated_at = ? WHERE id = ?', b.accountId || null, payload, replyTo, now(), b.id);
     return { id: Number(b.id) };
   }
+  // Sent meanwhile: an autosave that was on its way when Send was pressed must not bring the draft back.
+  if (b.id && get("SELECT 1 AS x FROM outbox WHERE user_id = ? AND json_extract(payload_json, '$.draftId') = ?", userId, Number(b.id))) return { id: null, sent: true };
   const r = run('INSERT INTO drafts (user_id, account_id, payload_json, in_reply_to, updated_at) VALUES (?, ?, ?, ?, ?)', userId, b.accountId || null, payload, replyTo, now());
   return { id: Number(r.lastInsertRowid) };
 }

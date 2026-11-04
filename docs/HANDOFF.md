@@ -1163,3 +1163,6 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Printing (`web/src/mail/print.js`): a hidden iframe in the page (new windows go to the browser in the Windows/desktop
   apps). Ctrl/⌘+P in the mail view prints the selected conversations (whole, in conversation view), else the open one
   (`halcyon:print` → Reader, which loads folded bodies first); "Print" in the list's context menu and the reader's menu.
+- Sent drafts stay gone: the composer waits for an autosave on its way before sending (it may be what creates the
+  draft, and its id must go with the message); `saveDraft` does not re-create a draft id that a message in the outbox
+  was sent from (`{ sent: true }`) — a late autosave used to bring it back as a new draft (round86).

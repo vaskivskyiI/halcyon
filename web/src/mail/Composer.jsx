@@ -400,14 +400,20 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
 
   // Saves the draft in Halcyon now; returns its id.
   const edits = useRef(0);
+  const saving = useRef(null); // the save on its way, if any: sending waits for it (it may create the draft)
   const saveNow = async () => {
     clearTimeout(saveTimer.current); unsavedSince.current = 0;
     const seen = edits.current;
     const p = payload();
-    const r = await api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined });
-    setDraftId(r.id);
-    if (edits.current === seen) setDirty(false); // typed on while it was saved: that is saved next time
-    return r.id;
+    const req = api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined });
+    saving.current = req;
+    try {
+      const r = await req;
+      if (r.sent) return null;
+      setDraftId(r.id);
+      if (edits.current === seen) setDirty(false); // typed on while it was saved: that is saved next time
+      return r.id;
+    } finally { if (saving.current === req) saving.current = null; }
   };
   const saveRef = useRef(saveNow);
   saveRef.current = saveNow;
@@ -460,8 +466,11 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     if (sending.current) return;
     sending.current = true; setBusySend(true); clearTimeout(saveTimer.current);
     try {
-      // A draft from the Drafts folder becomes a Halcyon draft first, so sending also removes it from there.
+      // An autosave on its way may be creating the draft: its id goes with the message, so sending removes it.
+      const pendingId = saving.current ? (await saving.current.catch(() => null))?.id : null;
       let p = payload();
+      if (!p.draftId && pendingId) p = { ...p, draftId: pendingId };
+      // A draft from the Drafts folder becomes a Halcyon draft first, so sending also removes it from there.
       if (!p.draftId && init.serverMessageId) p = { ...p, draftId: await saveNow() };
       const r = await api.post('/api/send', sendAt ? { ...p, sendAt } : p);
       close();

@@ -71,3 +71,11 @@ test('search in conversation view lists a conversation once, however many of its
   const flat = await api('GET', '/api/messages?view=unified&q=zebra&semantic=0&threads=0');
   assert.equal(flat.items.length, 4, 'one row per message without conversation view');
 });
+
+test('an autosave that arrives after Send does not bring the sent draft back', async () => {
+  const d = await api('POST', '/api/drafts', { accountId: acc.home.id, to: [{ address: 'ana@x.example' }], subject: 'Late', html: '<p>hi</p>' });
+  await api('POST', '/api/send', { accountId: acc.home.id, to: [{ address: 'ana@x.example' }], subject: 'Late', html: '<p>hi</p>', draftId: d.id });
+  const late = await api('POST', '/api/drafts', { id: d.id, accountId: acc.home.id, to: [{ address: 'ana@x.example' }], subject: 'Late', html: '<p>hi</p>' });
+  assert.equal(late.sent, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM drafts').get().n, 0);
+});
