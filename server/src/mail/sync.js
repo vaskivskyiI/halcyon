@@ -457,8 +457,18 @@ export class AccountSync {
       case 'flags': {
         const lock = await c.getMailboxLock(p.folder);
         try {
-          if (p.add?.length) await c.messageFlagsAdd(p.uids, p.add, { uid: true });
-          if (p.remove?.length) await c.messageFlagsRemove(p.uids, p.remove, { uid: true });
+          // ImapFlow answers false instead of throwing when the server refuses (a read-only folder, a flag it does not
+          // keep, a NO): the change must not count as done, or the next sync quietly brings the old state back.
+          const refused = (what) => {
+            const box = c.mailbox || {};
+            const why = box.readOnly ? 'the folder is read-only for this login'
+              : box.permanentFlags && !what.every((f) => box.permanentFlags.has(f) || box.permanentFlags.has('\\*')) ? `the folder does not keep ${what.join(' ')}` : 'the server refused it';
+            return new Error(`Could not change flags ${what.join(' ')}: ${why}`);
+          };
+          // Keywords ($Forwarded) a server does not keep are simply not there; \Seen, \Flagged… must arrive.
+          const system = (fl) => fl.some((f) => f.startsWith('\\'));
+          if (p.add?.length && !(await c.messageFlagsAdd(p.uids, p.add, { uid: true })) && system(p.add)) throw refused(p.add);
+          if (p.remove?.length && !(await c.messageFlagsRemove(p.uids, p.remove, { uid: true })) && system(p.remove)) throw refused(p.remove);
         } finally { lock.release(); }
         break;
       }
