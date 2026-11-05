@@ -143,7 +143,8 @@ export default async function accountRoutes(app) {
       // A passing failure is tried again quickly a few times before it is shown (scheduler.js DAV_RETRY).
       if (d?.error && (a.caldav_url || a.carddav_url) && !(d.retry && d.retry <= DAV_QUIET && !d.asked)) {
         const again = d.retryAt && d.retryAt > t ? ` — trying again at ${new Date(d.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '';
-        out.push({ key: `dav:${a.id}`, level: again ? 'warn' : 'error', accountId: a.id, title: `${connectionLabel(a)}: calendars / contacts are not synced`, text: d.error + again, at: d.at, actions: ['retry-dav'] });
+        const oauth = a.auth_type?.startsWith('oauth') ? a.auth_type.slice(6) : null;
+        out.push({ key: `dav:${a.id}`, level: again ? 'warn' : 'error', accountId: a.id, provider: oauth, title: `${connectionLabel(a)}: calendars / contacts are not synced`, text: d.error + again, at: d.at, actions: oauth ? ['reauth', 'retry-dav'] : ['retry-dav'] });
       }
     }
     for (const c of all('SELECT id, name, source, sync_error FROM calendars WHERE user_id = ? AND sync_error IS NOT NULL', userId)) {
@@ -340,7 +341,10 @@ export default async function accountRoutes(app) {
     if (!PROVIDERS[provider] || !oauthAvailable()[provider]) return httpError(reply, 400, `${provider} OAuth is not configured on this server`);
     const state = randomToken(16);
     // ?services=mail,calendar,contacts — what to add (an existing account keeps what it has).
-    const services = providerServices(provider, String(req.query.services || '').split(',').filter(Boolean));
+    // Signing in again (?accountId, no ?services): what that account or connection has.
+    const again = req.query.accountId ? userAccount(req.user.id, Number(req.query.accountId)) : null;
+    const had = again && !req.query.services ? (isConnection(again) ? [again.caldav_url && 'calendar', again.carddav_url && 'contacts'].filter(Boolean) : ['mail']) : [];
+    const services = providerServices(provider, had.length ? had : String(req.query.services || '').split(',').filter(Boolean));
     pendingOAuth.set(state, { userId: req.user.id, provider, accountId: req.query.accountId ? Number(req.query.accountId) : null, services, t: Date.now() });
     return reply.redirect(authorizeUrl(provider, state, redirectUri(req), services));
   });

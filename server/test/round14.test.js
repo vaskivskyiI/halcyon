@@ -63,6 +63,21 @@ test('sign-in starts at Google with that client and asks for mail, calendar and 
   assert.equal(to.searchParams.get('access_type'), 'offline');
 });
 
+test('a Google calendar & contacts connection signs in again for calendar and contacts only, also from the problems panel', async () => {
+  const uid = db.prepare("SELECT id FROM users WHERE email = 'user@example.org'").get().id;
+  const id = db.prepare("INSERT INTO accounts (user_id, email, auth_type, mail, sync_enabled, caldav_url, carddav_url, created_at) VALUES (?, 'cal@gmail.com', 'oauth-google', 0, 0, 'https://apidata.googleusercontent.com/caldav/v2/', 'https://www.googleapis.com/carddav/v1/principals/', ?)").run(uid, Date.now()).lastInsertRowid;
+  const r = await api('user', 'GET', `/api/oauth/google/start?accountId=${id}`, undefined, { raw: true });
+  const scope = new URL(r.headers.get('location')).searchParams.get('scope');
+  assert.ok(scope.includes('https://www.googleapis.com/auth/calendar') && scope.includes('https://www.googleapis.com/auth/carddav'));
+  assert.ok(!scope.includes('https://mail.google.com/'), 'no mail access asked for a connection');
+  const { davStatus } = await import('../src/scheduler.js');
+  davStatus.set(id, { at: Date.now(), error: 'invalid_grant', retry: 99, asked: true });
+  const p = (await api('user', 'GET', '/api/status/problems')).problems.find((x) => x.key === `dav:${id}`);
+  assert.equal(p.provider, 'google');
+  assert.deepEqual(p.actions, ['reauth', 'retry-dav']);
+  davStatus.delete(id);
+});
+
 test('removing it turns the option off again', async () => {
   await api('admin', 'PUT', '/api/admin/oauth/google', { clientId: '' });
   assert.equal((await api('user', 'GET', '/api/me')).oauth.google, false);

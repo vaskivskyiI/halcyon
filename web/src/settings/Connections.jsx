@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, RefreshCw, Trash2, Pencil, Calendar as CalendarIcon, Users, ListTodo, Lock, AlertTriangle } from 'lucide-react';
+import { Plus, RefreshCw, Trash2, Pencil, Calendar as CalendarIcon, Users, ListTodo, Lock, AlertTriangle, LogIn } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { loadAccounts } from '../data.js';
@@ -60,6 +60,7 @@ export default function Connections({ counts = {} }) {
             {st?.error && <div className="small error-text"><AlertTriangle size={12} /> {st.error}</div>}
           </div>
           <button className="icon-btn" title="Sync now" disabled={busy === a.id} onClick={() => syncNow(a)}>{busy === a.id ? <Spinner size={14} /> : <RefreshCw size={16} />}</button>
+          {a.authType?.startsWith('oauth-') && <button className="btn sm" title="Sign in again (when the sign-in has expired or was revoked)" onClick={() => oauthSignIn(a.authType.slice(6), { accountId: a.id }, () => { toast('Signed in again — syncing…'); loadAccounts(); setTimeout(loadStatus, 4000); })}><LogIn size={13} /> Sign in again</button>}
           {a.authType !== 'oauth-google' && <button className="icon-btn" title="Edit" onClick={() => setEditing(a)}><Pencil size={16} /></button>}
           <button className="icon-btn" title="Remove the connection (everything stays on the server)" onClick={() => remove(a)}><Trash2 size={16} /></button>
         </div>);
