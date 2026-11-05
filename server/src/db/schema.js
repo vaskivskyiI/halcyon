@@ -637,4 +637,11 @@ export const migrations = [
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, links_json TEXT, model TEXT, created_at INTEGER
   );
   `,
+  // 60: reminders snoozed from their notification (notify-actions.js): ref 'event:<id>:<start>' or 'task:<id>'.
+  `
+  CREATE TABLE reminder_snoozes (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ref TEXT NOT NULL, due_at INTEGER NOT NULL, created_at INTEGER
+  );
+  CREATE INDEX idx_reminder_snoozes_due ON reminder_snoozes(due_at);
+  `,
 ];

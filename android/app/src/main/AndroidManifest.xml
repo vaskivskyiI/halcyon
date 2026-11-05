@@ -74,6 +74,10 @@
             android:name=".DismissReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".ActionReceiver"
+            android:exported="false" />
+
         <service
             android:name=".LiveService"
             android:exported="false"

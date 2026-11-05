@@ -77,9 +77,10 @@ export const toLocalInput = (ms) => { const d = new Date(ms); return new Date(d.
 export const toDateInput = (ms) => toLocalInput(ms).slice(0, 10);
 
 const shownHere = new Map(); // tag → the Notification this page showed
-export function notifyDesktop(title, body, onClick, { silent = false, tag } = {}) {
+/** data: { url, ref, actions, as } — the Windows app draws the actions as buttons on its toast (windows/Halcyon/Bridge.js). */
+export function notifyDesktop(title, body, onClick, { silent = false, tag, data } = {}) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification(title, { body, icon: './icon-192.png', silent, tag });
+  const n = new Notification(title, { body, icon: './icon-192.png', silent, tag, data });
   if (tag) shownHere.set(tag, n);
   n.onclick = () => { window.halcyonDesktop?.show?.(); window.focus(); onClick?.(); n.close(); };
 }

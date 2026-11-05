@@ -4,6 +4,7 @@ import { processOutbox, syncDraftsToServer } from './mail/send.js';
 import { regroupConversations } from './mail/store.js';
 import { wakeSnoozed, finishDeletes } from './mail/actions.js';
 import { listRange } from './calendar/repo.js';
+import { eventReminder, taskReminder, dueReminders } from './notify-actions.js';
 import { syncCalDav } from './calendar/caldav.js';
 import { dropStarters } from './bootstrap.js';
 import { syncCardDav } from './contacts/carddav.js';
@@ -136,16 +137,18 @@ function checkReminders() {
           if (get('SELECT 1 AS x FROM reminders_sent WHERE event_id = ? AND occurrence = ?', e.id, key * 1000 + min)) continue;
           run('INSERT OR IGNORE INTO reminders_sent (event_id, occurrence) VALUES (?, ?)', e.id, key * 1000 + min);
           notify(u.id, 'reminder', { eventId: e.id, title: e.title, start: e.start, location: e.location, onlineMeeting: e.onlineMeeting });
-          notifyUser(u.id, 'reminder', { title: e.title, body: `${new Date(e.start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: getSettings(u.id).calendar.timezone })}${e.location ? ` · ${e.location}` : ''}`, url: '#/calendar', tag: `rem-e${e.id}-${e.start}`, type: 'event', about: { until: Math.max(e.end || 0, e.start + 15 * 60e3) } });
+          notifyUser(u.id, 'reminder', eventReminder(u.id, e, e.start));
         }
       }
     }
     // Task due reminders
     for (const task of all('SELECT * FROM tasks WHERE user_id = ? AND done = 0 AND due BETWEEN ? AND ?', u.id, t - 60e3, t)) {
       notify(u.id, 'reminder', { taskId: task.id, title: task.title, start: task.due });
-      notifyUser(u.id, 'reminder', { title: task.title, body: 'Task due now', url: '#/tasks', tag: `rem-t${task.id}`, type: 'task', about: { task: task.id } });
+      notifyUser(u.id, 'reminder', taskReminder(task));
     }
   }
+  // Snoozed from their notification.
+  for (const r of dueReminders(t)) if (getSettings(r.userId).notifications.reminders) notifyUser(r.userId, 'reminder', r.data);
 }
 
 // Writing style learned from sent mail: refreshed weekly.

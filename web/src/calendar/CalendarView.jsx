@@ -35,7 +35,7 @@ let shownDate = null;
 /** Opens the calendar on a given day next time it is shown (e.g. "Show" after accepting an invitation); otherwise it opens on today. */
 export const showCalendarDate = (t) => { shownDate = t; };
 
-export default function CalendarView() {
+export default function CalendarView({ route = [] }) {
   const settings = store.use((s) => s.settings);
   const weekStart = settings.ui.weekStart ?? 1;
   const [view, setView] = useState(() => localStorage.getItem('cal.view') || (innerWidth < 860 ? 'agenda' : 'week'));
@@ -82,6 +82,19 @@ export default function CalendarView() {
 
   // Time blocked in another space has no details here; everything else opens.
   const openEvent = (ev) => (ev.blocked ? toast(`${ev.title} — the details are only shown in that space`) : setEditing(ev));
+
+  // #/calendar/event/<id>/<start> (a reminder's notification): that day, with the event (that occurrence) open.
+  useEffect(() => {
+    if (route[1] !== 'event' || !Number(route[2])) return;
+    const id = Number(route[2]), at = Number(route[3]) || 0;
+    location.replace('#/calendar');
+    if (at) setDate(at);
+    const t = at || Date.now();
+    api.get(`/api/events?from=${t - 864e5}&to=${t + 864e5}`).then((l) => l.map(localAllDay))
+      .then((l) => l.find((e) => e.id === id && (!at || e.start === at)) || l.find((e) => e.id === id))
+      .then((ev) => (ev ? openEvent(ev) : api.get(`/api/events/${id}`).then((e) => setEditing(localAllDay(e)))))
+      .catch(toastError);
+  }, [route[1], route[2], route[3]]);
 
   // Right-click on an event: move it to another (writable) calendar — the whole series for a recurring event.
   const [openEvMenu, evMenuNode] = useMenu();

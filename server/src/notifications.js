@@ -9,6 +9,7 @@ import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
 import { fcmSend } from './fcm.js';
+import { actionsOf } from './notify-actions.js';
 
 const log = logger('notify');
 
@@ -94,10 +95,11 @@ export function notifyUser(ownerId, kind, data) {
     }
     if (kind === 'reminder' && !p.reminders) continue;
     if (inQuietHours(r.id, p)) continue;
+    const { ref, actions } = actionsOf(kind, data);
     const msg = {
       title: p.hideContent && kind === 'mail' ? (data.important ? 'Important email' : 'New email') : data.title,
       body: p.hideContent && kind === 'mail' ? '' : data.body || '', url: data.url || '#/mail/unified', tag: data.tag || kind, silent: !p.sound, as: r.shared,
-      type: data.type || (kind === 'mail' ? 'mail' : 'event'),
+      type: data.type || (kind === 'mail' ? 'mail' : 'event'), ref, actions,
     };
     notify(r.id, 'notify:show', msg);
     push(r.id, msg).catch((e) => log.warn(`push: ${e.message}`));
@@ -131,9 +133,13 @@ async function pushFcm(userId, kind, msg, entry) {
       const d = live.get(t.token);
       if (d?.userId === userId && (await deliver(d, entry))) { run('UPDATE fcm_tokens SET last_ok_at = ? WHERE id = ?', now(), t.id); continue; }
       // route: the extra the app reads when the system's own notification is tapped (data travels as intent extras).
-      const r = await fcmSend(t.token, { ...msg, kind, as: msg.as || '', route: msg.url }, {
+      // actions: drawn by the app only (the system's own notification has no buttons), so versions that draw them
+      // get a data message without the notification part.
+      const own = (t.app_version || 0) > ACTIONS_FROM && msg.actions?.length;
+      const { ref, actions, ...shown } = msg;
+      const r = await fcmSend(t.token, { ...shown, kind, as: msg.as || '', route: msg.url, ...(actions?.length ? { ref, actions: JSON.stringify(actions) } : {}) }, {
         ttlSeconds: kind === 'reminder' ? 3600 : 6 * 3600,
-        notification: { title: msg.title, body: msg.body, tag: msg.tag, silent: msg.silent, icon: `ic_notify_${msg.type}`,
+        notification: own ? null : { title: msg.title, body: msg.body, tag: msg.tag, silent: msg.silent, icon: `ic_notify_${msg.type}`,
           channel: kind === 'reminder' ? 'reminders' : msg.silent ? 'mail_silent' : 'mail' },
       });
       if (r.gone) run('DELETE FROM fcm_tokens WHERE id = ?', t.id);
@@ -194,6 +200,7 @@ const live = new Map(); // FCM token -> { userId, send, waits: Map(id -> done) }
 const sent = new Map(); // recipient user id -> [{ id, at, kind, msg, key, answered: Set(token), closedAt }]
 let lastId = 0;
 const KEEP = 864e5, RESEND = 6 * 3600e3;
+const ACTIONS_FROM = 897712; // Android app builds after 2.0.1 draw notification buttons
 
 function remember(userId, kind, msg, key) {
   const e = { id: ++lastId, at: now(), kind, msg, key, answered: new Set(), closedAt: 0 };

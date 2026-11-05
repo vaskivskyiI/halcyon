@@ -16,15 +16,18 @@ public static unsafe class Toasts
     static readonly Guid IID_XmlDocumentIO = new("6CD0E74E-EE65-4489-9EBF-CA43E87BA637");
     static readonly Guid IID_XmlDocument = new("F7F3A506-1E87-42D6-BCFB-B8C809FA5494");
 
-    /// <summary>Shows (or, with the same tag, replaces) a toast. kind picks the icon: mail, calendar, task, other.</summary>
-    public static void Show(string title, string body, string tag, bool silent, string kind, string launch)
+    /// <summary>Shows (or, with the same tag, replaces) a toast. kind picks the icon: mail, calendar, task, other.
+    /// buttons: (label, protocol address started when pressed).</summary>
+    public static void Show(string title, string body, string tag, bool silent, string kind, string launch, IReadOnlyList<(string Label, string Uri)>? buttons = null)
     {
         try { Shell.EnsureRegistered(); } catch (Exception e) { Log.Write("toast app id: " + e.Message); }
         var icon = Icons.ToastIcon(kind);
         var x = $"<toast launch=\"{Esc(launch)}\" activationType=\"protocol\"><visual><binding template=\"ToastGeneric\">" +
                 $"<text hint-maxLines=\"2\">{Esc(title)}</text>" + (body.Length > 0 ? $"<text>{Esc(body)}</text>" : "") +
                 (icon != null ? $"<image placement=\"appLogoOverride\" src=\"{Esc(new Uri(icon).AbsoluteUri)}\"/>" : "") +
-                "</binding></visual>" + (silent ? "<audio silent=\"true\"/>" : "") + "</toast>";
+                "</binding></visual>" +
+                (buttons is { Count: > 0 } ? "<actions>" + string.Concat(buttons.Take(5).Select(b => $"<action content=\"{Esc(b.Label)}\" arguments=\"{Esc(b.Uri)}\" activationType=\"protocol\"/>")) + "</actions>" : "") +
+                (silent ? "<audio silent=\"true\"/>" : "") + "</toast>";
         IntPtr doc = 0, io = 0, xmlDoc = 0, factory = 0, toast = 0, toast2 = 0, statics = 0, notifier = 0;
         try
         {

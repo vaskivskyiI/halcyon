@@ -37,6 +37,19 @@ class PushService : FirebaseMessagingService() {
     }
 }
 
+/** A button on a notification: the server does it (and takes the notification back on every device). */
+class ActionReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, i: Intent) {
+        val tag = i.getStringExtra(MainActivity.EXTRA_TAG).orEmpty()
+        Server.action(ctx, i.getStringExtra(EXTRA_REF).orEmpty(), i.getStringExtra(EXTRA_ACTION).orEmpty(), tag, i.getStringExtra(MainActivity.EXTRA_AS).orEmpty())
+        Notifications.cancel(ctx, listOf(tag))
+    }
+    companion object {
+        const val EXTRA_REF = "ref"
+        const val EXTRA_ACTION = "action"
+    }
+}
+
 /** A notification swiped away here: the server takes it back on the user's other devices. */
 class DismissReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, i: Intent) {
@@ -93,7 +106,7 @@ object Notifications {
         val dismissed = PendingIntent.getBroadcast(ctx, tag.hashCode(), Intent(ctx, DismissReceiver::class.java)
             .putExtra(MainActivity.EXTRA_TAG, tag).putExtra(MainActivity.EXTRA_AS, d["as"].orEmpty()), flags)
         val body = d["body"].orEmpty()
-        val n = NotificationCompat.Builder(ctx, channel)
+        val b = NotificationCompat.Builder(ctx, channel)
             .setSmallIcon(icon(d["type"]))
             .setColor(ContextCompat.getColor(ctx, R.color.brand))
             .setContentTitle(d["title"].orEmpty().ifEmpty { "Halcyon" })
@@ -105,8 +118,19 @@ object Notifications {
             .setAutoCancel(true)
             .setContentIntent(pi)
             .setDeleteIntent(dismissed)
-            .build()
-        try { NotificationManagerCompat.from(ctx).notify(tag, 1, n) } catch (_: SecurityException) { }
+        // Buttons (server notify-actions.js): actions = [{ id, title }] as JSON, acting on ref.
+        val ref = d["ref"].orEmpty()
+        val actions = runCatching { org.json.JSONArray(d["actions"].orEmpty().ifEmpty { "[]" }) }.getOrNull()
+        if (ref.isNotEmpty() && actions != null) for (k in 0 until minOf(actions.length(), 3)) {
+            val a = actions.optJSONObject(k) ?: continue
+            val id = a.optString("id")
+            if (id.isEmpty()) continue
+            val pa = PendingIntent.getBroadcast(ctx, "$tag/$id".hashCode(), Intent(ctx, ActionReceiver::class.java)
+                .putExtra(ActionReceiver.EXTRA_REF, ref).putExtra(ActionReceiver.EXTRA_ACTION, id)
+                .putExtra(MainActivity.EXTRA_TAG, tag).putExtra(MainActivity.EXTRA_AS, d["as"].orEmpty()), flags)
+            b.addAction(0, a.optString("title"), pa)
+        }
+        try { NotificationManagerCompat.from(ctx).notify(tag, 1, b.build()) } catch (_: SecurityException) { }
     }
 
     /** Shown now under this tag (drawn by the app or by Google Play services)? */

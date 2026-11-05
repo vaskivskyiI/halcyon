@@ -119,7 +119,9 @@ self.addEventListener('push', (e) => {
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Halcyon', body: e.data?.text() || '' }; }
   e.waitUntil(self.registration.showNotification(d.title || 'Halcyon', {
     body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag, silent: !!d.silent,
-    icon: './icon-192.png', badge: './badge-96.png', data: { url: d.url || '#/mail/unified', as: d.as || null },
+    icon: './icon-192.png', badge: './badge-96.png', data: { url: d.url || '#/mail/unified', as: d.as || null, ref: d.ref || '' },
+    // Buttons (Mark read, Snooze, Mark done …; server notify-actions.js), where the browser shows them.
+    actions: (Array.isArray(d.actions) ? d.actions : []).slice(0, 3).map((a) => ({ action: a.id, title: a.title })),
   }));
 });
 
@@ -132,6 +134,14 @@ self.addEventListener('notificationclose', (e) => { e.waitUntil(taken(e.notifica
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  // A button: done on the server (which takes the notification back everywhere), nothing opens.
+  if (e.action) {
+    const n = e.notification;
+    return e.waitUntil(fetch(new URL('./api/push/action', self.registration.scope), {
+      method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json', ...(n.data?.as ? { 'x-halcyon-as': String(n.data.as) } : {}) },
+      body: JSON.stringify({ ref: n.data?.ref || '', action: e.action, tag: n.tag }),
+    }).catch(() => {}));
+  }
   taken(e.notification);
   const { url, as } = e.notification.data || {};
   e.waitUntil((async () => {

@@ -20,7 +20,7 @@ export const listRemoval = (l) => {
   return `Remove “${l.name}” from Halcyon? Its ${tasks} are removed here only — they stay on the server, and the list is no longer synced. Changes not yet sent to the server are lost.\n\nTo bring it back: Settings → Calendars & tasks → Show.`;
 };
 
-export default function TasksView() {
+export default function TasksView({ route = [] }) {
   const [tasks, setTasks] = useState([]);
   const [showDone, setShowDone] = useState(false);
   const [title, setTitle] = useState('');
@@ -43,6 +43,13 @@ export default function TasksView() {
     return api.get(`/api/tasks?${q}`).then(setTasks).catch(toastError);
   };
   useEffect(() => { loadLists(); }, []);
+  // #/tasks/<id> (a task's notification): that task open.
+  useEffect(() => {
+    const id = Number(route[1]);
+    if (!id) return;
+    location.replace('#/tasks');
+    api.get('/api/tasks?done=1').then((l) => { const t = l.find((x) => x.id === id); if (t) setEditing(t); else toast('That task is no longer here'); }).catch(toastError);
+  }, [route[1]]);
   useEffect(() => { load(); }, [showDone, shown]);
   useEffect(() => onEvent((e) => { if (e.type === 'tasks:changed') { load(); loadLists(); } }), [showDone, shown]);
   // Plain language: "Send the report to Ana tomorrow at 10" — the due date is taken from the text (rules, else AI).

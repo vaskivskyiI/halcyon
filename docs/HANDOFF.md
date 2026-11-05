@@ -1181,3 +1181,13 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Android: the app's own connection (LiveService, with its lasting "Connected to your server" notification) is off by
   default (`Prefs.liveOn`, bridge `setLive`); notifications come by Firebase (high priority). Settings → Notifications
   has a switch for the connection on phones that hold Firebase messages back.
+- Notifications open what they are about: mail `#/mail/unified/<id>`, event reminders `#/calendar/event/<id>/<start>`
+  (CalendarView opens that occurrence), task reminders `#/tasks/<id>` (TasksView opens the task). Android: a system-drawn
+  notification tapped while the app runs arrives as a launcher intent with the route in its extras (MainActivity).
+- Notification buttons (`notify-actions.js`): `actionsOf` gives `ref` + `actions` per notification — mail: Mark read /
+  Archive / Snooze (tomorrow 08:00), several mails: Mark all read; event: Snooze 5 min / Dismiss; task: Mark done /
+  Snooze 1 h. `POST /api/push/action` does them through the app's own routes (`app.inject` with the caller's cookie and
+  `x-halcyon-as`), then takes the notification back. Snoozed reminders: table `reminder_snoozes` (migration 60), shown
+  again by the scheduler (`dueReminders`). Shown by: the service worker (Web Push `actions`), the Windows app (toast
+  `<actions>` with `halcyon-windows:action?…`, Bridge.js → `halcyon:notification-action` → App.jsx), Android (app-drawn
+  only: builds after 2.0.1 (`ACTIONS_FROM`) get FCM data messages without the notification part). Electron: no buttons (round89).

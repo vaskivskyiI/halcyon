@@ -5,9 +5,11 @@ import { resumeWaiting } from '../ai/queue.js';
 import { backfillAnalysis } from '../mail/pipeline.js';
 import { oauthAvailable } from '../mail/oauth.js';
 import { config } from '../config.js';
-import { run } from '../db/index.js';
+import { run, get } from '../db/index.js';
 import { vapidKeys, subscribe, unsubscribe, devices, notifyUser, registerFcm, unregisterFcm, removeDevice, closeNotifications } from '../notifications.js';
 import { fcmAccount, fcmError } from '../fcm.js';
+import { httpError } from './util.js';
+import { tomorrowMorning, snoozeReminder, snoozeMinutes } from '../notify-actions.js';
 
 export default async function settingsRoutes(app) {
   // ---- Web Push (notifications.js): this device subscribes / unsubscribes; a test notification.
@@ -30,6 +32,30 @@ export default async function settingsRoutes(app) {
   app.delete('/api/push/devices/:kind/:id', { preHandler: requireUser }, async (req) => ({ removed: removeDevice(req.person?.id || req.user.id, req.params.kind, req.params.id) }));
   // A notification opened or swiped away on one device: taken back on the others too.
   app.post('/api/push/close', { preHandler: requireUser }, async (req) => { await closeNotifications(req.user.id, [req.body?.tag]); return { ok: true }; });
+  // A button pressed on a notification (notify-actions.js): done through the same routes the app uses (as the same
+  // user, in the same space), then the notification is taken back everywhere.
+  app.post('/api/push/action', { preHandler: requireUser }, async (req, reply) => {
+    const { ref = '', action = '', tag = '' } = req.body || {};
+    const [kind, a, b] = String(ref).split(':');
+    const headers = Object.fromEntries(['cookie', 'authorization', 'x-halcyon-as'].filter((h) => req.headers[h]).map((h) => [h, req.headers[h]]));
+    const call = async (method, url, payload) => {
+      const r = await app.inject({ method, url, payload, headers });
+      if (r.statusCode >= 400) throw Object.assign(new Error(r.json()?.error || `Failed (${r.statusCode})`), { statusCode: r.statusCode });
+    };
+    if (kind === 'mail' && ['read', 'archive', 'snooze'].includes(action)) {
+      const ids = String(a || '').split(',').map(Number).filter(Boolean).slice(0, 500);
+      if (!ids.length) return httpError(reply, 400, 'Nothing to act on');
+      await call('POST', '/api/messages/actions', { action, ids, ...(action === 'snooze' ? { until: tomorrowMorning(req.user.id) } : {}) });
+    } else if (kind === 'task' && action === 'done') await call('PATCH', `/api/tasks/${Number(a)}`, { done: true });
+    else if ((kind === 'task' || kind === 'event') && action === 'snooze') {
+      const own = kind === 'task' ? get('SELECT 1 AS x FROM tasks WHERE id = ? AND user_id = ?', Number(a), req.user.id)
+        : get('SELECT 1 AS x FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ?', Number(a), req.user.id);
+      if (!own) return httpError(reply, 404, 'Not found');
+      snoozeReminder(req.user.id, kind === 'task' ? `task:${Number(a)}` : `event:${Number(a)}:${Number(b) || 0}`, snoozeMinutes(kind));
+    } else if (action !== 'dismiss') return httpError(reply, 400, 'Unknown action');
+    await closeNotifications(req.user.id, [tag]);
+    return { ok: true };
+  });
   app.post('/api/push/fcm/unregister', { preHandler: requireUser }, async (req) => ({ removed: unregisterFcm(req.person?.id || req.user.id, req.body?.token) }));
   app.post('/api/push/test', { preHandler: requireUser }, async (req) => {
     const uid = req.person?.id || req.user.id;

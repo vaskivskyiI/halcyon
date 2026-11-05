@@ -276,7 +276,19 @@ public sealed class MainForm : Form
         var route = (string?)m["route"] ?? "";
         if (!route.StartsWith("#/")) route = RouteOfTag(tag);
         var launch = $"{Shell.Protocol}:open?page={Uri.EscapeDataString(page)}&id={id}&route={Uri.EscapeDataString(route)}";
-        try { Toasts.Show((string?)m["title"] ?? "Halcyon", (string?)m["body"] ?? "", tag, (bool?)m["silent"] ?? false, KindOf(tag), launch); }
+        // Buttons (Mark read, Snooze, Mark done …; server notify-actions.js): pressed, the page asks the server to do it.
+        var reference = (string?)m["ref"] ?? "";
+        var shared = (string?)m["as"] ?? "";
+        var buttons = new List<(string Label, string Uri)>();
+        if (reference.Length > 0 && m["actions"] is JsonArray list)
+            foreach (var a in list.OfType<JsonObject>())
+            {
+                var label = (string?)a["title"] ?? "";
+                var action = (string?)a["id"] ?? "";
+                if (label.Length > 0 && action.Length > 0)
+                    buttons.Add((label, $"{Shell.Protocol}:action?ref={Uri.EscapeDataString(reference)}&action={Uri.EscapeDataString(action)}&tag={Uri.EscapeDataString(tag)}&as={Uri.EscapeDataString(shared)}"));
+            }
+        try { Toasts.Show((string?)m["title"] ?? "Halcyon", (string?)m["body"] ?? "", tag, (bool?)m["silent"] ?? false, KindOf(tag), launch, buttons); }
         catch (Exception x) { Log.Write("toast: " + x.Message); }
     }
 
@@ -294,6 +306,15 @@ public sealed class MainForm : Form
     /// <summary>A second start of the app (mailto: link, toast click, Start menu) handed its arguments over.</summary>
     public void Arrive(string[] args)
     {
+        // A toast's button: done in the background (the window stays where it is).
+        var button = args.FirstOrDefault(a => a.StartsWith(Shell.Protocol + ":action?", StringComparison.OrdinalIgnoreCase));
+        if (button != null)
+        {
+            var q = HttpUtility.ParseQueryString(new Uri(button).Query);
+            if (pageOk) web.CoreWebView2.PostWebMessageAsJson(new JsonObject { ["type"] = "notification-action", ["ref"] = q["ref"] ?? "", ["action"] = q["action"] ?? "", ["tag"] = q["tag"] ?? "", ["as"] = q["as"] ?? "" }.ToJsonString());
+            try { Toasts.Remove(q["tag"] ?? ""); } catch (Exception x) { Log.Write("toast remove: " + x.Message); }
+            return;
+        }
         hiddenStart = false;
         Shell.Front(this);
         if (LinkRoute(args) is string link) { Go(link); return; }

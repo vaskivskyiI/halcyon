@@ -41,6 +41,10 @@ object Server {
     fun register(ctx: Context, token: String) =
         post(ctx, "/api/push/fcm/register", JSONObject().put("token", token).put("device", deviceName).put("version", BuildConfig.VERSION_CODE))
 
+    /** A notification's button (Mark read, Snooze, Mark done …): done on the server, which takes it back everywhere. */
+    fun action(ctx: Context, ref: String, action: String, tag: String, shared: String) =
+        post(ctx, "/api/push/action", JSONObject().put("ref", ref).put("action", action).put("tag", tag), shared)
+
     /** A notification opened or swiped away here: taken back on the user's other devices. */
     fun closed(ctx: Context, tag: String, shared: String) = post(ctx, "/api/push/close", JSONObject().put("tag", tag), shared)
 }

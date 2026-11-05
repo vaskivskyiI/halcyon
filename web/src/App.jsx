@@ -86,6 +86,16 @@ function Shell() {
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, []);
+  // A button on a Windows toast (windows/Halcyon/Bridge.js): done on the server, as from the phone (POST /api/push/action).
+  useEffect(() => {
+    const h = (e) => {
+      const { ref, action, tag, as } = e.detail || {};
+      fetch(api.url('/api/push/action'), { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json', ...(as ? { 'x-halcyon-as': String(as) } : {}) }, body: JSON.stringify({ ref, action, tag }) })
+        .then((r) => { if (!r.ok) r.json().then((d) => toast(d.error || 'That did not work', { kind: 'error' }), () => {}); }).catch(() => {});
+    };
+    window.addEventListener('halcyon:notification-action', h);
+    return () => window.removeEventListener('halcyon:notification-action', h);
+  }, []);
   useEffect(() => { const h = (e) => setOffline(e.detail); window.addEventListener('halcyon:offline', h); return () => window.removeEventListener('halcyon:offline', h); }, []);
   const reloadTimer = useRef();
   const insightTimer = useRef();
@@ -104,7 +114,7 @@ function Shell() {
         // What notifies is decided on the server (Settings → Notifications); with push on this device the service
         // worker shows it, otherwise the open app does.
         case 'notify:show':
-          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !inMyMail(store.get().settings, e.payload.as) ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag }); });
+          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !inMyMail(store.get().settings, e.payload.as) ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag, data: { url: e.payload.url, ref: e.payload.ref, actions: e.payload.actions, as: e.payload.as } }); });
           break;
         case 'notify:close': closeShown(e.payload.tags || []); break;
         case 'reminder':
@@ -253,7 +263,7 @@ function Shell() {
         {section === 'mail' && <MailView route={route} />}
         {section === 'calendar' && <CalendarView route={route} />}
         {section === 'contacts' && <ContactsView route={route} />}
-        {section === 'tasks' && <TasksView />}
+        {section === 'tasks' && <TasksView route={route} />}
         {section === 'assistant' && <AssistantView route={route} />}
         {section === 'settings' && <SettingsView route={route} />}
       </main>

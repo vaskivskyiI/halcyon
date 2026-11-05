@@ -118,8 +118,10 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val launcher = intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_LAUNCHER)
-        // The launcher icon on a running app: back to the mail too — but a message being written stays open.
-        if (launcher && ready) web.evaluateJavascript("location.hash.startsWith('#/compose') || window.halcyonOpen(${JSONObject.quote(HOME)}, '')", null)
+        // The launcher icon on a running app: back to the mail too — but a message being written stays open. A
+        // notification drawn by the system (the app was in the background) also comes as a launcher intent, with its
+        // place in the extras: that place.
+        if (launcher && ready && intent.getStringExtra(EXTRA_ROUTE) == null) web.evaluateJavascript("location.hash.startsWith('#/compose') || window.halcyonOpen(${JSONObject.quote(HOME)}, '')", null)
         else targetOf(intent)?.let { open(it) }
     }
 

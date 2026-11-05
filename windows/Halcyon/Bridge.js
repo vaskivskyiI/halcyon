@@ -33,7 +33,9 @@
       // Same tag: the toast is replaced (the older object is no longer clickable, as in browsers).
       if (this.tag) for (const [k, n] of shown) if (n.tag === this.tag) shown.delete(k);
       shown.set(this._id, this);
-      post({ type: 'notify', page, id: this._id, title: this.title, body: this.body, tag: this.tag, silent: this.silent, route: typeof this.data?.url === 'string' ? this.data.url : '' });
+      const d = this.data || {};
+      post({ type: 'notify', page, id: this._id, title: this.title, body: this.body, tag: this.tag, silent: this.silent, route: typeof d.url === 'string' ? d.url : '',
+        ref: typeof d.ref === 'string' ? d.ref : '', actions: Array.isArray(d.actions) ? d.actions : [], as: d.as == null ? '' : String(d.as) });
       setTimeout(() => fire(this, 'show'));
     }
     close() {
@@ -52,6 +54,8 @@
       if (n) { shown.delete(n._id); fire(n, 'click'); } // its onclick knows the place and the shared space (App.jsx)
       else if (typeof m.route === 'string' && m.route.startsWith('#/')) location.hash = m.route;
     }
+    // A toast's button (MainForm.Arrive): the web app asks the server to do it (App.jsx).
+    if (m.type === 'notification-action') window.dispatchEvent(new CustomEvent('halcyon:notification-action', { detail: { ref: m.ref, action: m.action, tag: m.tag, as: m.as } }));
   });
 
   window.halcyonDesktop = Object.freeze({
