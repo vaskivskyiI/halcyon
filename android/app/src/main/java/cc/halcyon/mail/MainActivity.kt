@@ -336,7 +336,7 @@ class MainActivity : ComponentActivity() {
         fun pushState(): String {
             if (!trusted()) return "{}"
             val ctx: Context = this@MainActivity
-            return JSONObject().put("available", firebase()).put("on", Prefs.pushOn(ctx))
+            return JSONObject().put("available", firebase()).put("on", Prefs.pushOn(ctx)).put("live", Prefs.liveOn(ctx))
                 .put("permission", if (Notifications.allowed(ctx)) "granted" else "default")
                 .put("token", Prefs.token(ctx) ?: JSONObject.NULL).put("device", deviceName).put("version", BuildConfig.VERSION_CODE).toString()
         }
@@ -359,6 +359,14 @@ class MainActivity : ComponentActivity() {
             if (!trusted()) return
             Prefs.setPushOn(this@MainActivity, on)
             LiveService.start(this@MainActivity) // stops it when off
+        }
+
+        /** The app's own connection besides Firebase (with its lasting notification), on or off. */
+        @JavascriptInterface
+        fun setLive(on: Boolean) {
+            if (!trusted()) return
+            Prefs.setLiveOn(this@MainActivity, on)
+            LiveService.start(this@MainActivity)
         }
 
         @JavascriptInterface

@@ -15,7 +15,8 @@ import { contactByEmail } from '../contacts/service.js';
 import { scope, inIds } from '../spaces.js';
 import { localToEpoch, normalizeEvent } from '../util/time.js';
 import { senderPreference, applyPreference, preferenceExamples } from './learning.js';
-import { applyHabit } from './habits.js';
+import { applyHabit, rarelyRead } from './habits.js';
+import { focusedOf, focusedByRule } from '../mail/focused.js';
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
 import { cleanSummary } from './summary.js';
@@ -101,6 +102,15 @@ export function serializeInsight(r) {
 
 // One-time codes and sign-in links lose all value within minutes; models do not always notice, so look for them too.
 const CODE_RE = /\b(verification|security|login|log-in|sign[- ]?in|one[- ]time|otp|2fa|authentication|potrditven\w*|prijavn\w*|varnostn\w*|enkratn\w*)\b[\s\S]{0,80}\b(code|koda|kodo|kod|passcode|pin)\b|\b(code|koda|kodo|passcode)\b[\s\S]{0,40}\b(verification|login|sign[- ]?in|one[- ]time|prijav\w*)\b/i;
+
+// Just analysed and now in Focused because of it: new (stored within the hour, not by the first sync of the account),
+// unread, in an Inbox, from a sender the user reads. In Focused for another reason, it was told on arrival.
+function sortedIntoFocus(userId, m) {
+  const cur = get(`SELECT m.is_read, m.created_at, f.special_use, a.created_at AS added FROM messages m JOIN folders f ON f.id = m.folder_id
+    JOIN accounts a ON a.id = m.account_id WHERE m.id = ?`, m.id);
+  return !!cur && !cur.is_read && cur.special_use === '\\Inbox' && now() - (cur.created_at || 0) < 3600e3 && (cur.created_at || 0) - (cur.added || 0) > 30 * 60e3
+    && !rarelyRead(userId, m.from_addr) && focusedOf([m.id]).length > 0 && !focusedByRule(m.id);
+}
 
 function expiryOf(d, m, tz) {
   const t = d.expires ? localToEpoch(String(d.expires).slice(0, 10), String(d.expires).slice(11, 16), tz) : NaN;
@@ -380,6 +390,10 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
     // Same tag as the new-mail notification: it replaces it (with the summary) rather than buzzing twice.
     notifyUser(userId, 'mail', { important: true, title: `Important: ${m.from_name || m.from_addr}`, body: `${m.subject || ''}${ins.summary ? `\n${ins.summary}` : ''}`, url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id, about: { mail: [m.id] } });
+  } else if (sortedIntoFocus(userId, m)) {
+    // "Mail in Focused": new mail the AI just put there (what was in Focused on arrival was told then, mail/pipeline.js).
+    notifyUser(userId, 'mail', { title: m.from_name || m.from_addr, body: `${m.subject || '(no subject)'}${ins.summary ? `\n${ins.summary}` : m.snippet ? `\n${m.snippet.slice(0, 120)}` : ''}`,
+      url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id, about: { mail: [m.id] }, modes: ['focused'] });
   }
   if (!quiet && ins.needs_reply && ins.priority >= 50 && now() - m.date < 7 * 864e5 && !ins.draft_reply) enqueue(userId, 'draft', m.id, 35);
   if (ins.priority >= 60 && now() - m.date < 36 * 3600e3) scheduleBriefRefresh(userId);

@@ -1174,3 +1174,10 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Popups (`dismiss.js`): Escape closes only the popup opened last, and the key press goes no further (it used to
   also close the open message); a click into an email's frame (no pointerdown reaches the page; the frame takes the
   focus) closes them too.
+- Notifications "Mail in Focused" (`notifications.mail = 'focused'`; `mail/focused.js` holds the Focused SQL, built lazily
+  because it and `ai/open-items.js` import each other): mail in Focused on arrival is told then (`modes` on notifyUser);
+  mail the AI is still to read is told by `analyzeMessage` once it lands in Focused (`sortedIntoFocus`: new, unread,
+  Inbox, not the account's first sync), never when it goes to Other (round88).
+- Android: the app's own connection (LiveService, with its lasting "Connected to your server" notification) is off by
+  default (`Prefs.liveOn`, bridge `setLive`); notifications come by Firebase (high priority). Settings → Notifications
+  has a switch for the connection on phones that hold Firebase messages back.

@@ -16,6 +16,7 @@ import { noteCorrespondence } from '../ai/profiles.js';
 import { markReplied } from '../ai/open-items.js';
 import { autoReply, applyMuted } from './extras.js';
 import { notifyUser } from '../notifications.js';
+import { focusedOf } from './focused.js';
 import { rawHeaderValue } from './parse.js';
 import fs from 'node:fs/promises';
 
@@ -86,12 +87,22 @@ export async function afterIngest(account, folder, ids, { initial = false } = {}
       // On the user's devices (and the shared space's members'), as their notification settings allow.
       // Senders the user habitually leaves unread do not buzz (ai/habits.js).
       const loud = unread.filter((m) => !rarelyRead(account.user_id, m.from_addr));
-      const one = loud.length === 1 ? loud[0] : null;
-      if (loud.length) notifyUser(account.user_id, 'mail', one
-        ? { title: one.from_name || one.from_addr, body: `${one.subject || '(no subject)'}${one.snippet ? `\n${one.snippet.slice(0, 120)}` : ''}`, url: `#/mail/unified/${one.id}`, tag: `mail-${one.id}`, accountId: account.id, about: { mail: [one.id] } }
-        : { title: `${loud.length} new emails`, body: loud.slice(0, 4).map((m) => `${m.from_name || m.from_addr}: ${m.subject || ''}`).join('\n'), url: '#/mail/unified', tag: `mail-batch-${folder.id}`, accountId: account.id, about: { mail: loud.map((m) => m.id) } });
+      // "Mail in Focused" hears now of what is in Focused already; the rest once the AI has sorted it (ai/tasks.js).
+      const focused = new Set(focusedOf(loud.map((m) => m.id)));
+      const inFocus = loud.filter((m) => focused.has(m.id));
+      const tell = (list, tag, modes) => { if (list.length) notifyUser(account.user_id, 'mail', { ...mailNotice(list, account.id, tag), modes }); };
+      if (inFocus.length === loud.length) tell(loud, `mail-batch-${folder.id}`, ['all', 'focused']);
+      else { tell(loud, `mail-batch-${folder.id}`, ['all']); tell(inFocus, `mail-focus-${folder.id}`, ['focused']); }
     }
   }
+}
+
+/** The notification of new mail: one email with its subject and start, or a count with the senders. */
+export function mailNotice(list, accountId, batchTag) {
+  const one = list.length === 1 ? list[0] : null;
+  return one
+    ? { title: one.from_name || one.from_addr, body: `${one.subject || '(no subject)'}${one.snippet ? `\n${one.snippet.slice(0, 120)}` : ''}`, url: `#/mail/unified/${one.id}`, tag: `mail-${one.id}`, accountId, about: { mail: [one.id] } }
+    : { title: `${list.length} new emails`, body: list.slice(0, 4).map((m) => `${m.from_name || m.from_addr}: ${m.subject || ''}`).join('\n'), url: '#/mail/unified', tag: batchTag, accountId, about: { mail: list.map((m) => m.id) } };
 }
 
 /**

@@ -5,7 +5,7 @@ import { store } from '../store.js';
 import { saveSettings, loadLabels } from '../data.js';
 import { Switch, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError } from '../util.js';
-import { pushState, enablePush, disablePush, resetPushCache } from '../push.js';
+import { pushState, enablePush, disablePush, resetPushCache, setAndroidLive } from '../push.js';
 
 const useSettings = () => store.use((s) => s.settings);
 const save = (patch) => saveSettings(patch).catch(toastError);
@@ -129,6 +129,9 @@ export function Notifications() {
           : <><span className="small grow">Get notifications on this device even when Halcyon is closed (phone, browser, the Android app).</span>
             <button className="btn sm primary" onClick={async () => { try { await enablePush(); resetPushCache(); toast('Push notifications are on'); refresh(); } catch (e) { toastError(e); } }}>Turn on</button></>}
       </div> : push?.android ? <div className="small muted">{push.problem}</div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
+      {push?.android && push.on && push.liveChoice && <Switch label="Also keep a direct connection to the server"
+        hint="Only if notifications come late: some phones hold Firebase messages back. Android then shows a lasting “Connected to your server” notification."
+        checked={push.live} onChange={(v) => { setAndroidLive(v); refresh(); }} />}
       {devs.length > 0 && <div className="small faint row" style={{ flexWrap: 'wrap', gap: 6 }}>Devices with push:
         {devs.map((d) => <span key={`${d.kind || 'web'}${d.id}`} className="chip" title={`${d.kind === 'android' ? 'The Halcyon app' : 'A browser'} · added ${new Date(d.createdAt).toLocaleDateString()}${d.lastOkAt ? ` · last notified ${new Date(d.lastOkAt).toLocaleString()}` : ''}`}>
           {d.kind === 'android' ? `${d.device || 'Android'} (app)` : `${d.device || 'device'} (browser)`}
@@ -136,7 +139,8 @@ export function Notifications() {
 
       <h3>What notifies</h3>
       <label className="field" style={{ maxWidth: 420 }}>New mail<select className="input" value={mail} onChange={(e) => save({ notifications: { mail: e.target.value } })}>
-        <option value="all">Every new email</option><option value="important">Only important mail (AI priority; with its summary)</option><option value="none">None</option></select></label>
+        <option value="all">Every new email</option>
+        <option value="focused">Mail in Focused (when the AI has sorted it)</option><option value="important">Only important mail (AI priority; with its summary)</option><option value="none">None</option></select></label>
       <Switch label="Event and task reminders" checked={n.reminders} onChange={(v) => save({ notifications: { reminders: v } })} />
       <Switch label="Sound" checked={n.sound !== false} onChange={(v) => save({ notifications: { sound: v } })} />
       <Switch label="Hide content on the lock screen" hint="Only “New email” — no sender, subject or text" checked={!!n.hideContent} onChange={(v) => save({ notifications: { hideContent: v } })} />

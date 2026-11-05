@@ -51,6 +51,7 @@ export async function pushState() {
   if (android()) {
     const s = androidState(), f = await serverFcm();
     return { supported: !!s.available && f.available, on: !!s.on && f.available, permission: s.permission || 'default', android: true,
+      live: !!s.live, liveChoice: typeof android().setLive === 'function',
       problem: !s.available ? 'This build of the app has no Firebase setup (google-services.json), so it cannot receive notifications.' : !f.available ? `This server is not set up for Android notifications${f.error ? `: ${f.error}` : ' (HALCYON_FCM_SERVICE_ACCOUNT)'}.` : '' };
   }
   if (!supported()) return { supported: false, on: false, permission: 'unsupported' };
@@ -77,6 +78,9 @@ export async function enablePush() {
   await api.post('/api/push/subscribe', { subscription: sub.toJSON(), device: deviceName() });
   return true;
 }
+
+/** The Android app's own connection besides Firebase (Android shows a lasting notification while it runs). */
+export const setAndroidLive = (on) => android()?.setLive?.(!!on);
 
 export async function disablePush() {
   if (android()) {

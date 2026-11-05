@@ -19,6 +19,11 @@ object Prefs {
     fun token(ctx: Context): String? = p(ctx).getString("fcm_token", null)
     fun setToken(ctx: Context, token: String?) = p(ctx).edit().putString("fcm_token", token).apply()
 
+    /** The app's own connection to the server (LiveService), besides Firebase: off unless chosen — Android shows a
+     *  notification all the time while it runs. */
+    fun liveOn(ctx: Context) = p(ctx).getBoolean("live_on", false)
+    fun setLiveOn(ctx: Context, on: Boolean) = p(ctx).edit().putBoolean("live_on", on).apply()
+
     /** The server time last heard over the app's own connection (LiveService): what came after is sent again. */
     fun liveSince(ctx: Context) = p(ctx).getLong("live_since", 0L)
     fun setLiveSince(ctx: Context, t: Long) { if (t > liveSince(ctx)) p(ctx).edit().putLong("live_since", t).apply() }

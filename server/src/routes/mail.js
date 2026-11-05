@@ -19,6 +19,7 @@ import { sharedOf, mergedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
 import { checkLinks } from '../mail/links.js';
+import { FOCUSED } from '../mail/focused.js';
 import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
@@ -70,21 +71,6 @@ function oneByThread(uid, rows, sc, skip = new Set()) {
   return out.map((r) => ({ ...r, thread_count: stats.get(r.thread_id)?.n || 1, thread_unread: stats.get(r.thread_id)?.u || 0 }));
 }
 
-// Mail the AI is about to read waits in Other, visible, and moves when the analysis says so. Mail it will not read stays in Focused.
-const analysing = (m) => `EXISTS (SELECT 1 FROM ai_jobs j WHERE j.user_id = ${m}.user_id AND j.type = 'analyze' AND j.ref_id = CAST(${m}.id AS TEXT) AND j.status IN ('queued', 'running'))`;
-const ANALYSING = analysing('m');
-const focusedOne = (i, m) => `((${i}.message_id IS NULL AND NOT ${analysing(m)}) OR (${i}.priority >= 40 AND COALESCE(${i}.category, '') NOT IN ${OPEN_NOISE}) OR ${i}.priority >= 70)`;
-// Focused goes by conversation: a message is focused when it or another message of its conversation in an Inbox is, so a
-// conversation is never split between Focused and Other (a reply to a focused conversation stays with it).
-// Always Focused: conversations the user started or replied to (a message of theirs in Sent, or answered), and senders
-// on the user's Focused list (focus.js; an address or a whole @domain).
-const FOCUS_SENDER = `EXISTS (SELECT 1 FROM focus_senders fs WHERE fs.user_id = m.user_id AND fs.focused = 1
-  AND fs.address IN (lower(m.from_addr), '@' || substr(lower(m.from_addr), instr(m.from_addr, '@') + 1)))`;
-const MINE = `(m.is_answered = 1 OR (m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages s WHERE s.user_id = m.user_id AND s.thread_id = m.thread_id
-  AND s.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Sent'))))`;
-const FOCUSED = `(${focusedOne('i', 'm')} OR ${FOCUS_SENDER} OR ${MINE} OR (m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages t LEFT JOIN ai_insights ti ON ti.message_id = t.id
-  WHERE t.user_id = m.user_id AND t.thread_id = m.thread_id AND t.id != m.id AND t.folder_id IN (SELECT id FROM folders WHERE special_use = '\\Inbox') AND ${focusedOne('ti', 't')})))`;
-
 function scopeFor(userId, q, sc) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
   const view = q.view || 'unified';
@@ -117,8 +103,8 @@ function scopeFor(userId, q, sc) {
     case 'unread': where.push('m.is_read = 0'); break;
     case 'flagged': where.push('m.is_flagged = 1'); break;
     case 'attachments': where.push('m.has_attachments = 1'); break;
-    case 'focused': where.push(FOCUSED); break;
-    case 'other': where.push(`NOT COALESCE(${FOCUSED}, 0)`); break;
+    case 'focused': where.push(FOCUSED()); break;
+    case 'other': where.push(`NOT COALESCE(${FOCUSED()}, 0)`); break;
     default: break;
   }
   if (q.category && view !== 'category') { where.push('i.category = ?'); params.push(q.category); }
@@ -166,7 +152,7 @@ export default async function mailRoutes(app) {
       WHERE folder_id IN (${folderIds.map(() => '?').join(',')}) AND is_read = 0 AND snoozed_until IS NULL GROUP BY folder_id`, ...folderIds).map((r) => [r.id, r.n]) : []);
     // Of those, the ones shown stronger than the rest: with Focused Inbox on, the focused ones (the same number as
     // the Focused tab); otherwise the important ones (as in the Important view).
-    const importantSql = getSettings(uid).mail.focusedInbox ? FOCUSED
+    const importantSql = getSettings(uid).mail.focusedInbox ? FOCUSED()
       : `i.priority >= 70 AND i.dismissed_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > ${Date.now()}) AND COALESCE(i.category, '') NOT IN ${OPEN_NOISE}`;
     const importantByFolder = new Map(folderIds.length ? all(`SELECT m.folder_id AS id, COUNT(${threaded ? 'DISTINCT m.thread_id' : '*'}) AS n FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id
       WHERE m.folder_id IN (${folderIds.map(() => '?').join(',')}) AND m.is_read = 0 AND m.snoozed_until IS NULL AND ${importantSql} GROUP BY m.folder_id`, ...folderIds).map((r) => [r.id, r.n]) : []);
@@ -298,7 +284,7 @@ export default async function mailRoutes(app) {
     const { where, params } = scopeFor(uid, { ...query, filter: undefined }, sc);
     where.push('m.is_read = 0');
     const unit = threaded ? 'm.thread_id' : 'm.id';
-    const r = get(`SELECT COUNT(DISTINCT ${unit}) AS a, COUNT(DISTINCT CASE WHEN ${FOCUSED} THEN ${unit} END) AS f, COUNT(DISTINCT CASE WHEN NOT COALESCE(${FOCUSED}, 0) THEN ${unit} END) AS o
+    const r = get(`SELECT COUNT(DISTINCT ${unit}) AS a, COUNT(DISTINCT CASE WHEN ${FOCUSED()} THEN ${unit} END) AS f, COUNT(DISTINCT CASE WHEN NOT COALESCE(${FOCUSED()}, 0) THEN ${unit} END) AS o
       FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')}`, ...params);
     return { focused: r.f, other: r.o, all: r.a };
   }

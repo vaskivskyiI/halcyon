@@ -76,7 +76,7 @@ const recipients = (ownerId) => {
 };
 
 /**
- * kind: 'mail' (new mail; data.important for mail the AI rates important) | 'reminder'. data: { title, body, url, tag,
+ * kind: 'mail' (new mail; data.important for mail the AI rates important, data.modes: the settings it is for) | 'reminder'. data: { title, body, url, tag,
  * accountId, important, type ('mail' | 'event' | 'task': the icon), about (when to take it back, see sweepNotifications) }.
  * Each recipient's settings decide; allowed notifications go to the open app and to push.
  */
@@ -85,7 +85,10 @@ export function notifyUser(ownerId, kind, data) {
   for (const r of recipients(ownerId)) {
     const p = prefsOf(r.id);
     if (kind === 'mail') {
-      if (p.mail === 'none' || (p.mail === 'important' && !data.important)) continue;
+      // modes: who a notification is for — 'focused' gets new mail once it is in Focused (after the AI's sorting), so
+      // the arrival of mail the AI is still to read is told to 'all' only. Important mail goes to every mode but none.
+      if (p.mail === 'none') continue;
+      if (!data.important && (p.mail === 'important' || (data.modes && !data.modes.includes(p.mail)))) continue;
       if (data.accountId && p.muteAccounts.includes(Number(data.accountId))) continue;
       if (r.shared && p.muteShared.includes(r.shared)) continue;
     }

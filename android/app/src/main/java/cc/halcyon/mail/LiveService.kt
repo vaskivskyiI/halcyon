@@ -38,9 +38,9 @@ class LiveService : Service() {
     companion object {
         private const val ID = 7
 
-        /** Starts (or keeps) the connection when notifications are on, else stops it. */
+        /** Starts (or keeps) the connection when notifications and the connection are on, else stops it. */
         fun start(ctx: Context) {
-            if (!Prefs.pushOn(ctx) || Prefs.token(ctx) == null || Prefs.server(ctx) == null) return stop(ctx)
+            if (!Prefs.pushOn(ctx) || !Prefs.liveOn(ctx) || Prefs.token(ctx) == null || Prefs.server(ctx) == null) return stop(ctx)
             Watchdog.schedule(ctx)
             // Not allowed from the background just now (the app is not exempt from battery optimisation): Firebase
             // still delivers, and the watchdog tries again.
@@ -76,7 +76,7 @@ class LiveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         foreground()
-        if (!Prefs.pushOn(this) || Prefs.token(this) == null) { stopSelf(); return START_NOT_STICKY }
+        if (!Prefs.pushOn(this) || !Prefs.liveOn(this) || Prefs.token(this) == null) { stopSelf(); return START_NOT_STICKY }
         if (socket == null || usedToken != Prefs.token(this)) connect()
         return START_STICKY
     }
@@ -122,7 +122,7 @@ class LiveService : Service() {
         open = false
         val server = Prefs.server(this)
         val token = Prefs.token(this)
-        if (server == null || token == null || !Prefs.pushOn(this)) return stopSelf()
+        if (server == null || token == null || !Prefs.pushOn(this) || !Prefs.liveOn(this)) return stopSelf()
         usedToken = token
         val url = server.replaceFirst(Regex("^http"), "ws") + "/api/ws?device=" + URLEncoder.encode(token, "UTF-8") + "&since=" + Prefs.liveSince(this)
         val req = Request.Builder().url(url)
