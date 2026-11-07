@@ -1191,3 +1191,10 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   again by the scheduler (`dueReminders`). Shown by: the service worker (Web Push `actions`), the Windows app (toast
   `<actions>` with `halcyon-windows:action?…`, Bridge.js → `halcyon:notification-action` → App.jsx), Android (app-drawn
   only: builds after 2.0.1 (`ACTIONS_FROM`) get FCM data messages without the notification part). Electron: no buttons (round89).
+- Importance is not written in notification titles (the sender stays the title): `msg.important` picks a red icon —
+  Android `ic_notify_important` (red), Windows toast kind `important` (red-orange envelope with a `!` badge).
+- Mail buttons are the user's choice and order (`notifications.mailActions`, Settings → Notifications; default Reply, Mark
+  read, Archive, Delete, Snooze; also Flag, Spam). Several mails: Mark all read / Archive all. Events: Join (online meeting,
+  `url`), Snooze 5 / 15 min, Dismiss. Tasks: Mark done, Snooze 1 h, Tomorrow (08:00). Reply has `input` (Android answers in
+  the notification: `quickReply` sends to Reply-To/From, quoting, with the undo delay, and marks read) and `url`
+  `#/mail/<view>/<id>/reply` (Windows, browsers: opens the composer; Reader `replyNow`).

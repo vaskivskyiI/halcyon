@@ -119,7 +119,8 @@ self.addEventListener('push', (e) => {
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Halcyon', body: e.data?.text() || '' }; }
   e.waitUntil(self.registration.showNotification(d.title || 'Halcyon', {
     body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag, silent: !!d.silent,
-    icon: './icon-192.png', badge: './badge-96.png', data: { url: d.url || '#/mail/unified', as: d.as || null, ref: d.ref || '' },
+    icon: './icon-192.png', badge: './badge-96.png',
+    data: { url: d.url || '#/mail/unified', as: d.as || null, ref: d.ref || '', urls: Object.fromEntries((Array.isArray(d.actions) ? d.actions : []).filter((a) => a.url).map((a) => [a.id, a.url])) },
     // Buttons (Mark read, Snooze, Mark done …; server notify-actions.js), where the browser shows them.
     actions: (Array.isArray(d.actions) ? d.actions : []).slice(0, 3).map((a) => ({ action: a.id, title: a.title })),
   }));
@@ -134,16 +135,20 @@ self.addEventListener('notificationclose', (e) => { e.waitUntil(taken(e.notifica
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  const n = e.notification;
+  // A button that goes somewhere: Join opens the meeting; Reply opens the app at the reply (opening below).
+  const to = e.action && n.data?.urls?.[e.action];
+  if (to && /^https:/i.test(to)) return e.waitUntil(self.clients.openWindow(to));
   // A button: done on the server (which takes the notification back everywhere), nothing opens.
-  if (e.action) {
-    const n = e.notification;
+  if (e.action && !to) {
     return e.waitUntil(fetch(new URL('./api/push/action', self.registration.scope), {
       method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json', ...(n.data?.as ? { 'x-halcyon-as': String(n.data.as) } : {}) },
       body: JSON.stringify({ ref: n.data?.ref || '', action: e.action, tag: n.tag }),
     }).catch(() => {}));
   }
   taken(e.notification);
-  const { url, as } = e.notification.data || {};
+  const { as } = n.data || {};
+  const url = to || n.data?.url;
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const win = wins.find((w) => w.url.startsWith(self.registration.scope)) || wins[0];

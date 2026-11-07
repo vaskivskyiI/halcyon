@@ -285,10 +285,16 @@ public sealed class MainForm : Form
             {
                 var label = (string?)a["title"] ?? "";
                 var action = (string?)a["id"] ?? "";
-                if (label.Length > 0 && action.Length > 0)
-                    buttons.Add((label, $"{Shell.Protocol}:action?ref={Uri.EscapeDataString(reference)}&action={Uri.EscapeDataString(action)}&tag={Uri.EscapeDataString(tag)}&as={Uri.EscapeDataString(shared)}"));
+                var url = (string?)a["url"] ?? "";
+                if (label.Length == 0 || action.Length == 0) continue;
+                // A button that goes somewhere: Join opens the meeting in the browser; Reply opens the app at the reply
+                // (a toast cannot hand typed text to an unpackaged app over its protocol).
+                if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) buttons.Add((label, url));
+                else if (url.StartsWith("#/")) buttons.Add((label, $"{Shell.Protocol}:open?page=&id=0&route={Uri.EscapeDataString(url)}"));
+                else buttons.Add((label, $"{Shell.Protocol}:action?ref={Uri.EscapeDataString(reference)}&action={Uri.EscapeDataString(action)}&tag={Uri.EscapeDataString(tag)}&as={Uri.EscapeDataString(shared)}"));
             }
-        try { Toasts.Show((string?)m["title"] ?? "Halcyon", (string?)m["body"] ?? "", tag, (bool?)m["silent"] ?? false, KindOf(tag), launch, buttons); }
+        var important = (bool?)m["important"] ?? false;
+        try { Toasts.Show((string?)m["title"] ?? "Halcyon", (string?)m["body"] ?? "", tag, (bool?)m["silent"] ?? false, important ? "important" : KindOf(tag), launch, buttons); }
         catch (Exception x) { Log.Write("toast: " + x.Message); }
     }
 

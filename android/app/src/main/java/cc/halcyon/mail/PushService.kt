@@ -12,6 +12,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.RemoteInput
+import android.net.Uri
 import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -41,12 +43,15 @@ class PushService : FirebaseMessagingService() {
 class ActionReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, i: Intent) {
         val tag = i.getStringExtra(MainActivity.EXTRA_TAG).orEmpty()
-        Server.action(ctx, i.getStringExtra(EXTRA_REF).orEmpty(), i.getStringExtra(EXTRA_ACTION).orEmpty(), tag, i.getStringExtra(MainActivity.EXTRA_AS).orEmpty())
+        // Reply: the text typed in the notification.
+        val text = RemoteInput.getResultsFromIntent(i)?.getCharSequence(KEY_TEXT)?.toString().orEmpty()
+        Server.action(ctx, i.getStringExtra(EXTRA_REF).orEmpty(), i.getStringExtra(EXTRA_ACTION).orEmpty(), tag, i.getStringExtra(MainActivity.EXTRA_AS).orEmpty(), text)
         Notifications.cancel(ctx, listOf(tag))
     }
     companion object {
         const val EXTRA_REF = "ref"
         const val EXTRA_ACTION = "action"
+        const val KEY_TEXT = "text"
     }
 }
 
@@ -81,7 +86,7 @@ object Notifications {
     fun allowed(ctx: Context) = NotificationManagerCompat.from(ctx).areNotificationsEnabled() &&
         (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
 
-    private fun icon(type: String?) = when (type) {
+    private fun icon(type: String?, important: Boolean) = if (important) R.drawable.ic_notify_important else when (type) {
         "event" -> R.drawable.ic_notify_event
         "task" -> R.drawable.ic_notify_task
         "mail" -> R.drawable.ic_notify_mail
@@ -107,8 +112,9 @@ object Notifications {
             .putExtra(MainActivity.EXTRA_TAG, tag).putExtra(MainActivity.EXTRA_AS, d["as"].orEmpty()), flags)
         val body = d["body"].orEmpty()
         val b = NotificationCompat.Builder(ctx, channel)
-            .setSmallIcon(icon(d["type"]))
-            .setColor(ContextCompat.getColor(ctx, R.color.brand))
+            // Important mail: its own icon in red, so the title keeps the sender (no "Important:" in the text).
+            .setSmallIcon(icon(d["type"], d["important"] == "true"))
+            .setColor(if (d["important"] == "true") 0xFFDC2626.toInt() else ContextCompat.getColor(ctx, R.color.brand))
             .setContentTitle(d["title"].orEmpty().ifEmpty { "Halcyon" })
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -118,17 +124,36 @@ object Notifications {
             .setAutoCancel(true)
             .setContentIntent(pi)
             .setDeleteIntent(dismissed)
-        // Buttons (server notify-actions.js): actions = [{ id, title }] as JSON, acting on ref.
+        // Buttons (server notify-actions.js): actions = [{ id, title, input?, url? }] as JSON, acting on ref. Android shows
+        // three. input: answered in the notification; url (https): opened (Join a meeting).
         val ref = d["ref"].orEmpty()
         val actions = runCatching { org.json.JSONArray(d["actions"].orEmpty().ifEmpty { "[]" }) }.getOrNull()
-        if (ref.isNotEmpty() && actions != null) for (k in 0 until minOf(actions.length(), 3)) {
+        var shown = 0
+        if (ref.isNotEmpty() && actions != null) for (k in 0 until actions.length()) {
+            if (shown == 3) break
             val a = actions.optJSONObject(k) ?: continue
             val id = a.optString("id")
             if (id.isEmpty()) continue
-            val pa = PendingIntent.getBroadcast(ctx, "$tag/$id".hashCode(), Intent(ctx, ActionReceiver::class.java)
+            val url = a.optString("url")
+            val input = a.optString("input")
+            if (input.isEmpty() && url.startsWith("https://")) {
+                val view = PendingIntent.getActivity(ctx, "$tag/$id".hashCode(), Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags)
+                b.addAction(0, a.optString("title"), view)
+                shown++
+                continue
+            }
+            val send = Intent(ctx, ActionReceiver::class.java)
                 .putExtra(ActionReceiver.EXTRA_REF, ref).putExtra(ActionReceiver.EXTRA_ACTION, id)
-                .putExtra(MainActivity.EXTRA_TAG, tag).putExtra(MainActivity.EXTRA_AS, d["as"].orEmpty()), flags)
-            b.addAction(0, a.optString("title"), pa)
+                .putExtra(MainActivity.EXTRA_TAG, tag).putExtra(MainActivity.EXTRA_AS, d["as"].orEmpty())
+            if (input.isNotEmpty()) {
+                // The typed text is added to the intent by the system: it has to be mutable.
+                val mutable = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val pa = PendingIntent.getBroadcast(ctx, "$tag/$id".hashCode(), send, mutable)
+                b.addAction(NotificationCompat.Action.Builder(0, a.optString("title"), pa)
+                    .addRemoteInput(RemoteInput.Builder(ActionReceiver.KEY_TEXT).setLabel(input).build())
+                    .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY).setAllowGeneratedReplies(false).build())
+            } else b.addAction(0, a.optString("title"), PendingIntent.getBroadcast(ctx, "$tag/$id".hashCode(), send, flags))
+            shown++
         }
         try { NotificationManagerCompat.from(ctx).notify(tag, 1, b.build()) } catch (_: SecurityException) { }
     }

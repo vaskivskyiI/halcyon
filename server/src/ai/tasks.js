@@ -389,7 +389,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   if (ins.priority >= 80 && !m.is_read && now() - m.date < 864e5 && !(ins.expires_at && ins.expires_at < now())) {
     notifyAI(userId, 'mail:important', { id: m.id, from: m.from_name || m.from_addr, subject: m.subject, summary: ins.summary });
     // Same tag as the new-mail notification: it replaces it (with the summary) rather than buzzing twice.
-    notifyUser(userId, 'mail', { important: true, title: `Important: ${m.from_name || m.from_addr}`, body: `${m.subject || ''}${ins.summary ? `\n${ins.summary}` : ''}`, url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id, about: { mail: [m.id] } });
+    notifyUser(userId, 'mail', { important: true, title: m.from_name || m.from_addr, body: `${m.subject || ''}${ins.summary ? `\n${ins.summary}` : ''}`, url: `#/mail/unified/${m.id}`, tag: `mail-${m.id}`, accountId: m.account_id, about: { mail: [m.id] } });
   } else if (sortedIntoFocus(userId, m)) {
     // "Mail in Focused": new mail the AI just put there (what was in Focused on arrival was told then, mail/pipeline.js).
     notifyUser(userId, 'mail', { title: m.from_name || m.from_addr, body: `${m.subject || '(no subject)'}${ins.summary ? `\n${ins.summary}` : m.snippet ? `\n${m.snippet.slice(0, 120)}` : ''}`,

@@ -35,7 +35,7 @@
       shown.set(this._id, this);
       const d = this.data || {};
       post({ type: 'notify', page, id: this._id, title: this.title, body: this.body, tag: this.tag, silent: this.silent, route: typeof d.url === 'string' ? d.url : '',
-        ref: typeof d.ref === 'string' ? d.ref : '', actions: Array.isArray(d.actions) ? d.actions : [], as: d.as == null ? '' : String(d.as) });
+        ref: typeof d.ref === 'string' ? d.ref : '', actions: Array.isArray(d.actions) ? d.actions : [], as: d.as == null ? '' : String(d.as), important: !!d.important });
       setTimeout(() => fire(this, 'show'));
     }
     close() {

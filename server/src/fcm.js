@@ -56,7 +56,7 @@ export async function fcmSend(token, data, { ttlSeconds = 6 * 3600, notification
       token, data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? '' : String(v)])),
       ...(notification ? { notification: { title: notification.title, body: notification.body || '' } } : {}),
       android: { priority, ttl: `${ttlSeconds}s`, ...(notification ? { notification: {
-        channel_id: notification.channel, tag: notification.tag, icon: notification.icon || 'ic_notify', color: '#2563EB', default_sound: !notification.silent,
+        channel_id: notification.channel, tag: notification.tag, icon: notification.icon || 'ic_notify', color: notification.color || '#2563EB', default_sound: !notification.silent,
         notification_priority: notification.silent ? 'PRIORITY_LOW' : 'PRIORITY_HIGH', visibility: 'PRIVATE',
       } } : {}) },
     } }),

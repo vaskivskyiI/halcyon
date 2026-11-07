@@ -158,7 +158,7 @@ class LiveService : Service() {
                         "title" to p.optString("title"), "body" to p.optString("body"), "url" to p.optString("url"),
                         "tag" to tag, "kind" to p.optString("kind"), "type" to p.optString("type"),
                         "silent" to p.optBoolean("silent").toString(), "as" to if (p.isNull("as")) "" else p.optString("as"),
-                        "ref" to p.optString("ref"), "actions" to (p.optJSONArray("actions")?.toString() ?: "[]"),
+                        "important" to p.optBoolean("important").toString(), "ref" to p.optString("ref"), "actions" to (p.optJSONArray("actions")?.toString() ?: "[]"),
                     ))
                     ws.send(JSONObject().put("type", "ack").put("id", p.optLong("id")).toString())
                     Prefs.setLiveSince(ctx, p.optLong("at"))

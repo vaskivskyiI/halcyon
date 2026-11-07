@@ -101,7 +101,7 @@ export default function MailView({ route }) {
         : view === 'subscriptions' ? <SubscriptionsList onMenu={() => setSidebarOpen(true)} />
         : <MessageList key={view} view={view} openId={openId} onMenu={() => setSidebarOpen(true)} />}
       {!PANES.includes(view) && <ColResizer col="list" min={260} max={900} cols={cols} setCols={setCols} selector=".list-pane" />}
-      {!PANES.includes(view) && <Reader id={openId} view={view} />}
+      {!PANES.includes(view) && <Reader id={openId} view={view} replyNow={route[3] === 'reply'} />}
     </div>
   );
 }

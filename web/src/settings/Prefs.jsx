@@ -141,6 +141,7 @@ export function Notifications() {
       <label className="field" style={{ maxWidth: 420 }}>New mail<select className="input" value={mail} onChange={(e) => save({ notifications: { mail: e.target.value } })}>
         <option value="all">Every new email</option>
         <option value="focused">Mail in Focused (when the AI has sorted it)</option><option value="important">Only important mail (AI priority; with its summary)</option><option value="none">None</option></select></label>
+      <MailButtons value={n.mailActions} onChange={(v) => save({ notifications: { mailActions: v } })} />
       <Switch label="Event and task reminders" checked={n.reminders} onChange={(v) => save({ notifications: { reminders: v } })} />
       <Switch label="Sound" checked={n.sound !== false} onChange={(v) => save({ notifications: { sound: v } })} />
       <Switch label="Hide content on the lock screen" hint="Only “New email” — no sender, subject or text" checked={!!n.hideContent} onChange={(v) => save({ notifications: { hideContent: v } })} />
@@ -336,4 +337,23 @@ export function About() {
       <div className="small muted">from:, to:, subject:, has:attachment, is:unread / read / flagged / important / needsreply / snoozed, in:inbox / sent / archive / trash / &lt;folder&gt;, before:YYYY-MM-DD, after:, newer_than:7d, older_than:1y, label:, category:, account:. Plain words use full-text + semantic (meaning-based) search. Prefix with - to negate.</div>
     </div>
   );
+}
+
+// The buttons on a mail notification (server notify-actions.js), in the order picked: Android shows the first three,
+// the Windows app five, browsers two.
+const MAIL_BUTTONS = { reply: 'Reply', read: 'Mark read', archive: 'Archive', delete: 'Delete', snooze: 'Snooze (tomorrow 8:00)', flag: 'Flag', spam: 'Spam' };
+const DEFAULT_BUTTONS = ['reply', 'read', 'archive', 'delete', 'snooze'];
+function MailButtons({ value, onChange }) {
+  const on = Array.isArray(value) ? value.filter((k) => MAIL_BUTTONS[k]) : DEFAULT_BUTTONS;
+  return (
+    <div className="field">Buttons on mail notifications
+      <div className="row" style={{ flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+        {Object.entries(MAIL_BUTTONS).map(([k, label]) => {
+          const i = on.indexOf(k);
+          return <button key={k} className={`chip${i >= 0 ? ' ai' : ''}`} style={{ cursor: 'pointer' }} aria-pressed={i >= 0}
+            onClick={() => onChange(i >= 0 ? on.filter((x) => x !== k) : [...on, k])}>{i >= 0 ? `${i + 1}. ` : ''}{label}</button>;
+        })}
+      </div>
+      <div className="small faint">In this order. The Android app shows the first three (Reply lets you answer right in the notification), the Windows app five, browsers two.</div>
+    </div>);
 }

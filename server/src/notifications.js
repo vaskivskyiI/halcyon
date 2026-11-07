@@ -9,7 +9,7 @@ import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
 import { logger } from './util/log.js';
 import { fcmSend } from './fcm.js';
-import { actionsOf } from './notify-actions.js';
+import { actionsOf, DEFAULT_MAIL_ACTIONS } from './notify-actions.js';
 
 const log = logger('notify');
 
@@ -57,6 +57,7 @@ export function prefsOf(userId) {
     reminders: n.reminders !== false, hideContent: !!n.hideContent, sound: n.sound !== false,
     quiet: { enabled: !!n.quiet?.enabled, start: n.quiet?.start || '22:00', end: n.quiet?.end || '07:00' },
     muteAccounts: (n.muteAccounts || []).map(Number), muteShared: (n.muteShared || []).map(Number),
+    mailActions: Array.isArray(n.mailActions) ? n.mailActions : DEFAULT_MAIL_ACTIONS,
   };
 }
 
@@ -95,11 +96,12 @@ export function notifyUser(ownerId, kind, data) {
     }
     if (kind === 'reminder' && !p.reminders) continue;
     if (inQuietHours(r.id, p)) continue;
-    const { ref, actions } = actionsOf(kind, data);
+    const { ref, actions } = actionsOf(kind, data, p.mailActions);
     const msg = {
-      title: p.hideContent && kind === 'mail' ? (data.important ? 'Important email' : 'New email') : data.title,
+      // Importance is shown by the icon (Android, Windows), not in the text: the title keeps the sender.
+      title: p.hideContent && kind === 'mail' ? 'New email' : data.title,
       body: p.hideContent && kind === 'mail' ? '' : data.body || '', url: data.url || '#/mail/unified', tag: data.tag || kind, silent: !p.sound, as: r.shared,
-      type: data.type || (kind === 'mail' ? 'mail' : 'event'), ref, actions,
+      type: data.type || (kind === 'mail' ? 'mail' : 'event'), important: !!data.important, ref, actions,
     };
     notify(r.id, 'notify:show', msg);
     push(r.id, msg).catch((e) => log.warn(`push: ${e.message}`));
@@ -139,7 +141,7 @@ async function pushFcm(userId, kind, msg, entry) {
       const { ref, actions, ...shown } = msg;
       const r = await fcmSend(t.token, { ...shown, kind, as: msg.as || '', route: msg.url, ...(actions?.length ? { ref, actions: JSON.stringify(actions) } : {}) }, {
         ttlSeconds: kind === 'reminder' ? 3600 : 6 * 3600,
-        notification: own ? null : { title: msg.title, body: msg.body, tag: msg.tag, silent: msg.silent, icon: `ic_notify_${msg.type}`,
+        notification: own ? null : { title: msg.title, body: msg.body, tag: msg.tag, silent: msg.silent, icon: msg.important ? 'ic_notify_important' : `ic_notify_${msg.type}`, color: msg.important ? '#DC2626' : undefined,
           channel: kind === 'reminder' ? 'reminders' : msg.silent ? 'mail_silent' : 'mail' },
       });
       if (r.gone) run('DELETE FROM fcm_tokens WHERE id = ?', t.id);

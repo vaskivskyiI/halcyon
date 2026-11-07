@@ -33,7 +33,7 @@ const OPEN_UNREAD = 20;
 const bodyCache = new Map();
 const cacheBody = (k, f) => { bodyCache.delete(k); bodyCache.set(k, f); if (bodyCache.size > 300) bodyCache.delete(bodyCache.keys().next().value); };
 
-export default function Reader({ id, view }) {
+export default function Reader({ id, view, replyNow = false }) {
   const [thread, setThread] = useState(null);
   const hits = useHits();
   // Ctrl+P in the mail view (MailView) prints the open conversation.
@@ -265,6 +265,13 @@ export default function Reader({ id, view }) {
     return () => window.removeEventListener('halcyon:reply', h);
   });
 
+  // #/mail/<view>/<id>/reply (Reply on a notification where it cannot be typed in): the reply opens once the email is here.
+  useEffect(() => {
+    const m = replyNow && thread?.messages?.find((x) => x.id === Number(id));
+    if (!m) return;
+    location.replace(`#/mail/${view}/${id}`);
+    reply('reply', m);
+  }, [replyNow, thread]);
   if (!id) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}><MailIcon size={44} strokeWidth={1.2} /><div>Select a message to read</div><div className="small">Shortcuts: j/k navigate · r reply · a reply all · f forward · e archive · # delete · s flag · / search · c compose</div></div></section>;
   if (!thread) return <section className="reader"><div className="empty" style={{ margin: 'auto' }}>{loading ? <Spinner size={22} /> : <div style={{ textAlign: 'center' }}><div>This message is no longer here.</div><div className="small muted">It was moved or deleted (possibly in another mail app). The list has been refreshed.</div></div>}</div></section>;
 

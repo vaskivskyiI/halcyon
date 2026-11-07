@@ -114,7 +114,7 @@ function Shell() {
         // What notifies is decided on the server (Settings → Notifications); with push on this device the service
         // worker shows it, otherwise the open app does.
         case 'notify:show':
-          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !inMyMail(store.get().settings, e.payload.as) ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag, data: { url: e.payload.url, ref: e.payload.ref, actions: e.payload.actions, as: e.payload.as } }); });
+          pushIsOn().then((on) => { if (!on) notifyDesktop(e.payload.title, e.payload.body, () => (e.payload.as && e.payload.as !== store.get().acting?.id && !inMyMail(store.get().settings, e.payload.as) ? enterShared(e.payload.as) : navigate(e.payload.url)), { silent: e.payload.silent, tag: e.payload.tag, data: { url: e.payload.url, ref: e.payload.ref, actions: e.payload.actions, as: e.payload.as, important: !!e.payload.important } }); });
           break;
         case 'notify:close': closeShown(e.payload.tags || []); break;
         case 'reminder':

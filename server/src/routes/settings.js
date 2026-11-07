@@ -9,7 +9,7 @@ import { run, get } from '../db/index.js';
 import { vapidKeys, subscribe, unsubscribe, devices, notifyUser, registerFcm, unregisterFcm, removeDevice, closeNotifications } from '../notifications.js';
 import { fcmAccount, fcmError } from '../fcm.js';
 import { httpError } from './util.js';
-import { tomorrowMorning, snoozeReminder, snoozeMinutes } from '../notify-actions.js';
+import { tomorrowMorning, snoozeReminder, snoozeUntil, quickReply } from '../notify-actions.js';
 
 export default async function settingsRoutes(app) {
   // ---- Web Push (notifications.js): this device subscribes / unsubscribes; a test notification.
@@ -35,24 +35,30 @@ export default async function settingsRoutes(app) {
   // A button pressed on a notification (notify-actions.js): done through the same routes the app uses (as the same
   // user, in the same space), then the notification is taken back everywhere.
   app.post('/api/push/action', { preHandler: requireUser }, async (req, reply) => {
-    const { ref = '', action = '', tag = '' } = req.body || {};
+    const { ref = '', action = '', tag = '', text = '' } = req.body || {};
     const [kind, a, b] = String(ref).split(':');
     const headers = Object.fromEntries(['cookie', 'authorization', 'x-halcyon-as'].filter((h) => req.headers[h]).map((h) => [h, req.headers[h]]));
     const call = async (method, url, payload) => {
       const r = await app.inject({ method, url, payload, headers });
       if (r.statusCode >= 400) throw Object.assign(new Error(r.json()?.error || `Failed (${r.statusCode})`), { statusCode: r.statusCode });
     };
-    if (kind === 'mail' && ['read', 'archive', 'snooze'].includes(action)) {
-      const ids = String(a || '').split(',').map(Number).filter(Boolean).slice(0, 500);
-      if (!ids.length) return httpError(reply, 400, 'Nothing to act on');
-      await call('POST', '/api/messages/actions', { action, ids, ...(action === 'snooze' ? { until: tomorrowMorning(req.user.id) } : {}) });
+    const MAIL = { read: 'read', archive: 'archive', snooze: 'snooze', delete: 'trash', flag: 'flag', spam: 'spam' };
+    const ids = kind === 'mail' ? String(a || '').split(',').map(Number).filter(Boolean).slice(0, 500) : [];
+    if (kind === 'mail' && !ids.length) return httpError(reply, 400, 'Nothing to act on');
+    if (kind === 'mail' && action === 'reply') {
+      // Typed in the notification (Android): sent as a reply, with the usual undo delay.
+      if (!String(text).trim()) return httpError(reply, 400, 'Nothing to send');
+      await call('POST', '/api/send', quickReply(req.user.id, ids[0], String(text).trim().slice(0, 20000)));
+      await call('POST', '/api/messages/actions', { action: 'read', ids: [ids[0]] });
+    } else if (kind === 'mail' && MAIL[action]) {
+      await call('POST', '/api/messages/actions', { action: MAIL[action], ids, ...(action === 'snooze' ? { until: tomorrowMorning(req.user.id) } : {}) });
     } else if (kind === 'task' && action === 'done') await call('PATCH', `/api/tasks/${Number(a)}`, { done: true });
-    else if ((kind === 'task' || kind === 'event') && action === 'snooze') {
+    else if ((kind === 'task' && ['snooze', 'tomorrow'].includes(action)) || (kind === 'event' && ['snooze', 'snooze15'].includes(action))) {
       const own = kind === 'task' ? get('SELECT 1 AS x FROM tasks WHERE id = ? AND user_id = ?', Number(a), req.user.id)
         : get('SELECT 1 AS x FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE e.id = ? AND c.user_id = ?', Number(a), req.user.id);
       if (!own) return httpError(reply, 404, 'Not found');
-      snoozeReminder(req.user.id, kind === 'task' ? `task:${Number(a)}` : `event:${Number(a)}:${Number(b) || 0}`, snoozeMinutes(kind));
-    } else if (action !== 'dismiss') return httpError(reply, 400, 'Unknown action');
+      snoozeReminder(req.user.id, kind === 'task' ? `task:${Number(a)}` : `event:${Number(a)}:${Number(b) || 0}`, snoozeUntil(req.user.id, kind, action));
+    } else if (!['dismiss', 'join'].includes(action)) return httpError(reply, 400, 'Unknown action');
     await closeNotifications(req.user.id, [tag]);
     return { ok: true };
   });

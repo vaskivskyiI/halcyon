@@ -38,6 +38,7 @@ public static class Icons
             "calendar" => (Color.FromArgb(0x2d, 0xd4, 0xbf), Color.FromArgb(0x0d, 0x94, 0x88)),
             "task" => (Color.FromArgb(0x4a, 0xde, 0x80), Color.FromArgb(0x16, 0xa3, 0x4a)),
             "other" => (Color.FromArgb(0xa7, 0x8b, 0xfa), Color.FromArgb(0x7c, 0x3a, 0xed)),
+            "important" => (Color.FromArgb(0xfb, 0x92, 0x3c), Color.FromArgb(0xdc, 0x26, 0x26)), // the envelope in red-orange
             _ => (Color.FromArgb(0x38, 0xbd, 0xf8), Color.FromArgb(0x25, 0x63, 0xeb)),
         };
         var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
@@ -85,6 +86,13 @@ public static class Icons
                 {
                     flap.AddArc(12, 16, 8, 8, 180, 90); flap.AddLine(16, 16, 48, 16); flap.AddArc(44, 16, 8, 8, 270, 90); flap.AddLine(52, 20, 32, 34); flap.CloseFigure();
                     g.FillPath(soft, flap);
+                }
+                if (kind == "important") // and an exclamation badge, as the importance has no words in the toast
+                {
+                    g.FillEllipse(Brushes.White, 40, 4, 20, 20);
+                    using var red = new SolidBrush(to);
+                    g.FillRectangle(red, 48.5f, 8, 3, 8.5f);
+                    g.FillEllipse(red, 48.5f, 18, 3, 3);
                 }
                 break;
         }
