@@ -1,4 +1,5 @@
 import { eventsLinkedTo } from '../calendar/event-links.js';
+import { taskLinks, addTaskLink, removeTaskLink, mailCounts } from '../calendar/task-links.js';
 import { get, all, run, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
@@ -153,6 +154,8 @@ export default async function taskRoutes(app) {
     // The events a task was added to (calendar/event-links.js).
     const linked = eventsLinkedTo(req.user.id, 'task', own.map((t) => t.id));
     for (const t of own) if (linked.has(t.id)) t.events = linked.get(t.id);
+    const mails = mailCounts(req.user.id, own.map((t) => t.id));
+    for (const t of own) if (mails.has(t.id)) t.mails = mails.get(t.id);
     if (listId) return own; // one list: asked of its owner
     return withShared(req, own, (uid) => { ensureTaskLists(uid); return tasks(uid, null); },
       (a, b) => a.done - b.done || (a.due == null) - (b.due == null) || (a.due || 0) - (b.due || 0) || b.priority - a.priority || b.id - a.id);
@@ -220,6 +223,14 @@ export default async function taskRoutes(app) {
     pushList(listId);
     return { ...out(one(t.id)), ...(completed ? { completedCopy: out(one(completed)) } : {}) };
   });
+
+  // Emails added to the task, and the events it was added to (calendar/task-links.js).
+  const linkCall = (fn) => async (req, reply) => {
+    try { const r = fn(req); notify(req.user.id, 'tasks:changed', {}); return r; } catch (e) { return httpError(reply, e.statusCode || 400, e.message); }
+  };
+  app.get('/api/tasks/:id/links', async (req, reply) => { try { return taskLinks(req.user.id, req.params.id); } catch (e) { return httpError(reply, e.statusCode || 400, e.message); } });
+  app.post('/api/tasks/:id/links', linkCall((req) => addTaskLink(req.user.id, req.params.id, req.body?.kind, req.body?.id)));
+  app.delete('/api/tasks/:id/links/:kind/:refId', linkCall((req) => removeTaskLink(req.user.id, req.params.id, req.params.kind, req.params.refId)));
 
   app.delete('/api/tasks/:id', async (req, reply) => {
     const t = one(req.params.id);

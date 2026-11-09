@@ -33,7 +33,7 @@ before(async () => {
   await api('POST', '/api/auth/setup', { email: 'me@example.org', name: 'Me', password: 'password123' });
   uid = db.prepare('SELECT id FROM users').get().id;
   account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(db.prepare("INSERT INTO accounts (user_id, email, sync_enabled, created_at) VALUES (?, 'me@example.org', 0, ?)").run(uid, Date.now()).lastInsertRowid);
-  folder = db.prepare('SELECT * FROM folders WHERE id = ?').get(db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'INBOX', 'INBOX', '\Inbox')").run(account.id).lastInsertRowid);
+  folder = db.prepare('SELECT * FROM folders WHERE id = ?').get(db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, 'INBOX', 'INBOX', '\\Inbox')").run(account.id).lastInsertRowid);
 });
 after(async () => { await app?.close(); setTimeout(() => process.exit(0), 50).unref(); });
 
@@ -73,4 +73,30 @@ test('only one\'s own events, mail and tasks can be linked', async () => {
   await assert.rejects(() => api('POST', `/api/events/${e.id}/links`, { kind: 'mail', id: 999999 }), (x) => x.status === 404);
   await assert.rejects(() => api('POST', '/api/events/999999/links', { kind: 'task', id: 1 }), (x) => x.status === 404);
   await assert.rejects(() => api('POST', `/api/events/${e.id}/links`, { kind: 'contact', id: 1 }), (x) => x.status === 400);
+});
+
+test('an email added to a task is listed with the task, counted in the task list and shown with the email', async () => {
+  const t = await api('POST', '/api/tasks', { title: 'Renew the contract' });
+  const mid = await arrive('Contract renewal — new terms');
+  const links = await api('POST', `/api/tasks/${t.id}/links`, { kind: 'mail', id: mid });
+  await api('POST', `/api/tasks/${t.id}/links`, { kind: 'mail', id: mid });
+  assert.deepEqual(links.mail.map((m) => m.id), [mid]);
+  assert.equal((await api('GET', '/api/tasks')).find((x) => x.id === t.id).mails, 1);
+  const m = await api('GET', `/api/messages/${mid}`);
+  assert.deepEqual(m.related.tasks.map((x) => [x.title, x.linked]), [['Renew the contract', true]]);
+  await assert.rejects(() => api('POST', `/api/tasks/${t.id}/links`, { kind: 'mail', id: 999999 }), (x) => x.status === 404);
+  assert.equal((await api('DELETE', `/api/tasks/${t.id}/links/mail/${mid}`)).mail.length, 0);
+});
+
+test('the offline pack holds the newest mail with bodies, the tasks and the events around now', async () => {
+  const mid = await arrive('Kept for offline');
+  const start = Date.now() + 3 * 864e5;
+  await api('POST', '/api/events', { title: 'Soon', start, end: start + 3600e3 });
+  await api('POST', '/api/events', { title: 'Far away', start: start + 200 * 864e5, end: start + 200 * 864e5 + 3600e3 });
+  const p = await api('GET', '/api/offline/pack');
+  assert.ok(p.list.items.some((m) => m.id === mid));
+  assert.equal(p.bodies[mid].subject, 'Kept for offline');
+  assert.ok(p.tasks.some((t) => t.title === 'Renew the contract'));
+  assert.ok(p.events.some((e) => e.title === 'Soon'));
+  assert.ok(!p.events.some((e) => e.title === 'Far away'));
 });

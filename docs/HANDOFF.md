@@ -1210,3 +1210,14 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   title words first; search). `GET|POST /api/events/:id/links`, `DELETE /api/events/:id/links/:kind/:refId`. The event
   editor lists them (`EventLinks`, with "Add a task for this event"); the reader shows "Added to event" (`related.events`
   with `linked`), tasks carry `events` (round90).
+- Add to a task (`calendar/task-links.js`, table `task_links`, migration 62, by task UID else `id:<id>`): Reader → More →
+  Add to a task… (`TaskPicker`); the task editor lists the emails and events (`TaskLinks`); tasks carry `mails` (count);
+  the reader shows "Added to task". `GET|POST /api/tasks/:id/links`, `DELETE /api/tasks/:id/links/mail/:refId`.
+- Offline: `GET /api/offline/pack` (routes/offline.js: unified inbox list of 200, bodies of the newest 40, tasks, events
+  −14 d…+42 d), fetched by the app every 15 min (push.js); sw.js `fromPack` answers `/api/messages`, `/api/messages/:id`,
+  `/api/threads/:tid`, `/api/tasks`, `/api/events` from it when offline with no exact copy. Android: a main-frame load
+  error retries once from the WebView cache (`LOAD_CACHE_ELSE_NETWORK`); a network that comes back refreshes the app.
+- Android share menu (2.0.4): aliases ShareMail ("Send by email", any type, multiple), ShareTask, ShareEvent (text) →
+  `ShareActivity` copies the share into cache (content: URIs of other apps only) → `#/share/<kind>/<id>`; web
+  `share.jsx` reads it via the bridge (`shareData`, `shareFile`): composer with attachments, a new task, or an event
+  (existing: appended to its description; or a new one).

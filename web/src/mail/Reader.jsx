@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
-  CalendarPlus, CalendarClock, CheckSquare, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
+  CalendarPlus, CalendarClock, CheckSquare, ListChecks, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
   ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight, Copy, Search,
 } from 'lucide-react';
 import { api, stream, onEvent } from '../api.js';
@@ -15,6 +15,7 @@ import { openComposer, replyPayload, Composer } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
 import { EventPicker } from '../calendar/EventPicker.jsx';
+import { TaskPicker } from '../tasks/TaskPicker.jsx';
 import PersonProfile from '../components/PersonProfile.jsx';
 import InkwellNotes from '../components/InkwellNotes.jsx';
 import { loadFolders, setSpace } from '../data.js';
@@ -63,6 +64,7 @@ export default function Reader({ id, view, replyNow = false }) {
   const [expanded, setExpanded] = useState(new Set());
   const [eventDraft, setEventDraft] = useState(null);
   const [pickEvent, setPickEvent] = useState(null);
+  const [pickTask, setPickTask] = useState(null);
   const [aiWorking, setAiWorking] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -447,6 +449,7 @@ export default function Reader({ id, view, replyNow = false }) {
     { label: 'Create event with AI', icon: CalendarPlus, onClick: () => addEvent() },
     { label: 'Add to an event…', icon: CalendarClock, onClick: () => setPickEvent({ kind: 'mail', id: latest.id, subject: latest.subject, people: [latest.from?.address, ...(latest.to || []).map((a) => a.address), ...(latest.cc || []).map((a) => a.address)].filter(Boolean) }) },
     { label: 'Create task', icon: CheckSquare, onClick: () => createTasks() },
+    { label: 'Add to a task…', icon: ListChecks, onClick: () => setPickTask({ id: latest.id, subject: latest.subject }) },
     { label: 'Save sender to contacts', icon: UserPlus, onClick: saveSender },
     { label: 'Translate', icon: Languages, onClick: () => translate(latest) },
     target.listUnsubscribe && { label: 'Unsubscribe', icon: BellOff, onClick: unsubscribe },
@@ -575,6 +578,7 @@ export default function Reader({ id, view, replyNow = false }) {
         {!isDraftMsg(latest) && <QuickReply latest={latest} onSent={() => load()} hasDraft={!!ins?.draftReply} />}
       </div>
       {menuNode}
+      {pickTask && <TaskPicker what={pickTask} onClose={() => setPickTask(null)} onDone={() => load(allowImages, true)} />}
       {pickEvent && <EventPicker what={pickEvent} onClose={() => setPickEvent(null)} onDone={() => load(allowImages, true)} />}
       {eventDraft && <EventEditor initial={eventDraft} onClose={() => setEventDraft(null)} onSaved={() => { setEventDraft(null); toast('Event added to calendar', { action: { label: 'Open', onClick: () => navigate('#/calendar') } }); }} />}
     </section>
@@ -802,8 +806,8 @@ function TaskRows({ tasks, onTask, icon }) {
   const row = (t) => (
     <div key={`t${t.id}`} className={`related-item ${t.done ? 'done' : ''}`}>
       <input type="checkbox" checked={t.done} onChange={() => onTask(t)} title={t.done ? 'Mark as not done' : 'Mark as done'} />
-      {icon}<span className="grow truncate"><b>Task{t.done ? ' (done)' : ''}:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
-      <a href="#/tasks" className="small">Tasks</a>
+      {icon}<span className="grow truncate"><b>{t.linked ? 'Added to task' : 'Task'}{t.done ? ' (done)' : ''}:</b> {t.title}{t.due ? <span className="faint"> · due {when(t.due)}</span> : ''}</span>
+      <a href={`#/tasks/${t.id}`} className="small">Open</a>
     </div>);
   return <>
     {tasks.filter((t) => !t.done).map(row)}

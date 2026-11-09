@@ -1,3 +1,4 @@
+import { tasksLinkedTo } from '../calendar/task-links.js';
 import { db, get, all, run, json, now, update, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { ids, httpError } from './util.js';
@@ -409,7 +410,9 @@ export default async function mailRoutes(app) {
     if (!msgIds.length) return { tasks: [], events: [], drafts: [] };
     const inList = msgIds.map(Number).join(',');
     return {
-      tasks: all(`SELECT id, title, due, done, source_message_id AS messageId FROM tasks WHERE user_id = ? AND source_message_id IN (${inList}) ORDER BY done, due`, userId),
+      // Made from these messages, or that they were added to ("Add to a task"); each task once.
+      tasks: [...all(`SELECT id, title, due, done, source_message_id AS messageId FROM tasks WHERE user_id = ? AND source_message_id IN (${inList}) ORDER BY done, due`, userId),
+        ...tasksLinkedTo(userId, msgIds).map((t) => ({ ...t, linked: true }))].filter((t, i, l) => l.findIndex((x) => x.id === t.id) === i),
       // Made from these messages, or that they were added to ("Add to event"); each event once.
       events: all(`SELECT e.id, e.uid, e.title, e.start, e.end, e.all_day AS allDay, e.location, e.source_message_id AS messageId, e.source_message_id IN (${inList}) AS made
         FROM events e JOIN calendars c ON c.id = e.calendar_id

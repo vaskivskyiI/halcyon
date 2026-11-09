@@ -23,6 +23,10 @@
     <string name="sc_contacts">Contacts</string>
     <string name="sc_compose">New message</string>
     <string name="sc_compose_short">Write</string>
+    <string name="share_mail">Send by email</string>
+    <string name="share_task">Add to task</string>
+    <string name="share_event">Add to event</string>
+    <string name="share_failed">Nothing that Halcyon can use was shared.</string>
     <string name="saved_to">Saved to Downloads: %1$s</string>
     <string name="download_failed">Download failed: %1$s</string>
     <string name="no_app">No app on this phone opens %1$s</string>

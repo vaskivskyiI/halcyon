@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- The app's own connection to the server (LiveService), started again after a restart of the phone. -->
@@ -56,6 +57,52 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Android's share menu: "Send by email", "Add to task", "Add to event" (ShareActivity reads which alias). -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity-alias
+            android:name=".ShareMail"
+            android:targetActivity=".ShareActivity"
+            android:exported="true"
+            android:label="@string/share_mail"
+            android:icon="@drawable/sc_compose">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".ShareTask"
+            android:targetActivity=".ShareActivity"
+            android:exported="true"
+            android:label="@string/share_task"
+            android:icon="@drawable/sc_tasks">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".ShareEvent"
+            android:targetActivity=".ShareActivity"
+            android:exported="true"
+            android:label="@string/share_event"
+            android:icon="@drawable/sc_calendar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
+        </activity-alias>
 
         <activity
             android:name=".ConnectActivity"

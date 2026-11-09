@@ -652,4 +652,12 @@ export const migrations = [
   );
   CREATE INDEX idx_event_links_ref ON event_links(user_id, kind, ref_id);
   `,
+  // 62: emails the user added to a task (calendar/task-links.js), by the task's UID (else 'id:<id>').
+  `
+  CREATE TABLE task_links (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, task_uid TEXT NOT NULL,
+    kind TEXT NOT NULL, ref_id INTEGER NOT NULL, created_at INTEGER, UNIQUE(user_id, task_uid, kind, ref_id)
+  );
+  CREATE INDEX idx_task_links_ref ON task_links(user_id, kind, ref_id);
+  `,
 ];

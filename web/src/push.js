@@ -38,6 +38,11 @@ export async function registerWorker() {
   if (android()) androidStart().catch(() => {});
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
   try { reg = await navigator.serviceWorker.register('./sw.js', { scope: './' }); } catch { reg = null; }
+  // What to show without a connection (server routes/offline.js; sw.js falls back to it): fetched a while after the
+  // start, then every 15 minutes the app is in view.
+  let packAt = 0;
+  const pack = () => { if (!navigator.serviceWorker.controller || document.hidden || Date.now() - packAt < 15 * 60e3) return; packAt = Date.now(); api.get('/api/offline/pack').catch(() => {}); };
+  setTimeout(pack, 20e3); setInterval(pack, 60e3);
   // A tapped notification opens its place in the running app.
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data?.type === 'halcyon:open' && e.data.url) navigate(e.data.url);

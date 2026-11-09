@@ -78,6 +78,43 @@ async function networkFirst(e, req, key, cacheName, fallback) {
   return copy;
 }
 
+// Offline with no copy of this exact request: the offline pack (GET /api/offline/pack, fetched by the app now and then)
+// stands in for the main lists — the newest mail, the bodies of the newest, the tasks, the events around now.
+async function fromPack(req, url, path) {
+  if (path === '/api/offline/pack') return null;
+  const hit = await (await caches.open(DATA)).match(keyOf(req, new URL('/api/offline/pack', url)));
+  if (!hit) return null;
+  let p;
+  try { p = await hit.json(); } catch { return null; }
+  const answer = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json', 'x-halcyon-offline': '1', 'x-halcyon-cached-at': String(p.at || 0) } });
+  const q = url.searchParams;
+  const bodies = Object.values(p.bodies || {});
+  let m;
+  if (path === '/api/messages') {
+    if (!p.list || q.get('q') || q.get('before') || Number(q.get('offset') || 0)) return answer({ ...(p.list || {}), items: [] });
+    const view = q.get('view') || 'unified';
+    let items = p.list.items || [];
+    if (view === 'folder') items = items.filter((x) => String(x.folderId ?? x.folder?.id) === q.get('folderId'));
+    else if (view === 'flagged') items = items.filter((x) => x.isFlagged);
+    else if (!['unified', 'inbox', 'focused', 'other'].includes(view)) items = [];
+    if (q.get('filter') === 'unread') items = items.filter((x) => !x.isRead);
+    return answer({ ...p.list, items });
+  }
+  if ((m = path.match(/^\/api\/messages\/(\d+)$/))) return p.bodies?.[m[1]] ? answer(p.bodies[m[1]]) : null;
+  if ((m = path.match(/^\/api\/threads\/([^/]+)\/muted$/))) return answer({ muted: false });
+  if ((m = path.match(/^\/api\/threads\/([^/]+)$/))) {
+    const tid = decodeURIComponent(m[1]);
+    const msgs = bodies.filter((x) => x.threadId === tid).sort((a, b) => a.date - b.date);
+    return msgs.length ? answer({ messages: msgs, summary: null, related: msgs[msgs.length - 1].related }) : null;
+  }
+  if (path === '/api/tasks' && !q.get('listId')) return answer(p.tasks || []);
+  if (path === '/api/events') {
+    const from = Number(q.get('from')) || 0, to = Number(q.get('to')) || 9e15;
+    return answer((p.events || []).filter((x) => x.start < to && (x.end || x.start) >= from));
+  }
+  return null;
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   const url = new URL(req.url);
@@ -94,7 +131,7 @@ self.addEventListener('fetch', (e) => {
   if (api) {
     const path = url.pathname.replace(/^.*?(\/api\/)/, '$1');
     if (SKIP.test(path) || /[?&](wait|refresh)=1/.test(url.search) || /attachments\/\d+/.test(path) && url.searchParams.get('inline') !== '1') return;
-    e.respondWith(networkFirst(e, req, keyOf(req, url), DATA, () => offline('read')));
+    e.respondWith(networkFirst(e, req, keyOf(req, url), DATA, async () => (await fromPack(req, url, path)) || offline('read')));
     return;
   }
   // The app: its page checked first (new versions arrive), its hashed files from the copy.

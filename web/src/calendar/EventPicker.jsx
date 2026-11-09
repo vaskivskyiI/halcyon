@@ -12,7 +12,7 @@ const words = (s) => String(s || '').toLowerCase().replace(/^(re|fw|fwd|aw|odg|s
  * Events around now are listed, those with the same people or words in the title first; or searched for.
  * what: { kind: 'mail' | 'task', id, subject?, people?: [addresses] }.
  */
-export function EventPicker({ what, onClose, onDone }) {
+export function EventPicker({ what, onClose, onDone, onPick, title, footer }) {
   const [q, setQ] = useState('');
   const [list, setList] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -41,14 +41,15 @@ export function EventPicker({ what, onClose, onDone }) {
   const pick = async (e) => {
     setBusy(true);
     try {
-      await api.post(`/api/events/${e.seriesId || e.id}/links`, { kind: what.kind, id: what.id });
+      if (onPick) await onPick(e);
+      else await api.post(`/api/events/${e.seriesId || e.id}/links`, { kind: what.kind, id: what.id });
       toast(`Added to “${e.title || 'the event'}”`, { action: { label: 'Open', onClick: () => navigate(`#/calendar/event/${e.seriesId || e.id}/${e.start}`) } });
       onDone?.(e);
       onClose();
     } catch (err) { toastError(err); setBusy(false); }
   };
   return (
-    <Modal title={what.kind === 'task' ? 'Add the task to an event' : 'Add the email to an event'} onClose={onClose}>
+    <Modal title={title || (what.kind === 'task' ? 'Add the task to an event' : 'Add the email to an event')} onClose={onClose} footer={footer}>
       <div className="row"><Search size={15} className="faint" /><input className="input grow" autoFocus placeholder="Search events" value={q} onChange={(e) => setQ(e.target.value)} /></div>
       <div className="event-pick">
         {list === null ? <div className="small faint"><Spinner size={13} /> Loading…</div>

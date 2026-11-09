@@ -5,6 +5,7 @@ import './back.js';
 import { pushIsOn } from './push.js';
 import { loadQuickSteps } from './mail/extras.js';
 import { store } from './store.js';
+import Share from './share.jsx';
 import { useRoute } from './router.js';
 import { loadMe, loadFolders, loadAccounts, loadLabels, loadProviders, loadInkwell, saveSettings, loadSpaces, setSpace, loadShared, enterShared, setSharedShown, inMyMail, applyMergedSpaces } from './data.js';
 import { Toasts, useMenu, Spinner } from './components/common.jsx';
@@ -153,6 +154,15 @@ function Shell() {
     navigate('#/mail/unified');
   }, [section]);
 
+  // #/share/<mail|task|event>/<id>: shared from another Android app (share.jsx).
+  const [share, setShare] = useState(null);
+  useEffect(() => {
+    if (section !== 'share') return;
+    const [kind, id] = route.slice(1);
+    setShare({ kind, id });
+    navigate(kind === 'task' ? '#/tasks' : kind === 'event' ? '#/calendar' : '#/mail/unified');
+  }, [section]);
+
   useEffect(() => {
     // No mail account yet: set one up — unless there is a shared space to work in.
     if (accountsLoaded && !accounts.some((a) => !a.connection) && section === 'mail' && !(store.get().shared || []).length) navigate('#/settings/accounts');
@@ -271,6 +281,7 @@ function Shell() {
       {menuNode}
       <ComposerDock />
       <Toasts />
+      {share && <Share {...share} onClose={() => setShare(null)} />}
       {taskDialog && <TaskDialog messageId={taskDialog} onClose={() => store.set({ taskDialog: null })} />}
     </div>
   );

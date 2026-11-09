@@ -11,6 +11,7 @@ import authRoutes, { userFromRequest, sessionFromRequest, readOnlyBlocks } from 
 import { recordTiming } from './util/metrics.js';
 import { recordRequest, requestStart, timeHandler } from './util/activity.js';
 import diagnosticsRoutes from './routes/diagnostics.js';
+import offlineRoutes from './routes/offline.js';
 import threadRoutes from './routes/threads.js';
 import senderRoutes from './routes/senders.js';
 import sharedRoutes from './routes/shared.js';
@@ -127,6 +128,7 @@ export async function buildServer({ background = true } = {}) {
 
   await app.register(authRoutes);
   await app.register(settingsRoutes);
+  await app.register(offlineRoutes);
   await app.register(integrationRoutes);
   await app.register(spaceRoutes);
   await app.register(diagnosticsRoutes);

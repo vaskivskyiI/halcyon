@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
@@ -64,6 +66,11 @@ class MainActivity : ComponentActivity() {
     @Volatile private var pageOrigin = ""
     private var files: ValueCallback<Array<Uri>>? = null
     private var permissionDone: ((Boolean) -> Unit)? = null
+    // No connection: the page is loaded once more from what the WebView keeps (the app itself; its data then comes from
+    // the service worker's copy and the offline pack), and the app is loaded again when the network is back.
+    private var fromCache = false
+    private var unreachable = false
+    private var netWatch: ConnectivityManager.NetworkCallback? = null
 
     private val pickFiles = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         files?.onReceiveValue(picked(r))
@@ -131,6 +138,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        netWatch?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
         if (::web.isInitialized) web.destroy()
         super.onDestroy()
     }
@@ -148,6 +156,9 @@ class MainActivity : ComponentActivity() {
 
     private fun load(t: Target?) {
         ready = false
+        fromCache = false
+        unreachable = false
+        web.settings.cacheMode = WebSettings.LOAD_DEFAULT
         last = t
         pending = t?.takeIf { it.shared.isNotEmpty() }
         web.loadUrl("$server/${t?.route.orEmpty()}")
@@ -192,6 +203,7 @@ class MainActivity : ComponentActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 CookieManager.getInstance().flush()
+                if (!url.startsWith("data:")) web.settings.cacheMode = WebSettings.LOAD_DEFAULT
             }
 
             @SuppressLint("WebViewClientOnReceivedSslError")
@@ -203,7 +215,14 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) problem("$server cannot be reached: ${error.description}")
+                if (!request.isForMainFrame) return
+                unreachable = true
+                watchNetwork()
+                if (!fromCache) {
+                    fromCache = true
+                    web.settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+                    web.loadUrl("$server/${last?.route.orEmpty()}")
+                } else problem("$server cannot be reached: ${error.description}")
             }
         }
 
@@ -286,6 +305,28 @@ class MainActivity : ComponentActivity() {
             <button onclick="halcyonAndroid.retry()" style="height:40px;padding:0 18px;border:0;border-radius:8px;background:#2563EB;color:#fff;font-weight:600">Try again</button>
             <button onclick="halcyonAndroid.changeServer()" style="height:40px;padding:0 14px;border:0;background:none;color:#2563EB;font-weight:600">Change server</button>
             </body>""", "text/html", "utf-8", null)
+    }
+
+    /** Once the network is back after the server could not be reached: the app is loaded again (fresh). */
+    private fun watchNetwork() {
+        if (netWatch != null) return
+        val cm = getSystemService(ConnectivityManager::class.java)
+        // Only a network that comes back counts (registering reports the current one at once: the server may be
+        // what is down).
+        var down = cm.activeNetwork == null
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) { down = true }
+            override fun onAvailable(network: Network) {
+                if (!down) return
+                down = false
+                runOnUiThread {
+                    if (!unreachable || isFinishing) return@runOnUiThread
+                    // The app running from its copy refreshes itself (what is being written stays); an error page is replaced.
+                    if (ready) { unreachable = false; web.evaluateJavascript("window.dispatchEvent(new Event('halcyon:refresh'))", null) } else load(last)
+                }
+            }
+        }
+        if (runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess) netWatch = cb
     }
 
     private val deviceName get() = Server.deviceName
@@ -383,6 +424,13 @@ class MainActivity : ComponentActivity() {
         fun saveFile(base64: String, name: String, mime: String) {
             if (trusted()) downloads.saveBytes(Base64.decode(base64, Base64.DEFAULT), name, mime)
         }
+
+        /** What was shared to Halcyon from another app (ShareActivity), for web/src/share.jsx. */
+        @JavascriptInterface
+        fun shareData(id: String): String = if (trusted()) Shared.data(this@MainActivity, id) else ""
+
+        @JavascriptInterface
+        fun shareFile(id: String, n: Int): String = if (trusted()) Shared.file(this@MainActivity, id, n) else ""
 
         @JavascriptInterface
         fun retry() = runOnUiThread { load(last) }
