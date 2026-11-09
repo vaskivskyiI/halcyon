@@ -13,6 +13,7 @@ import { scope, reqSpace, spaceMap, inIds, cleanSpace } from '../spaces.js';
 import { linkEvent, unlinkEvent } from '../calendar/linked.js';
 import { queueMemory } from '../ai/queue.js';
 import { originOf } from './spaces.js';
+import { eventLinks, addEventLink, removeEventLink } from '../calendar/event-links.js';
 
 const calOut = (c, spaces) => ({ id: c.id, name: c.name, color: c.color, source: c.source, accountId: c.account_id, sourceId: c.source_id || null, enabled: !!c.enabled, isDefault: !!c.is_default, readonly: !!c.readonly, url: c.source === 'subscription' ? c.url : undefined,
   space: spaces?.calendars.get(c.id) ?? '', ownSpace: c.space, origin: originOf(c), synced: c.source === 'caldav', hidden: !!c.hidden, events: c.events, syncError: c.sync_error || null, lastSyncAt: c.last_sync_at || null, showAs: c.show_as || 'busy' });
@@ -258,6 +259,14 @@ export default async function calendarRoutes(app) {
     const e = repo.eventOf(req.user.id, req.params.id);
     return e ? repo.serializeEvent(e) : httpError(reply, 404, 'Not found');
   });
+
+  // Emails and tasks added to the event (calendar/event-links.js).
+  const linkCall = (fn) => async (req, reply) => {
+    try { const r = fn(req); notify(req.user.id, 'calendar:changed', {}); return r; } catch (e) { return httpError(reply, e.statusCode || 400, e.message); }
+  };
+  app.get('/api/events/:id/links', async (req, reply) => { try { return eventLinks(req.user.id, req.params.id); } catch (e) { return httpError(reply, e.statusCode || 400, e.message); } });
+  app.post('/api/events/:id/links', linkCall((req) => addEventLink(req.user.id, req.params.id, req.body?.kind, req.body?.id)));
+  app.delete('/api/events/:id/links/:kind/:refId', linkCall((req) => removeEventLink(req.user.id, req.params.id, req.params.kind, req.params.refId)));
 
   app.post('/api/events', async (req, reply) => {
     try {

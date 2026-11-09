@@ -1,3 +1,4 @@
+import { eventsLinkedTo } from '../calendar/event-links.js';
 import { get, all, run, now, json, tx } from '../db/index.js';
 import { requireUser } from '../auth.js';
 import { httpError } from './util.js';
@@ -149,6 +150,9 @@ export default async function taskRoutes(app) {
       WHERE t.user_id = ? AND COALESCE(l.hidden, 0) = 0 AND ${inIds('t.list_id', ids)} ${listId ? 'AND t.list_id = ?' : ''} ${showDone ? '' : 'AND (t.done = 0 OR t.completed_at > ?)'}
       ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, t.id DESC`, uid, ...(listId ? [listId] : []), ...(showDone ? [] : [now() - 864e5])).map(out);
     const own = tasks(req.user.id, sc?.taskListIds);
+    // The events a task was added to (calendar/event-links.js).
+    const linked = eventsLinkedTo(req.user.id, 'task', own.map((t) => t.id));
+    for (const t of own) if (linked.has(t.id)) t.events = linked.get(t.id);
     if (listId) return own; // one list: asked of its owner
     return withShared(req, own, (uid) => { ensureTaskLists(uid); return tasks(uid, null); },
       (a, b) => a.done - b.done || (a.due == null) - (b.due == null) || (a.due || 0) - (b.due || 0) || b.priority - a.priority || b.id - a.id);

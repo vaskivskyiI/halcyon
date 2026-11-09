@@ -644,4 +644,12 @@ export const migrations = [
   );
   CREATE INDEX idx_reminder_snoozes_due ON reminder_snoozes(due_at);
   `,
+  // 61: emails and tasks the user added to an event (calendar/event-links.js), by the event's UID.
+  `
+  CREATE TABLE event_links (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, event_uid TEXT NOT NULL,
+    kind TEXT NOT NULL, ref_id INTEGER NOT NULL, created_at INTEGER, UNIQUE(user_id, event_uid, kind, ref_id)
+  );
+  CREATE INDEX idx_event_links_ref ON event_links(user_id, kind, ref_id);
+  `,
 ];

@@ -229,6 +229,11 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   };
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [draftId, setDraftId] = useState(init.draftId || null);
+  // A compose window says which draft it holds, so the conversation does not show that draft a second time.
+  useEffect(() => { if (!inline && draftId) patchComposer(id, { draftId }); }, [draftId]);
+  // The quoted message of a draft in its conversation is folded (it is right above); shown on demand.
+  const [quoteFolded, setQuoteFolded] = useState(inline);
+  const [hasQuote, setHasQuote] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [onServer, setOnServer] = useState(!!init.onServer);
   const [closing, setClosing] = useState(false);
@@ -255,6 +260,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   useEffect(() => {
     const html = init.html != null ? init.html : `${init.prefixHtml || '<p><br></p>'}${signature(account)}${init.quoteHtml || ''}`;
     editor.current.innerHTML = html;
+    setHasQuote(!!editor.current.querySelector('[data-quote]'));
     api.get('/api/templates').then(setTemplates).catch(() => {});
     if (init.aiIntent !== undefined) runAiReply(init.aiIntent);
     else if (!inline && (!isReply || to.length)) placeCaret();
@@ -534,6 +540,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
         <div className="composer-head">
           <PenLine size={14} /><span className="grow truncate">Draft</span>
           {dirty ? <span className="small faint">Unsaved changes…</span> : draftId ? <span className="small faint">{onServer ? 'Saved · Drafts folder' : 'Saved'}</span> : null}
+          <button className="btn primary sm" disabled={busySend} onClick={() => send()} title="Send (Ctrl+Enter)">{busySend ? <Spinner size={13} /> : <Send size={13} />} Send</button>
         </div>
       ) : (
       <div className="composer-head" onClick={() => patchComposer(id, { minimized: true })}>
@@ -598,13 +605,15 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
         ])}><Wand2 size={14} /> Rewrite <ChevronDown size={12} /></button>}
         {settings.ai.enabled && aiSteps > 0 && !aiBusy && <button className="btn sm" title="Undo the last AI change" onClick={undoAi}><Undo2 size={13} /> Undo AI</button>}
       </div>
-      <div ref={editor} className={`editor ${plain ? 'plain-text' : ''}`} contentEditable suppressContentEditableWarning onInput={() => { setDirty(true); scheduleSave(); }}
+      <div ref={editor} className={`editor ${plain ? 'plain-text' : ''} ${hasQuote && quoteFolded ? 'quote-folded' : ''}`} contentEditable suppressContentEditableWarning onInput={() => { setDirty(true); scheduleSave(); }}
         onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') autoLink(); }}
         onPaste={(e) => {
           if (e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); return; }
           // Plain text takes only the text of what is pasted.
           if (plain) { e.preventDefault(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); }
         }} />
+      {hasQuote && <button className="quote-toggle" title={quoteFolded ? 'Show the quoted message' : 'Hide the quoted message'} onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setQuoteFolded(!quoteFolded)}>{quoteFolded ? '•••' : 'Hide quoted text'}</button>}
       {attachments.length > 0 && <div className="att-list">{attachments.map((a, i) => (
         <span key={i} className="chip"><Paperclip size={12} />
           <a href="#" className="att-dl" title="Open / download" onClick={(e) => { e.preventDefault(); openAttachment(a); }}>{a.filename}</a> {a.size || a.contentBase64 ? `· ${fmtSize(a.size || Math.round((a.contentBase64.length * 3) / 4))}` : ''}

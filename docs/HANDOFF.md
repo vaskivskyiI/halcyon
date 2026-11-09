@@ -1198,3 +1198,15 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   `url`), Snooze 5 / 15 min, Dismiss. Tasks: Mark done, Snooze 1 h, Tomorrow (08:00). Reply has `input` (Android answers in
   the notification: `quickReply` sends to Reply-To/From, quoting, with the undo delay, and marks read) and `url`
   `#/mail/<view>/<id>/reply` (Windows, browsers: opens the composer; Reader `replyNow`).
+
+- Drafts in a conversation (Reader): one editor per draft, never a second copy — the Drafts-folder copy of any Halcyon
+  draft (also the quick reply's) is hidden, and a draft open in a compose window (`composers[].draftId`) is not shown
+  inline. Editors keep a stable key (`DraftEditor`, `editorKeys`/`editorOrder`): a Drafts-folder draft adopted on its
+  first save, or its server copy replaced later, does not remount the editor (that took the focus mid-typing, and the
+  keys then went to the list shortcuts). Inline drafts have Send in their header too; the quoted message is folded
+  (`.editor.quote-folded [data-quote]`, the ••• toggle).
+- Add to event (`calendar/event-links.js`, table `event_links`, migration 61, by event UID): mail (Reader → More → Add
+  to an event…) and tasks (task menu) are added to an existing event via `EventPicker` (events around now, same people /
+  title words first; search). `GET|POST /api/events/:id/links`, `DELETE /api/events/:id/links/:kind/:refId`. The event
+  editor lists them (`EventLinks`, with "Add a task for this event"); the reader shows "Added to event" (`related.events`
+  with `linked`), tasks carry `events` (round90).

@@ -188,6 +188,8 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .color-pop .swatches button { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border-strong); cursor: pointer; padding: 0; }
 .color-pop .swatches button:hover { transform: scale(1.15); }
 .color-pop label.btn { position: relative; cursor: pointer; }
+.editor.quote-folded [data-quote] { display: none; }
+.composer .quote-toggle { align-self: flex-start; margin: 0 14px 8px; }
 .editor.plain-text { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
 .editor h1 { font-size: 1.6em; margin: .4em 0; } .editor h2 { font-size: 1.35em; margin: .4em 0; } .editor h3 { font-size: 1.15em; margin: .4em 0; }
 .editor pre { background: var(--panel-2); padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; }
@@ -792,3 +794,8 @@ a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display
   .modal-head .icon-btn { min-width: 44px; min-height: 44px; }
   .home-event .note-link { width: 40px; height: 40px; }
 }
+.event-pick { display: flex; flex-direction: column; max-height: 50vh; overflow: auto; margin-top: 8px; }
+.event-pick-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.event-pick-row:hover { background: var(--panel-2); }
+.event-links { display: flex; flex-direction: column; gap: 4px; }
+.event-links .related-item a { color: inherit; }

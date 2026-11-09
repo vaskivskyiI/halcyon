@@ -14,6 +14,7 @@ import { useDismiss } from '../dismiss.js';
 import { openComposer, replyPayload, Composer } from './Composer.jsx';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
+import { EventPicker } from '../calendar/EventPicker.jsx';
 import PersonProfile from '../components/PersonProfile.jsx';
 import InkwellNotes from '../components/InkwellNotes.jsx';
 import { loadFolders, setSpace } from '../data.js';
@@ -38,6 +39,11 @@ export default function Reader({ id, view, replyNow = false }) {
   const hits = useHits();
   // Ctrl+P in the mail view (MailView) prints the open conversation.
   const printRef = useRef();
+  // Draft editors keep one identity while they are open (see editorKey below); drafts open in a compose window.
+  const editorKeys = useRef(new Map());
+  const editorOrder = useRef(new Map());
+  const serverShown = useRef(new Set());
+  const docked = store.use((s) => s.composers.map((c) => c.draftId || c.init?.draftId).filter(Boolean).join(','));
   useEffect(() => {
     const h = () => printRef.current?.();
     window.addEventListener('halcyon:print', h);
@@ -56,6 +62,7 @@ export default function Reader({ id, view, replyNow = false }) {
   const [allowImages, setAllowImages] = useState(false);
   const [expanded, setExpanded] = useState(new Set());
   const [eventDraft, setEventDraft] = useState(null);
+  const [pickEvent, setPickEvent] = useState(null);
   const [aiWorking, setAiWorking] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -282,8 +289,30 @@ export default function Reader({ id, view, replyNow = false }) {
   // Drafts are shown as editors: Halcyon drafts of this conversation, and drafts in the Drafts folder (also from other
   // mail apps) — one editor per draft (a Halcyon draft's copy in the Drafts folder is not shown twice).
   const latest = [...msgs].reverse().find((m) => !isDraftMsg(m) && m.folder?.specialUse !== '\\Sent') || msgs[msgs.length - 1];
-  const drafts = (thread.related?.drafts || []).filter((d) => !(d.quick && d.inReplyToId === latest.id)); // that one is in the quick reply box
-  const adopted = new Set(drafts.map((d) => d.serverMsgid).filter(Boolean));
+  // A draft's copy in the Drafts folder is never shown besides it — also not the quick reply's, nor one open in a
+  // compose window (that one is edited there, not twice).
+  const related = thread.related?.drafts || [];
+  const adopted = new Set(related.map((d) => d.serverMsgid).filter(Boolean));
+  const inDock = new Set(docked.split(',').filter(Boolean).map(Number));
+  const drafts = related.filter((d) => !(d.quick && d.inReplyToId === latest.id) && !inDock.has(d.id)); // the quick one is in the quick reply box
+  // Each editor keeps its key while it is edited: a draft from the Drafts folder becomes a Halcyon draft on its first
+  // save, and its copy there is replaced later — remounting it then would take the focus (and the caret) away mid-typing.
+  const editorKey = (d) => {
+    if (!editorKeys.current.has(d.id)) {
+      const copy = d.serverMsgid && msgs.find((m) => isDraftMsg(m) && `<${m.messageId}>` === d.serverMsgid && serverShown.current.has(m.id));
+      editorKeys.current.set(d.id, copy ? `m${copy.id}` : `d${d.id}`);
+    }
+    return editorKeys.current.get(d.id);
+  };
+  const editors = [
+    ...drafts.map((d) => ({ key: editorKey(d), d })),
+    ...msgs.filter((m) => isDraftMsg(m) && !adopted.has(`<${m.messageId}>`)).map((m) => ({ key: `m${m.id}`, m })),
+  ];
+  // In the order they first appeared: a moved node would lose the focus too.
+  const order = editorOrder.current;
+  for (const e of editors) if (!order.has(e.key)) order.set(e.key, order.size);
+  editors.sort((a, b) => order.get(a.key) - order.get(b.key));
+  serverShown.current = new Set(editors.filter((e) => e.m).map((e) => e.m.id));
   const target = thread.current;
   const inkMsg = isDraftMsg(target) ? latest : target; // the email a new Inkwell note is about
   const ins = latest.insight || target.insight;
@@ -416,6 +445,7 @@ export default function Reader({ id, view, replyNow = false }) {
 
   const moreMenu = (e) => openMenu(e, [
     { label: 'Create event with AI', icon: CalendarPlus, onClick: () => addEvent() },
+    { label: 'Add to an event…', icon: CalendarClock, onClick: () => setPickEvent({ kind: 'mail', id: latest.id, subject: latest.subject, people: [latest.from?.address, ...(latest.to || []).map((a) => a.address), ...(latest.cc || []).map((a) => a.address)].filter(Boolean) }) },
     { label: 'Create task', icon: CheckSquare, onClick: () => createTasks() },
     { label: 'Save sender to contacts', icon: UserPlus, onClick: saveSender },
     { label: 'Translate', icon: Languages, onClick: () => translate(latest) },
@@ -502,8 +532,8 @@ export default function Reader({ id, view, replyNow = false }) {
             <button className="btn sm" onClick={() => api.post('/api/messages/save-to-server', { ids: msgs.filter((m) => m.notOnServer).map((m) => m.id) }).then((r) => toast(r.queued ? 'Saving on the server…' : 'Nothing to save')).catch(toastError)}>Save on server</button>
           </div>
         )}
-        {/* Tasks and events made from this mail: inside the AI card next to the suggestions; here only without it. */}
-        {!(settings.ai.enabled && !isDraftMsg(latest)) && <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />}
+        {/* Tasks and events of this mail: inside the AI card next to the suggestions; here only without it (or before it has analysed the mail). */}
+        {!(settings.ai.enabled && !isDraftMsg(latest) && ins) && <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />}
 
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
 
@@ -526,7 +556,7 @@ export default function Reader({ id, view, replyNow = false }) {
         {!isDraftMsg(latest) && <InkwellNotes {...inkwell} part="list" />}
 
         {msgs.map((m, i) => {
-          if (isDraftMsg(m)) return adopted.has(`<${m.messageId}>`) ? null : <ServerDraft key={m.id} m={m} onDone={() => load()} />;
+          if (isDraftMsg(m)) return null; // shown as an editor below
           // Long conversations: collapsed messages between the first and the last two fold into one row.
           const foldable = !showAll && msgs.length > 4 && i > 0 && i < msgs.length - 2 && !expanded.has(m.id);
           if (foldable) {
@@ -540,11 +570,12 @@ export default function Reader({ id, view, replyNow = false }) {
             onExtractEvent={async () => { try { setEventDraft(await api.post('/api/ai/extract-event', { messageId: m.id })); } catch (e) { toastError(e); } }} />;
         })}
 
-        {drafts.map((d) => <Composer key={`d${d.id}`} id={`inline-${d.id}`} inline init={{ ...d, draftId: d.id }} onDone={() => load()} />)}
+        {editors.map((e) => <DraftEditor key={e.key} edId={`inline-${e.key}`} d={e.d} m={e.m} onDone={() => load()} />)}
 
         {!isDraftMsg(latest) && <QuickReply latest={latest} onSent={() => load()} hasDraft={!!ins?.draftReply} />}
       </div>
       {menuNode}
+      {pickEvent && <EventPicker what={pickEvent} onClose={() => setPickEvent(null)} onDone={() => load(allowImages, true)} />}
       {eventDraft && <EventEditor initial={eventDraft} onClose={() => setEventDraft(null)} onSaved={() => { setEventDraft(null); toast('Event added to calendar', { action: { label: 'Open', onClick: () => navigate('#/calendar') } }); }} />}
     </section>
   );
@@ -801,8 +832,8 @@ function FollowUp({ ins, related, onTask, onTasks, onEvent, latest, listed, sett
       <TaskRows tasks={tasks} onTask={onTask} icon={<CheckSquare size={14} />} />
       {events.map((e) => (
         <div key={`e${e.id}`} className="related-item">
-          <CalendarPlus size={14} /><span className="grow truncate"><b>In calendar:</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
-          <a href="#/calendar" className="small">Calendar</a>
+          <CalendarPlus size={14} /><span className="grow truncate"><b>{e.linked ? 'Added to event:' : 'In calendar:'}</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
+          <a href={`#/calendar/event/${e.id}/${e.start}`} className="small">Open</a>
         </div>))}
       {items.length > 0 && (
         <div style={{ marginTop: tasks.length || events.length ? 6 : 0 }}>
@@ -881,8 +912,8 @@ function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
       <TaskRows tasks={related.tasks} onTask={onTask} />
       {related.events.map((e) => (
         <div key={`e${e.id}`} className="related-item">
-          <CalendarPlus size={14} /><span className="grow truncate"><b>Event:</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
-          <a href="#/calendar" className="small">Calendar</a>
+          <CalendarPlus size={14} /><span className="grow truncate"><b>{e.linked ? 'Added to event:' : 'Event:'}</b> {e.title} <span className="faint">· {when(e.start, e.allDay)}{e.location ? ` · ${e.location}` : ''}</span></span>
+          <a href={`#/calendar/event/${e.id}/${e.start}`} className="small">Open</a>
         </div>))}
     </div>
   );
@@ -963,13 +994,14 @@ function RecentWith({ data, view }) {
   );
 }
 
-/** A draft from the Drafts folder (possibly written in another mail app), editable in place. */
-function ServerDraft({ m, onDone }) {
-  const [init, setInit] = useState(null);
-  useEffect(() => { api.get(`/api/messages/${m.id}/draft`).then(setInit).catch(() => setInit(false)); }, [m.id]);
+/** A draft as an editor in its conversation: a Halcyon draft (d), or one from the Drafts folder (m, possibly written in
+ *  another mail app). What it opened with stays: later copies of the same draft do not reset it. */
+function DraftEditor({ edId, d, m, onDone }) {
+  const [init, setInit] = useState(d ? { ...d, draftId: d.id } : null);
+  useEffect(() => { if (!init && m) api.get(`/api/messages/${m.id}/draft`).then(setInit).catch(() => setInit(false)); }, []);
   if (init === null) return <div className="card small faint" style={{ marginBottom: 12 }}><Spinner size={13} /> Opening draft…</div>;
   if (!init) return <div className="card small faint" style={{ marginBottom: 12 }}>This draft could not be opened here — it is in the Drafts folder.</div>;
-  return <Composer id={`inline-m${m.id}`} inline init={init} onDone={onDone} />;
+  return <Composer id={edId} inline init={init} onDone={onDone} />;
 }
 
 /**

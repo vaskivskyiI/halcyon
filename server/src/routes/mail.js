@@ -410,8 +410,12 @@ export default async function mailRoutes(app) {
     const inList = msgIds.map(Number).join(',');
     return {
       tasks: all(`SELECT id, title, due, done, source_message_id AS messageId FROM tasks WHERE user_id = ? AND source_message_id IN (${inList}) ORDER BY done, due`, userId),
-      events: all(`SELECT e.id, e.title, e.start, e.end, e.all_day AS allDay, e.location, e.source_message_id AS messageId FROM events e JOIN calendars c ON c.id = e.calendar_id
-        WHERE c.user_id = ? AND e.deleted = 0 AND e.source_message_id IN (${inList}) ORDER BY e.start`, userId).map((e) => ({ ...e, allDay: !!e.allDay })),
+      // Made from these messages, or that they were added to ("Add to event"); each event once.
+      events: all(`SELECT e.id, e.uid, e.title, e.start, e.end, e.all_day AS allDay, e.location, e.source_message_id AS messageId, e.source_message_id IN (${inList}) AS made
+        FROM events e JOIN calendars c ON c.id = e.calendar_id
+        WHERE c.user_id = ? AND e.deleted = 0 AND (e.source_message_id IN (${inList}) OR (e.recurrence_id IS NULL
+          AND e.uid IN (SELECT event_uid FROM event_links WHERE user_id = ? AND kind = 'mail' AND ref_id IN (${inList})))) ORDER BY e.start`, userId, userId)
+        .filter((e, i, l) => l.findIndex((x) => x.uid === e.uid) === i).map(({ uid, made, ...e }) => ({ ...e, allDay: !!e.allDay, linked: !made })),
       // Replies to these messages, and drafts whose copy in the Drafts folder is part of the conversation; in full, so
       // the conversation shows them as editors.
       drafts: all(`SELECT * FROM drafts WHERE user_id = ? AND (in_reply_to IN (${inList})

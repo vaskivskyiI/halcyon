@@ -7,6 +7,7 @@ import { store } from '../store.js';
 import { jump } from '../back.js';
 import LocalDefault from '../components/LocalDefault.jsx';
 import InkwellNotes from '../components/InkwellNotes.jsx';
+import { EventPicker } from '../calendar/EventPicker.jsx';
 import { dueOptions, fmtDue, DueField, RepeatField, ListField, repeatLabel } from './TaskDialog.jsx';
 
 // The list shown (null = all lists of the active space), remembered on this device.
@@ -33,6 +34,7 @@ export default function TasksView({ route = [] }) {
   const [addTo, setAddTo] = useState(null);
   const setListId = (id) => { setListIdState(id); setAddTo(null); try { localStorage.setItem('halcyon.taskList', id || ''); } catch { /* private mode */ } };
   const [editing, setEditing] = useState(null);
+  const [pickEvent, setPickEvent] = useState(null);
   const [open, setOpen] = useState(() => new Set());
   const [openMenu, menuNode] = useMenu();
   // Lists of the active space; a remembered list that is not in it (another space) is left for all lists.
@@ -95,6 +97,7 @@ export default function TasksView({ route = [] }) {
       ...movable(t).map((l) => ({ label: l.name, icon: FolderInput, hint: l.source === 'caldav' ? 'synced' : undefined, onClick: () => patch(t, { listId: l.id }) })), 'sep'] : []),
     { label: t.priority ? 'Not important' : 'Mark important', icon: Flag, onClick: () => patch(t, { priority: t.priority ? 0 : 1 }) },
     t.sourceMessageId && { label: 'Open the email', icon: Mail, onClick: () => jump(`#/mail/unified/${t.sourceMessageId}`) },
+    !t.owner && { label: 'Add to an event…', icon: CalendarClock, onClick: () => setPickEvent({ kind: 'task', id: t.id, subject: t.title }) },
     // From one's own tasks into a shared space (only from one's own mail; it then disappears from here).
     ...(!store.get().acting ? (store.get().shared || []).map((s) => ({ label: `Share in “${s.name}”`, icon: Share2, onClick: async () => {
       if (!confirm(`Move “${t.title}” into the shared space “${s.name}”? Its members will see it there.`)) return;
@@ -185,6 +188,7 @@ export default function TasksView({ route = [] }) {
                       {t.rrule && <span title={t.rrule}><Repeat size={11} /> {repeatLabel(t.rrule)}</span>}
                       {showList && <span className="clickable" onClick={() => setListId(t.listId)} title="Show this list"><ListTodo size={11} /> {t.list}{t.ownerName ? ` · ${t.ownerName}` : ''}</span>}
                       {t.sourceMessageId && <a href="#" onClick={(e) => { e.preventDefault(); navigate(`#/mail/unified/${t.sourceMessageId}`); }}><Mail size={11} /> from email</a>}
+                      {(t.events || []).map((ev) => <a key={ev.uid} href={`#/calendar/event/${ev.id}/${ev.start}`} className="truncate" title="Open the event"><CalendarClock size={11} /> {ev.title || 'Event'}</a>)}
                     </div>
                   </div>
                   {!t.due && !t.done && <button className="btn ghost sm" title="Set a due date" onClick={(e) => taskMenu(e, t)}><Calendar size={13} /> Due</button>}
@@ -197,6 +201,7 @@ export default function TasksView({ route = [] }) {
         {!tasks.length && <div className="empty">No tasks. AI-detected action items from emails can be added here with one click.</div>}
       </div>
       {menuNode}
+      {pickEvent && <EventPicker what={pickEvent} onClose={() => setPickEvent(null)} onDone={load} />}
       {editing && <TaskEditor task={editing} lists={lists} onClose={() => setEditing(null)} onSave={async (p) => { await patch(editing, p); setEditing(null); }} />}
     </div>
   );
