@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "description": "Halcyon — AI-native email, calendar and contacts",
   "author": "Halcyon",
+  "desktopName": "halcyon.desktop",
+  "homepage": "https://github.com/vaskivskyiI/halcyon",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -80,10 +82,17 @@
         "deb"
       ],
       "category": "Office",
+      "executableName": "halcyon",
+      "maintainer": "Halcyon <noreply@github.com>",
+      "artifactName": "Halcyon-${version}-${arch}.${ext}",
+      "syncDesktopName": true,
       "icon": "build/icon.png",
       "mimeTypes": [
         "x-scheme-handler/mailto"
       ]
+    },
+    "deb": {
+      "packageName": "halcyon"
     },
     "mac": {
       "target": [
