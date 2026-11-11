@@ -89,7 +89,9 @@ export default function HomeView() {
               <a key={i} className="home-event" href="#/calendar"><span className="bar" style={{ background: e.color || 'var(--accent)' }} />
                 <span className="when">{e.allDay ? 'All day' : clock(e.start)}</span><span className="grow truncate">{e.title}{e.location && <span className="faint"> · {e.location}</span>}</span>
                 {inkwell && <span className="note-link" role="link" title="Meeting notes in Inkwell (opens the note, or makes one)"
-                  onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); location.assign(inkwellNewUrl(ink, 'event', { ref: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location })); }}><NotebookPen size={14} /></span>}</a>))}
+                  onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); location.assign(inkwellNewUrl(ink, 'event', { ref: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location })); }}><NotebookPen size={14} /></span>}
+                {inkwell && <span className="note-link" role="link" title="Handwritten meeting notes in Inkwell (opens the note, or makes one)"
+                  onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); location.assign(inkwellNewUrl(ink, 'event', { ref: e.id, title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location }, { hand: true })); }}><PenLine size={14} /></span>}</a>))}
             {!events.length && <div className="home-none">Nothing in the calendar.</div>}
           </Panel>
           <Panel title="Tasks" to="#/tasks">

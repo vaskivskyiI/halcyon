@@ -13,12 +13,13 @@ export function occurrenceDay(start, allDay = false) {
 /**
  * Inkwell's "#/new": it opens the note linked to this item, or makes one (linked, with the details given — for an event
  * the meeting template with its attendees, one note per occurrence — and in the Inkwell space named `hspace`). Same tab: Inkwell shows its sign-in first when needed; the desktop app
- * opens it in the browser.
+ * opens it in the browser. `hand`: a handwritten note (paper with the details in a text box) instead of a typed one;
+ * left out, the user's Inkwell setting decides.
  */
-export function inkwellNewUrl(base, kind, item) {
+export function inkwellNewUrl(base, kind, item, { hand } = {}) {
   const p = { kind, ref: item.ref, title: item.title, start: iso(item.start), end: iso(item.end), location: item.location,
     attendees: item.attendees?.length ? item.attendees.join(', ') : null, from: item.from, date: iso(item.date), due: iso(item.due), hspace: item.space,
-    day: kind === 'event' ? occurrenceDay(item.start, item.allDay) : null };
+    day: kind === 'event' ? occurrenceDay(item.start, item.allDay) : null, hand: hand === undefined ? null : hand ? 1 : 0 };
   const q = new URLSearchParams(Object.entries(p).filter(([, v]) => v != null && v !== '').map(([k, v]) => [k, String(v)]));
   return `${base}/#/new?${q.toString().replace(/\+/g, '%20')}`;
 }

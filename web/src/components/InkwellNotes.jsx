@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NotebookPen, Plus, Link2 } from 'lucide-react';
+import { NotebookPen, Plus, Link2, PenLine } from 'lucide-react';
 import { api } from '../api.js';
 import { inkwellNewUrl, inkwellLinkUrl, sameOccurrence } from '../../../server/src/util/inkwell.js';
 
@@ -48,6 +48,7 @@ export default function InkwellNotes({ kind, refs, item, style, part }) {
     if (part === 'list' || item?.ref == null) return null;
     return <>
       <a className="chip clickable inkwell-add" style={style} href={inkwellNewUrl(data.url, kind, item)} title="Makes a note in Inkwell, linked to this"><NotebookPen size={11} /> Inkwell note</a>
+      <a className="chip clickable inkwell-add" style={style} href={inkwellNewUrl(data.url, kind, item, { hand: true })} title="Makes a handwritten note in Inkwell, linked to this"><PenLine size={11} /> Handwritten</a>
       <a className="chip clickable inkwell-add" style={style} href={inkwellLinkUrl(data.url, kind, item)} title="Links this to a page you already have in Inkwell"><Link2 size={11} /> Link page</a>
     </>;
   }
@@ -57,6 +58,7 @@ export default function InkwellNotes({ kind, refs, item, style, part }) {
       <div className="inkwell-head"><NotebookPen size={13} /><span className="grow">Notes{links.length ? <span className="muted"> · {links.length}</span> : ''}</span>
         {item?.ref != null && <a className="btn sm ghost" href={inkwellNewUrl(data.url, kind, item)} title={hasNote ? 'Opens the note linked to this in Inkwell' : 'Makes a note in Inkwell, linked to this'}>
           <Plus size={13} /> {hasNote ? 'Open in Inkwell' : 'New note in Inkwell'}</a>}
+        {item?.ref != null && !hasNote && <a className="btn sm ghost" href={inkwellNewUrl(data.url, kind, item, { hand: true })} title="Makes a handwritten note in Inkwell, linked to this"><PenLine size={13} /> Handwritten</a>}
         {item?.ref != null && <a className="btn sm ghost" href={inkwellLinkUrl(data.url, kind, item)} title="Links this to another page you already have in Inkwell"><Link2 size={13} /> Link page</a>}</div>
       {links.map((l) => (
         <a key={l.id} className="recent-row" href={l.url} target="_blank" rel="noreferrer">
