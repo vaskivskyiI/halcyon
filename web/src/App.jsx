@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command, NotebookPen, Home, Columns2, LogOut, UserCog } from 'lucide-react';
+import { Server, Mail, Calendar, Users, CheckSquare, Sparkles, Settings, RefreshCw, Moon, Sun, SunMoon, Layers, Command, NotebookPen, Home, Columns2, LogOut, UserCog } from 'lucide-react';
 import { api, connectEvents, onEvent, onOtherEvent, setApiActing, offlineState } from './api.js';
 import './back.js';
 import { pushIsOn } from './push.js';
@@ -304,7 +304,9 @@ function ProfileButton() {
     <button className="profile-btn" title={user?.email ? `${user.name || ''} ${user.email}`.trim() : 'Profile'} aria-label="Profile" onClick={(e) => openMenu(e, [
       { section: [user?.name, user?.email].filter(Boolean).join(' · ') },
       { label: 'Password and sessions', icon: UserCog, onClick: () => navigate('#/settings/security') },
-      { label: 'Sign out', icon: LogOut, onClick: signOut }])}><span className="avatar-letter">{(user?.name || user?.email || '?')[0].toUpperCase()}</span></button>
+      // Desktop app: switch between the server on this PC and a Halcyon server (signing out does not change that).
+      window.halcyonDesktop?.openConnection && { label: 'Connection: this PC or a server…', icon: Server, onClick: () => window.halcyonDesktop.openConnection() },
+      { label: 'Sign out', icon: LogOut, onClick: signOut }].filter(Boolean))}><span className="avatar-letter">{(user?.name || user?.email || '?')[0].toUpperCase()}</span></button>
     {menuNode}
   </>;
 }

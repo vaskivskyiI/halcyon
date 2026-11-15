@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('halcyonDesktop', {
   setBadge: (count, dataUrl) => ipcRenderer.send('badge', { count, dataUrl }),
   saveConnection: (mode, serverUrl, offline) => ipcRenderer.invoke('connect:save', { mode, serverUrl, offline }),
   info: () => ipcRenderer.invoke('app:info'),
+  // The Connection window (this PC / a server), also from the page's profile menu.
+  openConnection: () => ipcRenderer.send('connect:open'),
   // A notification was clicked: bring the window back (also from the tray).
   show: () => ipcRenderer.send('show'),
   // Rich notifications (desktop/notify.js): toasts with an icon per kind and buttons. cb gets { type: 'click', id,

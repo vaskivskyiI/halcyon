@@ -205,6 +205,7 @@ const notifyHandlers = {
 };
 ipcMain.on('notify', (e, m) => { if (e.sender === win?.webContents) notify.show(m || {}, notifyHandlers); });
 ipcMain.on('notify:close', (e, tag) => notify.close(tag));
+ipcMain.on('connect:open', () => connectWindow());
 ipcMain.on('show', () => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), mode: config.mode, serverUrl: config.serverUrl }));
 
