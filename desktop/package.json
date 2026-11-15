@@ -75,12 +75,16 @@
       "target": [
         {
           "target": "nsis"
+        },
+        {
+          "target": "zip"
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Halcyon-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Halcyon-${version}-win-${arch}.${ext}"
     },
     "nsis": {
+      "artifactName": "Halcyon-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
