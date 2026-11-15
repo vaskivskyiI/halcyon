@@ -63,7 +63,7 @@ export default function Problems() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 30e3);
+    const t = setInterval(() => { if (!document.hidden) load(); }, 30e3); // not while hidden (tray, other tab): battery
     const off = onEvent((e) => {
       if (['outbox:changed', 'mail:sent', 'mail:changed'].includes(e.type) || (e.type === 'sync:state' && ['idle', 'error'].includes(e.payload?.state))) soon(1500);
       // Sending failed: show what can be done right away.

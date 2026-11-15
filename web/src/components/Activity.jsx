@@ -22,7 +22,7 @@ export function Activity({ syncing, onSync }) {
   useDismiss([btn, panel], () => setOpen(false), open, { ignore: '.menu, .modal-back, .toasts' });
   useEffect(() => {
     let timer = null, live = true;
-    const load = () => api.get('/api/activity').then((d) => { if (live) setData(d); }).catch(() => {});
+    const load = () => (document.hidden && !open ? Promise.resolve() : api.get('/api/activity')).then((d) => { if (live) setData(d); }).catch(() => {});
     if (open) { load(); timer = setInterval(load, 1500); }
     // Closed: asked only now and then, for the dot on the button.
     else { load(); timer = setInterval(load, 20e3); }

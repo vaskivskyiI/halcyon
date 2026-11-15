@@ -30,6 +30,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "offline.js",
+      "notify.js",
       "connect.html",
       "build/icon.png",
       "build/icon.ico",
@@ -47,6 +49,10 @@
       {
         "from": "../web/dist",
         "to": "web"
+      },
+      {
+        "from": "build/toast",
+        "to": "toast"
       }
     ],
     "asar": true,
@@ -55,6 +61,12 @@
         "name": "Email",
         "schemes": [
           "mailto"
+        ]
+      },
+      {
+        "name": "Halcyon notifications",
+        "schemes": [
+          "halcyon-desktop"
         ]
       }
     ],

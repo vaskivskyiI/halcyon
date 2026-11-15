@@ -1295,3 +1295,18 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   a new email to them opens with it; on a draft in "Outbox & drafts" that draft opens with it added (`init.dirty` saves
   it). In the browser the drag carries `application/x-halcyon-attachment` (forwarded from its email, not downloaded);
   from the desktop apps it arrives as a file and is uploaded.
+
+### Electron catches up with the lightweight Windows app (no migration)
+- `desktop/notify.js`: rich notifications. The page calls `halcyonDesktop.notify({ id, title, body, tag, silent, route, ref,
+  actions, as, important })` (web `util.js notifyDesktop` prefers it over `new Notification`). Windows: `toastXml` with an
+  icon per kind (`desktop/build/toast/*.png`, drawn like windows/Halcyon/Icons.cs; packaged as resources/toast) and up to 5
+  buttons; launch and buttons use the app's protocol `halcyon-desktop:open?…` / `:action?…` (registered next to mailto),
+  received by `second-instance` (or argv at start) → `notification` IPC → the page (`onNotification`): a click runs the
+  page's onClick (place + shared space), a button fires `halcyon:notification-action` (App.jsx does it, as for the Windows
+  app) without showing the window. macOS: the buttons are notification actions; Linux: click only. `closeShown` also
+  closes the desktop's toasts.
+- Previews (`?inline=1`) download to %TEMP%/halcyon-open and open in the default app; the Download button still asks
+  where to save.
+- `offline.js` was missing from electron-builder `files` (packaged app could not load it); added with `notify.js`.
+- Battery: background checks skip while the page is hidden (Activity 20 s, Problems 30 s); the poll used without a
+  WebSocket runs every 2 minutes while hidden; the visibility refresh catches up when shown.

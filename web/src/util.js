@@ -77,8 +77,32 @@ export const toLocalInput = (ms) => { const d = new Date(ms); return new Date(d.
 export const toDateInput = (ms) => toLocalInput(ms).slice(0, 10);
 
 const shownHere = new Map(); // tag → the Notification this page showed
-/** data: { url, ref, actions, as } — the Windows app draws the actions as buttons on its toast (windows/Halcyon/Bridge.js). */
+// The desktop app (Electron) shows its own rich notifications (desktop/notify.js): toasts with an icon per kind and
+// buttons; a click comes back here with the id (its onClick knows the place and the shared space).
+const deskClicks = new Map(); // id → onClick
+let deskSeq = 0, deskListening = false;
+function deskNotify(desk, title, body, onClick, { silent, tag, data }) {
+  if (!deskListening) {
+    deskListening = true;
+    desk.onNotification((m) => {
+      if (m?.type === 'action') { window.dispatchEvent(new CustomEvent('halcyon:notification-action', { detail: { ref: m.ref, action: m.action, tag: m.tag, as: m.as } })); return; }
+      const f = deskClicks.get(m?.id);
+      deskClicks.delete(m?.id);
+      if (f) f(); else if (typeof m?.route === 'string' && m.route.startsWith('#/')) location.hash = m.route;
+    });
+  }
+  const id = ++deskSeq;
+  deskClicks.set(id, onClick);
+  if (deskClicks.size > 200) deskClicks.delete(deskClicks.keys().next().value);
+  desk.notify({ id, title: String(title || ''), body: String(body || ''), tag: tag || '', silent: !!silent, route: typeof data?.url === 'string' ? data.url : '',
+    ref: typeof data?.ref === 'string' ? data.ref : '', actions: Array.isArray(data?.actions) ? data.actions : [], as: data?.as == null ? '' : String(data.as), important: !!data?.important });
+}
+
+/** data: { url, ref, actions, as } — the desktop apps draw the actions as buttons on their toasts (desktop/notify.js,
+ *  windows/Halcyon/Bridge.js). */
 export function notifyDesktop(title, body, onClick, { silent = false, tag, data } = {}) {
+  const desk = window.halcyonDesktop;
+  if (desk?.notify && desk.onNotification) { deskNotify(desk, title, body, onClick, { silent, tag, data }); return; }
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification(title, { body, icon: './icon-192.png', silent, tag, data });
   if (tag) shownHere.set(tag, n);
@@ -87,7 +111,7 @@ export function notifyDesktop(title, body, onClick, { silent = false, tag, data 
 /** Notifications that no longer apply (the mail was read, the task done …; server notifications.js): the page's own
  *  and the service worker's are closed. */
 export async function closeShown(tags) {
-  for (const t of tags) { shownHere.get(t)?.close(); shownHere.delete(t); }
+  for (const t of tags) { shownHere.get(t)?.close(); shownHere.delete(t); window.halcyonDesktop?.closeNotification?.(t); }
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
     for (const n of (await reg?.getNotifications()) || []) if (tags.includes(n.tag)) n.close();

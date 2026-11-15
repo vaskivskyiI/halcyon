@@ -4,12 +4,14 @@
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage, session, dialog } = require('electron');
 const { fork, execFile } = require('node:child_process');
 const { setupOffline } = require('./offline.js');
+const notify = require('./notify.js');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 
 const APP_ID = 'com.halcyon.mail';
 const fetching = new Map(); // attachment URL → when its download was asked for
+const openAfter = new Set(); // previews (?inline=1): downloaded to a temporary folder and opened in their app
 const configPath = () => path.join(app.getPath('userData'), 'config.json');
 const defaults = { mode: 'local', serverUrl: '', closeToTray: true, bounds: null, offline: true, offlineMB: 2048 };
 const loadConfig = () => { try { return { ...defaults, ...JSON.parse(fs.readFileSync(configPath(), 'utf8')) }; } catch { return { ...defaults }; } };
@@ -21,8 +23,11 @@ const iconPath = path.join(__dirname, 'build', process.platform === 'win32' ? 'i
 
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 app.setAppUserModelId(APP_ID); // required for Windows toast notifications
-if (process.defaultApp) app.setAsDefaultProtocolClient('mailto', process.execPath, [path.resolve(process.argv[1])]);
-else app.setAsDefaultProtocolClient('mailto');
+// mailto: links, and the app's own protocol: a toast click or button starts it (notify.js).
+for (const scheme of ['mailto', notify.PROTOCOL]) {
+  if (process.defaultApp) app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+  else app.setAsDefaultProtocolClient(scheme);
+}
 
 // Foundry Local (on-device models on the NPU of Copilot+ PCs) listens on a dynamic port; ask its CLI.
 function foundryUrl() {
@@ -79,10 +84,12 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (baseUrl && url.startsWith(baseUrl)) {
       if (/\/api\/oauth\//.test(url)) return { action: 'allow' }; // OAuth popup must keep its opener
-      // Once per file while it downloads: a double click does not save two copies.
+      // Once per file while it downloads: a double click does not save two copies. A preview opens in the default app
+      // for its type (as in the Windows app); the Download button asks where to save.
       const file = url.replace('inline=1', 'inline=0');
       if (Date.now() - (fetching.get(file) || 0) < 120e3) return { action: 'deny' };
       fetching.set(file, Date.now());
+      if (url.includes('inline=1')) openAfter.add(file);
       win.webContents.downloadURL(file);
       return { action: 'deny' };
     }
@@ -189,12 +196,23 @@ ipcMain.handle('pick:file', async (e, { title, filters } = {}) => {
   const r = await dialog.showOpenDialog(win, { title: title || 'Choose a file', properties: ['openFile'], filters });
   return r.canceled ? null : r.filePaths[0];
 });
+// Notifications (notify.js): a click shows the window and lets the page open the place (it knows the shared space);
+// a button is done by the page in the background, the window stays where it is.
+const notifyHandlers = {
+  onClick: (m) => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); win.webContents.send('notification', { type: 'click', ...m }); },
+  onAction: (m) => win?.webContents.send('notification', { type: 'action', ...m }),
+  openExternal: (url) => shell.openExternal(url),
+};
+ipcMain.on('notify', (e, m) => { if (e.sender === win?.webContents) notify.show(m || {}, notifyHandlers); });
+ipcMain.on('notify:close', (e, tag) => notify.close(tag));
 ipcMain.on('show', () => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), mode: config.mode, serverUrl: config.serverUrl }));
 
 app.on('second-instance', (e, argv) => {
   const mailto = argv.find((a) => a.startsWith('mailto:'));
   if (mailto) handleMailto(mailto);
+  const toast = argv.find((a) => a.startsWith(`${notify.PROTOCOL}:`));
+  if (toast && notify.handleUrl(toast, notifyHandlers)) return;
   if (win) { win.show(); win.focus(); }
 });
 app.on('open-url', (e, url) => { e.preventDefault(); handleMailto(url); });
@@ -229,10 +247,21 @@ app.whenReady().then(async () => {
   buildTray();
   await win.loadURL(baseUrl + (pendingMailto ? `/#/compose?url=${encodeURIComponent(pendingMailto)}` : ''));
   if (process.argv.includes('--hidden')) win.hide();
+  // Started by a click on a toast left in the notification centre: open its place.
+  const toast = process.argv.find((a) => a.startsWith(`${notify.PROTOCOL}:`));
+  if (toast) notify.handleUrl(toast, notifyHandlers);
   // Desktop session downloads: ask where to save.
   session.defaultSession.on('will-download', (e, item) => {
+    const url = item.getURL();
+    if (openAfter.delete(url)) {
+      const dir = path.join(app.getPath('temp'), 'halcyon-open', crypto.randomBytes(4).toString('hex'));
+      fs.mkdirSync(dir, { recursive: true });
+      item.setSavePath(path.join(dir, item.getFilename()));
+      item.once('done', (ev, state) => { fetching.delete(url); if (state === 'completed') shell.openPath(item.getSavePath()); });
+      return;
+    }
     item.setSaveDialogOptions({ defaultPath: path.join(app.getPath('downloads'), item.getFilename()) });
-    item.once('done', () => fetching.delete(item.getURL()));
+    item.once('done', () => fetching.delete(url));
   });
 });
 

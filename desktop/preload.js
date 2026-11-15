@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('halcyonDesktop', {
   info: () => ipcRenderer.invoke('app:info'),
   // A notification was clicked: bring the window back (also from the tray).
   show: () => ipcRenderer.send('show'),
+  // Rich notifications (desktop/notify.js): toasts with an icon per kind and buttons. cb gets { type: 'click', id,
+  // route, as } or { type: 'action', ref, action, tag, as }.
+  notify: (m) => ipcRenderer.send('notify', m),
+  closeNotification: (tag) => ipcRenderer.send('notify:close', String(tag || '')),
+  onNotification: (cb) => { ipcRenderer.on('notification', (e, m) => cb(m)); },
   // Attachments dragged into Explorer: fetched while the mouse is down, then dragged as a file.
   prepareDrag: (url, name) => ipcRenderer.send('drag:prepare', { url, name }),
   dragFile: (url, name) => ipcRenderer.send('drag:start', { url, name }),

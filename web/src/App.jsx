@@ -185,7 +185,9 @@ function Shell() {
   // new mail or finished AI analysis: refresh periodically instead.
   useEffect(() => {
     if (connected) return undefined;
-    const t = setInterval(() => { loadFolders(); window.dispatchEvent(new Event('halcyon:poll')); }, 30e3);
+    // Hidden (in the tray, another tab): every 2 minutes instead, for the unread badge — less work on battery.
+    let tick = 0;
+    const t = setInterval(() => { if (document.hidden && ++tick % 4) return; loadFolders(); window.dispatchEvent(new Event('halcyon:poll')); }, 30e3);
     return () => clearInterval(t);
   }, [connected]);
 
