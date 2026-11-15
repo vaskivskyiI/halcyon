@@ -380,7 +380,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
     saveInsight(m, res.data, model, tz, { quiet });
-    if (trust) run('UPDATE ai_insights SET trust_json = ? WHERE message_id = ?', JSON.stringify({ score: trust.score, level: trust.level, reasons: trust.reasons, auth: trust.auth }), m.id);
+    if (trust) run('UPDATE ai_insights SET trust_json = ? WHERE message_id = ?', JSON.stringify({ score: trust.score, level: trust.level, reasons: trust.reasons, auth: trust.auth, unusual: trust.unusual }), m.id);
     if (myCats.length) applyAiTags(userId, m.id, res.data.my_categories, myCats);
     if (candidates.length) {
       // Which open requests this email by the user answers: asked one by one (small models rarely fill "resolves").

@@ -64,3 +64,27 @@ export function setFocusOverride(userId, ids, on, { always = false } = {}) {
   }
   return { moved: msgs.length, senders: [...senders] };
 }
+
+/**
+ * Where an email of the Inbox is and why, in the same order as FOCUSED: { focused, reason }. For the reader's "Why is
+ * this in Focused / Other?" line.
+ */
+export function placementOf(id) {
+  const thread = `(m.thread_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages t LEFT JOIN ai_insights ti ON ti.message_id = t.id
+    WHERE t.user_id = m.user_id AND t.thread_id = m.thread_id AND t.id != m.id AND t.folder_id IN (SELECT id FROM folders WHERE special_use = '\Inbox') AND ${focusedOne('ti', 't')}))`;
+  const r = get(`SELECT ${OVERRIDE} AS ov, ${PHISH} AS phish, ${MINE} AS mine, ${OTHER_SENDER} AS otherSender, ${FOCUS_SENDER} AS focusSender,
+      ${focusedOne('i', 'm')} AS ai, ${thread} AS thread, ${ANALYSING} AS analysing, i.message_id AS analysed, i.priority, i.category, i.priority_reason AS why,
+      (SELECT fs.auto FROM focus_senders fs WHERE fs.user_id = m.user_id AND fs.address IN (lower(m.from_addr), '@' || substr(lower(m.from_addr), instr(m.from_addr, '@') + 1)) LIMIT 1) AS auto
+    FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id = ?`, id);
+  if (!r) return null;
+  const ai = r.priority != null ? ` (priority ${r.priority}${r.why ? `: ${r.why}` : ''})` : '';
+  if (r.ov != null) return { focused: !!r.ov, reason: `You moved this conversation to ${r.ov ? 'Focused' : 'Other'}.` };
+  if (r.phish) return { focused: false, reason: 'It looks like phishing.' };
+  if (r.mine) return { focused: true, reason: 'You wrote in this conversation.' };
+  if (r.otherSender) return { focused: false, reason: r.auto ? 'You moved this sender\'s mail to Other twice, so it always goes there.' : 'This sender is set to always go to Other.' };
+  if (r.focusSender) return { focused: true, reason: r.auto ? 'You write to this sender (or moved their mail to Focused twice).' : 'This sender is set to always go to Focused.' };
+  if (!r.analysed) return { focused: !r.analysing, reason: r.analysing ? 'The AI has not read it yet.' : 'Not analysed by the AI.' };
+  if (r.ai) return { focused: true, reason: `The AI rated it as worth your attention${ai}.` };
+  if (r.thread) return { focused: true, reason: 'Another email of this conversation is in Focused.' };
+  return { focused: false, reason: r.priority >= 40 ? `The AI filed it as ${r.category}${ai}.` : `The AI rated it as low priority${ai}.` };
+}

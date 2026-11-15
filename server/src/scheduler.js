@@ -12,6 +12,7 @@ import { enqueue } from './ai/queue.js';
 import { backfillAnalysis, purgeMemory, backfillUnsubscribe } from './mail/pipeline.js';
 import { backfillListInfo } from './mail/lists.js';
 import { mergeAllTopics } from './ai/topics.js';
+import { weeklyCleanupNotice } from './mail/cleanup.js';
 import { listSpaces } from './spaces.js';
 import { expireInsights, reanalyzeOpen, reanalyzeItems, reanalyzeRecent } from './ai/tasks.js';
 import { seedCorrespondents, scheduleProfiles } from './ai/profiles.js';
@@ -215,6 +216,8 @@ export function startScheduler() {
   // Near-duplicate topics (ai/topics.js) merged soon after start and then daily.
   setTimeout(job('Merge similar topics', mergeAllTopics), 55e3).unref();
   setInterval(job('Merge similar topics', mergeAllTopics), 864e5).unref();
+  // Tidy-up suggestions told once a week (checked every few hours).
+  setInterval(job('Tidy-up suggestions', weeklyCleanupNotice), 4 * 3600e3).unref();
   setInterval(job('Database optimise', () => db.pragma('optimize')), 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(job('Purge memory', async () => { await purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); }), 3600e3).unref();

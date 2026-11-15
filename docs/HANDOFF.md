@@ -1254,3 +1254,13 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   proposals, newsletters/promotions/social and phishing get none; the prompt asks to reuse an existing topic exactly and
   says most emails have none. `mergeAllTopics` (scheduler, at start and daily) renames near-duplicates of 180 days to the
   most used spelling.
+- Why here (round92): `placementOf(id)` (mail/focused.js) gives `{ focused, reason }` in the same order as FOCUSED; the
+  message API returns it as `placement` for Inbox mail with the Focused inbox on; the reader shows "In Focused/Other —
+  <reason>" with a one-click move back.
+- Tidy-up (`mail/cleanup.js`): `GET /api/senders/cleanup` — senders with ≥ 4 emails in 90 days, never answered or written
+  to, not a contact, ≥ 70 % deleted/spam or ≤ 10 % opened (≥ 5); each with its reason and unsubscribe plan. Senders view
+  shows them on top: Unsubscribe (+ archive), Always Other, Keep (`sender_habits.keep`, not suggested again). A weekly
+  notification (kind `cleanup`, scheduler every 4 h, at most once in 7 days, not in the first week) links to the view.
+- Unusual requests (trust.js): a contact's display name on another address (+45, impersonation); a known sender asking
+  for money in a new way (`MONEY_ASK`: changed bank details, IBAN, transfer, gift cards, secrecy; EN/SL) with no earlier
+  mail of theirs saying the same → `trust.unusual`, level at least medium; the reader says to confirm another way.

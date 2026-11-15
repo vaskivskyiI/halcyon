@@ -1,7 +1,7 @@
 // Mail → More → Senders: who sends the most, and how much of it is read. Mail never read stands out; one click
 // unsubscribes and clears it out of the inbox (archived — nothing is deleted).
 import { useEffect, useState } from 'react';
-import { Menu as MenuIcon, Archive, MailOpen, BellOff, Search, Star } from 'lucide-react';
+import { Menu as MenuIcon, Archive, MailOpen, BellOff, Search, Star, ArrowDownToLine, Check, Sparkles } from 'lucide-react';
 import { api } from '../api.js';
 import { Spinner } from '../components/common.jsx';
 import { fmtListDate, navigate, toast, toastError } from '../util.js';
@@ -41,6 +41,26 @@ export default function SendersList({ onMenu }) {
     setRows((cur) => cur.map((y) => (y.address === r.address ? { ...y, focused: !r.focused } : y)));
   });
   const shown = (rows || []).filter((r) => !unread || r.readRate < 20 || r.learned);
+  // Tidy-up suggestions (server mail/cleanup.js): unsubscribe, always to Other, or keep as it is.
+  const [tidy, setTidy] = useState([]);
+  useEffect(() => { api.get('/api/senders/cleanup').then(setTidy).catch(() => {}); }, []);
+  const settle = (r, fn, msg) => run(r, 'tidy', async () => { await fn(); toast(msg); setTidy((cur) => cur.filter((x) => x.address !== r.address)); });
+  const tidyCard = tidy.length > 0 && <div className="card" style={{ margin: 10 }}>
+    <div className="title" style={{ marginBottom: 6 }}><Sparkles size={15} /> Tidy up: {tidy.length} sender{tidy.length === 1 ? '' : 's'} you always delete or never read</div>
+    {tidy.map((r) => <div key={r.address} className="sender-row" style={{ padding: '6px 0' }}>
+      <div className="grow" style={{ minWidth: 0 }}>
+        <div className="truncate" style={{ fontWeight: 600 }}>{r.name || r.address} {r.name && <span className="faint small" style={{ fontWeight: 400 }}>{r.address}</span>}</div>
+        <div className="small muted">{r.reason}{r.inbox ? ` ${r.inbox} still in the inbox.` : ''}</div>
+      </div>
+      <div className="row" style={{ gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        {r.plan && <button className="btn sm" disabled={busy[`${r.address}tidy`]} title={r.plan.text} onClick={() => settle(r, async () => {
+          const x = await api.post(`/api/messages/${r.unsubscribeId}/unsubscribe`); if (x.method === 'browser') window.open(x.url, '_blank', 'noopener');
+          if (r.inbox) await api.post('/api/senders/action', { address: r.address, action: 'archive' });
+        }, r.plan.method === 'web' ? 'Unsubscribe page opened — finish there' : 'Unsubscribed' + (r.inbox ? ` · ${r.inbox} archived` : ''))}><BellOff size={13} /> Unsubscribe{r.inbox ? ' + archive' : ''}</button>}
+        <button className="btn sm ghost" disabled={busy[`${r.address}tidy`]} title="Their mail always goes to Other (Settings → Mail lists it)" onClick={() => settle(r, () => api.post('/api/focus-senders', { address: r.address, other: true }), 'Their mail goes to Other from now on')}><ArrowDownToLine size={13} /> Always Other</button>
+        <button className="btn sm ghost" disabled={busy[`${r.address}tidy`]} title="Keep it as it is and stop suggesting this sender" onClick={() => settle(r, () => api.post('/api/senders/habit', { address: r.address, keep: true }), 'Kept — not suggested again')}><Check size={13} /> Keep</button>
+      </div></div>)}
+  </div>;
   return (
     <section className="list-pane senders" style={{ flex: 1, width: 'auto' }}>
       <div className="list-head" style={{ paddingBottom: 10 }}>
@@ -52,6 +72,7 @@ export default function SendersList({ onMenu }) {
         </div>
       </div>
       <div className="list-scroll" style={{ overflow: 'auto', flex: 1 }}>
+        {tidyCard}
         {!rows ? <div style={{ padding: 20 }}><Spinner /></div> : !shown.length ? <div className="empty" style={{ padding: 20 }}>Nobody here.</div> : shown.map((r) => (
           <div key={r.address} className="sender-row">
             <div className="grow" style={{ minWidth: 0 }}>

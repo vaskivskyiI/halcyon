@@ -20,7 +20,7 @@ import { sharedOf, mergedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
 import { checkLinks } from '../mail/links.js';
-import { FOCUSED, setFocusOverride } from '../mail/focused.js';
+import { FOCUSED, setFocusOverride, placementOf } from '../mail/focused.js';
 import { countSenderAction } from '../ai/sender-history.js';
 import { unsubscribePlan, unsubscribeTargets, subscriptionKey } from '../mail/lists.js';
 import { saveUpload, readUpload } from '../mail/uploads.js';
@@ -401,7 +401,7 @@ export default async function mailRoutes(app) {
     const folder = get('SELECT id, name, special_use FROM folders WHERE id = ?', m.folder_id);
     return serializeMessage(m, {
       html, text: m.body_text || (!m.body_html && m.calendar_ics ? inviteText(m.calendar_ics) : m.body_text), blockedRemote, attachments: json(m.attachments_json, []).filter((a) => !a.inline),
-      listUnsubscribe: m.list_unsubscribe, unsubscribe: unsubscribePlan(m), insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
+      listUnsubscribe: m.list_unsubscribe, unsubscribe: unsubscribePlan(m), placement: settings.mail.focusedInbox && folder?.special_use === '\\Inbox' ? placementOf(m.id) : null, insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
       senderContactId: sender?.id || null, ...(lite ? { text: null, partial: true } : {}),
       myCategories: all("SELECT category_id AS id FROM message_tags WHERE message_id = ? AND source IN ('ai', 'user')", m.id).map((x) => x.id),
     });

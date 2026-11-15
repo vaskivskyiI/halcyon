@@ -5,7 +5,7 @@ import {
   ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight, Copy, Search,
   ArrowUpToLine, ArrowDownToLine,
 } from 'lucide-react';
-import { focusMenuItems } from './focus.js';
+import { focusMenuItems, moveFocus } from './focus.js';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { BackButton, jump } from '../back.js';
@@ -461,7 +461,7 @@ export default function Reader({ id, view, replyNow = false }) {
     { label: latest.insight?.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply', icon: CornerUpLeft, onClick: () => setNeedsReply(!latest.insight?.needsReply) },
     settings.ai.enabled && { label: 'Mark as important', icon: ThumbsUp, hint: 'AI learns', onClick: () => feedback('important') },
     settings.ai.enabled && { label: 'Mark as not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => feedback('unimportant') },
-    ...(settings.mail.focusedInbox && target.folder?.specialUse === '\\Inbox' ? focusMenuItems([target.id], { sender: target.from?.name || target.from?.address, icons: { to: ArrowUpToLine, away: ArrowDownToLine } }) : []),
+    ...(settings.mail.focusedInbox && target.folder?.specialUse === '\\Inbox' ? focusMenuItems([target.id], { tab: target.placement ? (target.placement.focused ? 'focused' : 'other') : null, sender: target.from?.name || target.from?.address, icons: { to: ArrowUpToLine, away: ArrowDownToLine }, onDone: () => load() }) : []),
     { label: 'Print', icon: Printer, hint: 'Ctrl+P', onClick: () => printRef.current() },
     { label: 'Download .eml', icon: FileCode, onClick: () => window.open(api.url(`/api/messages/${target.id}/raw`)) },
     target.folder?.specialUse === '\\Junk' ? { label: 'Not spam', icon: AlertOctagon, onClick: () => act('notspam') } : { label: 'Report spam', icon: AlertOctagon, onClick: () => act('spam') },
@@ -542,8 +542,11 @@ export default function Reader({ id, view, replyNow = false }) {
         {/* Tasks and events of this mail: inside the AI card next to the suggestions; here only without it (or before it has analysed the mail). */}
         {!(settings.ai.enabled && !isDraftMsg(latest) && ins) && <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />}
 
+        {target.placement && <div className="small faint row placement" style={{ gap: 6, margin: '0 0 8px', flexWrap: 'wrap' }} title="Why this email is where it is in the Focused inbox">
+          {target.placement.focused ? <ArrowUpToLine size={13} /> : <ArrowDownToLine size={13} />}<span>In <b>{target.placement.focused ? 'Focused' : 'Other'}</b> — {target.placement.reason}</span>
+          <button className="link-btn small" onClick={() => moveFocus([target.id], !target.placement.focused, { onDone: () => load() })}>Move to {target.placement.focused ? 'Other' : 'Focused'}</button></div>}
         {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px', display: 'block' }}><div className="row" style={{ gap: 6 }}><AlertTriangle size={16} /><b className="grow">This message looks like phishing.</b>{target.folder?.specialUse !== '\\Junk' && <button className="btn sm" onClick={() => act('spam')}><AlertOctagon size={13} /> Report spam</button>}</div><div className="small" style={{ marginTop: 4 }}>Don't click its links, pay or sign in from it unless you're sure it's genuine — open the company's site yourself instead.</div>{ins.trust?.reasons?.length > 0 && <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 18 }}>{ins.trust.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}</div>}
-        {!ins?.isPhishing && ins?.trust?.level === 'medium' && <div className="notice" style={{ margin: '0 0 12px', display: 'block' }}><div className="row" style={{ gap: 6 }}><AlertTriangle size={15} /><b>Check the sender before acting on this email</b></div><ul className="small" style={{ margin: '4px 0 0', paddingLeft: 18 }}>{ins.trust.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul></div>}
+        {!ins?.isPhishing && ins?.trust?.level === 'medium' && <div className="notice" style={{ margin: '0 0 12px', display: 'block' }}><div className="row" style={{ gap: 6 }}><AlertTriangle size={15} /><b>{ins.trust.unusual ? 'Unusual request — confirm it another way before you pay or change anything' : 'Check the sender before acting on this email'}</b></div><ul className="small" style={{ margin: '4px 0 0', paddingLeft: 18 }}>{ins.trust.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul></div>}
 
         {settings.ai.enabled && !isDraftMsg(latest) && <AiFloat scroller={scroller} cardRef={aiRef} away={aiAway} setAway={setAiAway} render={(floating) => <AiCard floating={floating} ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}

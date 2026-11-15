@@ -9,6 +9,7 @@ import { notify } from '../util/events.js';
 import { rareSenders, keptSenders, keepSender } from '../ai/habits.js';
 import { focusSenders, setFocusSender, forgetFocusSender } from '../focus.js';
 import { unsubscribePlan } from '../mail/lists.js';
+import { cleanupSuggestions } from '../mail/cleanup.js';
 
 const SKIP_FOLDERS = "COALESCE(f.special_use, '') NOT IN ('\\Sent', '\\Drafts', '\\Trash', '\\Junk')";
 
@@ -32,6 +33,9 @@ export default async function senderRoutes(app) {
     return rows.filter((r) => !own.has(r.address)).map((r) => ({ ...r, plan: r.unsubscribeId ? unsubscribePlan(msg.get(r.unsubscribeId)) : null, inbox: r.inbox || 0, readRate: r.total ? Math.round((100 * (r.seen || 0)) / r.total) : 0,
       learned: rare.has(r.address), kept: kept.has(r.address), focused: focus.has(r.address) || focus.has(`@${r.address.split('@')[1]}`) }));
   });
+
+  // Senders the user keeps deleting or never reads, with what can be done about them (mail/cleanup.js).
+  app.get('/api/senders/cleanup', async (req) => cleanupSuggestions(req.user.id));
 
   // Senders always in Focused (Settings → Mail; focus.js).
   app.get('/api/focus-senders', async (req) => focusSenders(req.user.id));

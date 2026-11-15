@@ -5,7 +5,7 @@
 // they say, and a first email ever from a domain asking for money or a login. Each finding has a weight; the sum is the
 // score (0-100). The AI is given the findings as evidence; a high score marks the email as phishing whatever the AI
 // says, and mail from people the user writes to counts against it (their address is rarely forged when DMARC passes).
-import { get } from '../db/index.js';
+import { get, all } from '../db/index.js';
 import { readRaw } from './store.js';
 import { linksOf, siteOf } from './links.js';
 
@@ -39,7 +39,10 @@ const PUBLIC = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.c
 // Money, accounts and logins: what phishing asks for (English and Slovenian).
 const BAIT = /\b(invoice|receipt|payment|billing|subscription|renew|refund|overdue|unpaid|declined|failed|suspend\w*|locked|verify|confirm your|password|sign[- ]?in|log[- ]?in|account|wallet|bank|card|urgent|expire\w*|račun\w*|plačil\w*|naročnin\w*|geslo|gesl\w*|prijav\w*|kartic\w*|zapadl\w*)\b/i;
 
+// Requests that business email compromise uses: changed bank details, a transfer or gift cards in a hurry, secrecy.
+const MONEY_ASK = /\b(new (bank|account|iban)|bank (details|account) (have |has )?(changed|been updated)|changed? (our|my) (bank|account|iban)|update (our|the) (bank|payment) details|iban|swift|wire transfer|bank transfer|gift ?cards?|urgent(ly)? (payment|transfer)|keep (this|it) (confidential|between us)|novi? (trr|tekoči račun|bančni račun)|spremenjen\w* (trr|račun|bančn\w*)|nakazil\w* (nujn\w*|takoj)|darilne? kartic\w*)\b/i;
 const lower = (s) => String(s || '').toLowerCase();
+const normName = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L} ]/gu, ' ').replace(/\s+/g, ' ').trim();
 const domainOf = (a) => lower(a).split('@')[1] || '';
 const brandSite = (site, sites) => sites.some((s) => site === s || site.endsWith(`.${s}`));
 
@@ -131,8 +134,31 @@ export function trustSignals(userId, m, { own = new Set(), raw } = {}) {
   // People the user writes to: their real address (DMARC not failing) is not phishing because of a weak sign.
   const trusted = (k.sentTo > 0 || k.contact > 0) && auth?.dmarc !== 'fail';
   if (trusted) score -= 30;
+
+  // A contact's name on a stranger's address ("Ana Novak" <ana.novak.office@gmail.com>): the classic impersonation.
+  const nm = normName(name);
+  if (!trusted && nm.split(' ').length >= 2) {
+    const same = get(`SELECT c.display_name AS name, (SELECT group_concat(e.email) FROM contact_emails e WHERE e.contact_id = c.id) AS emails
+      FROM contacts c WHERE c.user_id = ? AND c.auto_collected = 0 AND lower(c.display_name) = ? LIMIT 1`, userId, name.trim().toLowerCase())
+      || all(`SELECT c.display_name AS name, (SELECT group_concat(e.email) FROM contact_emails e WHERE e.contact_id = c.id) AS emails
+      FROM contacts c WHERE c.user_id = ? AND c.display_name IS NOT NULL LIMIT 5000`, userId).find((c) => normName(c.name) === nm);
+    if (same && !String(same.emails || '').toLowerCase().split(',').includes(from)) add(45, `Uses the name of your contact ${same.name}, but is sent from ${from}, not from their address`);
+  }
+  // Someone the user knows suddenly asking for money in a new way (new bank details, a transfer, gift cards): a hacked
+  // or spoofed account is the usual cause. Not when they have written about this before.
+  const ask = head.match(MONEY_ASK)?.[0];
+  let unusual = null;
+  if (ask && (trusted || k.fromAddr > 0)) {
+    const before = get(`SELECT COUNT(*) AS n FROM messages x WHERE x.user_id = ? AND lower(x.from_addr) = ? AND x.id != ? AND x.date < ?
+      AND (lower(x.subject) LIKE ? OR lower(substr(x.body_text, 1, 3000)) LIKE ?)`, userId, from, m.id || 0, m.date || Date.now(), `%${ask.toLowerCase()}%`, `%${ask.toLowerCase()}%`)?.n;
+    if (!before) {
+      unusual = `${name || from} has not asked for this before (“${ask}”). Confirm by phone or another channel before you pay or change anything`;
+      reasons.push(unusual);
+      score = Math.max(score, SUSPICIOUS_SCORE + 5);
+    }
+  }
   score = Math.max(0, Math.min(100, score));
-  return { score, level: score >= PHISHING_SCORE ? 'high' : score >= SUSPICIOUS_SCORE ? 'medium' : 'low', reasons, auth, known: trusted,
+  return { score, level: score >= PHISHING_SCORE ? 'high' : score >= SUSPICIOUS_SCORE ? 'medium' : 'low', reasons, auth, known: trusted, unusual,
     firstEver, sentTo: k.sentTo, fromAddr: k.fromAddr };
 }
 
