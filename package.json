@@ -1,7 +1,7 @@
 {
   "name": "halcyon",
   "private": true,
-  "version": "2.1.0",
+  "version": "0.1.0",
   "description": "Halcyon — AI-native email, calendar and contacts suite (web + Windows desktop)",
   "workspaces": ["server", "web", "desktop"],
   "scripts": {
