@@ -1317,3 +1317,8 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   certificate…** (PEM/DER, CA certificates only). `session.setCertificateVerifyProc` then accepts, for the configured
   host only, a certificate that is pinned or chains to an added CA, with matching name and dates. The trust IPC answers
   only the Connection window (file://), never a server page. A certificate error is shown even when an offline copy exists.
+
+### Desktop app: no Web Push
+Electron has no push service (`pushManager.subscribe` fails with "Registration failed - push service not available").
+`push.js` `pushState()` reports `desktop: true` when `window.halcyonDesktop` exists; Settings → Notifications explains
+that the desktop app shows notifications itself while it runs (tray, "Keep running in tray when closed", "Start at login").

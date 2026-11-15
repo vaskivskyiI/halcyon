@@ -131,7 +131,8 @@ export function Notifications() {
           <button className="btn sm ghost" onClick={async () => { await disablePush(); resetPushCache(); refresh(); }}>Turn off here</button></>
           : <><span className="small grow">Get notifications on this device even when Halcyon is closed (phone, browser, the Android app).</span>
             <button className="btn sm primary" onClick={async () => { try { await enablePush(); resetPushCache(); toast('Push notifications are on'); refresh(); } catch (e) { toastError(e); } }}>Turn on</button></>}
-      </div> : push?.android ? <div className="small muted">{push.problem}</div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
+      </div> : push?.android ? <div className="small muted">{push.problem}</div>
+        : push?.desktop ? <div className="small muted">The desktop app shows notifications itself while it runs — also with the window closed, from the tray (tray menu: “Keep running in tray when closed”, “Start at login”). Push is for browsers and phones.</div> : <div className="small muted">{perm === 'granted' ? 'Notifications are shown while Halcyon is open.' : perm === 'unsupported' ? 'This app shows notifications while it runs.' : <>Notifications are {perm}. <button className="btn sm" onClick={() => Notification.requestPermission().then(refresh)}>Allow</button></>}</div>}
       {push?.android && push.on && push.liveChoice && <Switch label="Also keep a direct connection to the server"
         hint="Only if notifications come late: some phones hold Firebase messages back. Android then shows a lasting “Connected to your server” notification."
         checked={push.live} onChange={(v) => { setAndroidLive(v); refresh(); }} />}

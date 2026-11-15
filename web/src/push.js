@@ -59,6 +59,9 @@ export async function pushState() {
       live: !!s.live, liveChoice: typeof android().setLive === 'function',
       problem: !s.available ? 'This build of the app has no Firebase setup (google-services.json), so it cannot receive notifications.' : !f.available ? `This server is not set up for Android notifications${f.error ? `: ${f.error}` : ' (HALCYON_FCM_SERVICE_ACCOUNT)'}.` : '' };
   }
+  // Electron has no push service ("push service not available"): the desktop app shows notifications itself while
+  // it runs, also from the tray with the window closed.
+  if (window.halcyonDesktop) return { supported: false, on: false, permission: 'granted', desktop: true };
   if (!supported()) return { supported: false, on: false, permission: 'unsupported' };
   const r = reg || (await navigator.serviceWorker.getRegistration());
   const sub = r && (await r.pushManager.getSubscription());
@@ -75,6 +78,7 @@ export async function enablePush() {
     android().setOn(true);
     return true;
   }
+  if (window.halcyonDesktop) throw new Error('The desktop app shows notifications itself while it runs; push is for browsers and phones');
   if (!supported()) throw new Error('This browser cannot receive push notifications (on iPhone: add Halcyon to the home screen first)');
   if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for Halcyon in this browser');
   const r = reg || (await registerWorker());
