@@ -12,6 +12,7 @@ import { useMenu, Spinner, Modal } from '../components/common.jsx';
 import { useDismiss } from '../dismiss.js';
 import { afterSend } from './mailActions.js';
 import { openFile, claimOpen } from '../opening.js';
+import { uploadFiles, attachmentDrop } from './attachDrop.js';
 
 // Formatting choices of the editor (inline styles, which mail programs show the same way).
 const COLORS = ['#000000', '#444444', '#666666', '#999999', '#cccccc', '#ffffff', '#b91c1c', '#ea580c', '#d97706', '#ca8a04',
@@ -262,7 +263,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   // The quoted message of a draft in its conversation is folded (it is right above); shown on demand.
   const [quoteFolded, setQuoteFolded] = useState(inline);
   const [hasQuote, setHasQuote] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty] = useState(!!init.dirty);
   const [onServer, setOnServer] = useState(!!init.onServer);
   const [closing, setClosing] = useState(false);
   const [templates, setTemplates] = useState([]);
@@ -549,15 +550,16 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     try { const did = await saveNow(); const r = await api.post(`/api/drafts/${did}/save-to-server`); setOnServer(true); toast(`Draft saved in ${r.folder}`); } catch (e) { toastError(e); }
   };
 
-  const addFiles = async (files) => {
-    const list = [];
-    for (const f of files) {
-      if (f.size > 25 * 1024 * 1024) { toast(`${f.name} is larger than 25 MB`, { kind: 'error' }); continue; }
-      // Uploaded once; the draft only refers to it (autosave stays small, nothing is left out of a saved draft).
-      try { list.push(await api.post('/api/uploads', { filename: f.name, contentType: f.type || 'application/octet-stream', contentBase64: await fileToBase64(f) })); } catch (e) { toastError(e); }
-    }
-    setAttachments((a) => [...a, ...list]); setDirty(true);
+  // Uploaded once; the draft only refers to it (autosave stays small, nothing is left out of a saved draft).
+  const addFiles = async (files) => addAttachments(await uploadFiles(files));
+  // Also an attachment dragged from an email (sent on from there) — once each.
+  const addAttachments = (list) => {
+    if (!list.length) return;
+    setAttachments((cur) => [...cur, ...list.filter((x) => x.fromMessageId == null || !cur.some((c) => c.fromMessageId === x.fromMessageId && c.index === x.index))]);
+    setDirty(true);
   };
+  const [dropOver, setDropOver] = useState(false);
+  const drop = attachmentDrop((list) => { addAttachments(list); toast(list.length > 1 ? `${list.length} files attached` : `${list[0].filename} attached`); }, setDropOver);
 
   const insertLink = () => { const url = prompt('Link URL', 'https://'); if (url) exec('createLink', url); };
   const insertImage = () => {
@@ -578,8 +580,8 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
 
   // Minimized, the window shrinks to its title bar; the editor stays mounted (hidden), so what is written stays too.
   return (<>
-    {minimized && <div className="composer min"><div className="composer-head" onClick={() => patchComposer(id, { minimized: false })}><span className="grow truncate">{subject || 'New message'}</span>{dirty && <span className="small faint">Unsaved…</span>}<button className="icon-btn" title="Close" onClick={(e) => { e.stopPropagation(); patchComposer(id, { minimized: false }); setTimeout(requestClose, 0); }}><X size={16} /></button></div></div>}
-    <div className={`composer ${max ? 'max' : ''} ${inline ? 'inline' : ''}`} hidden={minimized} data-draft={draftId || undefined} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } }}
+    {minimized && <div className={`composer min ${dropOver ? 'drop-over' : ''}`} {...drop}><div className="composer-head" onClick={() => patchComposer(id, { minimized: false })}><span className="grow truncate">{subject || 'New message'}</span>{dirty && <span className="small faint">Unsaved…</span>}<button className="icon-btn" title="Close" onClick={(e) => { e.stopPropagation(); patchComposer(id, { minimized: false }); setTimeout(requestClose, 0); }}><X size={16} /></button></div></div>}
+    <div className={`composer ${max ? 'max' : ''} ${inline ? 'inline' : ''} ${dropOver ? 'drop-over' : ''}`} hidden={minimized} data-draft={draftId || undefined} {...drop}
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } if (e.key === 'Escape' && !inline) patchComposer(id, { minimized: true }); }}>
       {inline ? (
         <div className="composer-head">

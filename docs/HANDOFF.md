@@ -1287,3 +1287,11 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Search scope: `GET /api/messages?q=…&inFolder=<id>|inAccount=<id>` (and `/api/search/semantic`), via
   `searchWithin` in routes/mail.js (`sc.folderId` honoured by `buildWhere`). The list offers Everywhere / This folder /
   each mailbox; in a folder view the search starts in that folder, with "Search everywhere" when nothing is found.
+- Attachments as files (follow-up): dragged out of an email they save into the Explorer folder they are dropped in —
+  browser via `DownloadURL`, Electron via `startDrag`, and now the Windows app too (Bridge.js `prepareDrag`/`dragFile`:
+  the page fetches the file on pointer-down and posts it; MainForm writes it to %TEMP%\Halcyon\drag and starts
+  `DoDragDrop` with a FileDrop while the button is still down). Dropped inside the app (`web/src/mail/attachDrop.js`):
+  on a compose window (also minimized) or inline draft it is attached; on a person in a message header or a contact row
+  a new email to them opens with it; on a draft in "Outbox & drafts" that draft opens with it added (`init.dirty` saves
+  it). In the browser the drag carries `application/x-halcyon-attachment` (forwarded from its email, not downloaded);
+  from the desktop apps it arrives as a file and is uploaded.

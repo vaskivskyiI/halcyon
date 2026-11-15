@@ -4,6 +4,7 @@ import { api, onEvent } from '../api.js';
 import { Avatar, Modal, Spinner } from '../components/common.jsx';
 import { toast, toastError, navigate, fmtListDate } from '../util.js';
 import { openComposer } from '../mail/Composer.jsx';
+import { attachmentDrop } from '../mail/attachDrop.js';
 import PersonProfile from '../components/PersonProfile.jsx';
 import LocalDefault from '../components/LocalDefault.jsx';
 import ReviewContacts, { useSuggestionCount } from './Review.jsx';
@@ -65,7 +66,8 @@ export default function ContactsView({ route }) {
         </div>
         <div className="list">
           {list.map((c) => (
-            <div key={c.id} className={`list-row ${selId === c.id ? 'selected' : ''}`} onClick={() => navigate(`#/contacts/${c.id}`)}>
+            <div key={c.id} className={`list-row ${selId === c.id ? 'selected' : ''}`} onClick={() => navigate(`#/contacts/${c.id}`)}
+              {...(c.emails[0] ? attachmentDrop((attachments) => openComposer({ to: [{ name: c.displayName, address: c.emails[0].value }], attachments, dirty: true })) : {})}>
               <input type="checkbox" checked={checked.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => setChecked((s) => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} />
               <Avatar name={c.displayName} email={c.emails[0]?.value} photo={c.photo} size="sm" />
               <div className="grow" style={{ minWidth: 0 }}>

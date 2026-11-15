@@ -809,3 +809,5 @@ a.inkwell-add { width: fit-content; text-decoration: none; height: 22px; display
 .drag-badge { position: fixed; top: -100px; left: -100px; max-width: 260px; padding: 6px 10px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
 .tab.drop, .chip.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
 .task-row[draggable="true"] { cursor: grab; }
+/* An attachment dragged over a message being written, a draft, a person or a contact. */
+.composer.drop-over, .person.drop-over { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }

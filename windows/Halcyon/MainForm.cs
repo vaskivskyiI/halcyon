@@ -26,6 +26,9 @@ public sealed class MainForm : Form
     // Files being fetched: a second click (double click, or again because nothing seemed to happen) does not start
     // another download and open another copy. Forgotten when done, or after two minutes if the download never began.
     readonly Dictionary<string, DateTime> fetching = new();
+    // Attachments ready to be dragged out (URL → temporary file), and the one a drag waits for.
+    readonly Dictionary<string, string> dragFiles = new();
+    string? dragWanted;
 
     string Server => config.Server;
     string Origin => Config.Origin(config.Server);
@@ -261,12 +264,50 @@ public sealed class MainForm : Form
                 ApplyBadge();
                 break;
             case "show": Shell.Front(this); break;
+            case "dragPrepare": DragPrepare(m); break;
+            case "dragStart": DragStart((string?)m["url"] ?? ""); break;
             case "changeServer": ChangeServer(); break;
             case "info":
                 var reply = new JsonObject { ["type"] = "reply", ["rid"] = (int?)m["rid"] ?? 0, ["value"] = new JsonObject { ["version"] = Application.ProductVersion.Split('+')[0], ["mode"] = "remote", ["serverUrl"] = Server, ["shell"] = "windows" } };
                 core.PostWebMessageAsJson(reply.ToJsonString());
                 break;
         }
+    }
+
+    /// <summary>An attachment fetched by the page (Bridge.js) written to a temporary file of its own name.</summary>
+    void DragPrepare(JsonNode m)
+    {
+        var url = (string?)m["url"] ?? "";
+        if (url.Length == 0) return;
+        if (!dragFiles.ContainsKey(url))
+        {
+            try
+            {
+                var name = string.Concat(Path.GetFileName((string?)m["name"] ?? "").Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim();
+                if (name.Length == 0) name = "attachment";
+                var dir = Path.Combine(Path.GetTempPath(), "Halcyon", "drag", Guid.NewGuid().ToString("N")[..8]);
+                Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, name);
+                File.WriteAllBytes(path, Convert.FromBase64String((string?)m["data"] ?? ""));
+                dragFiles[url] = path;
+            }
+            catch (Exception x) { Log.Write("drag prepare: " + x.Message); return; }
+        }
+        if (dragWanted == url) DragStart(url);
+    }
+
+    /// <summary>A real file drag (Explorer saves it where it is dropped), while the mouse button is still down; if the
+    /// file is not ready yet it starts when it is.</summary>
+    void DragStart(string url)
+    {
+        if (!dragFiles.TryGetValue(url, out var path) || !File.Exists(path)) { dragWanted = url; return; }
+        dragWanted = null;
+        if ((MouseButtons & MouseButtons.Left) == 0) return;
+        BeginInvoke(() =>
+        {
+            try { DoDragDrop(new DataObject(DataFormats.FileDrop, new[] { path }), DragDropEffects.Copy); }
+            catch (Exception x) { Log.Write("drag: " + x.Message); }
+        });
     }
 
     static string ToastTag(string? tag, string? page, int? id) => !string.IsNullOrEmpty(tag) ? tag : $"n{page}-{id}";

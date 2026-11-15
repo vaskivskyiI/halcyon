@@ -58,6 +58,21 @@
     if (m.type === 'notification-action') window.dispatchEvent(new CustomEvent('halcyon:notification-action', { detail: { ref: m.ref, action: m.action, tag: m.tag, as: m.as } }));
   });
 
+  // Attachments dragged out to Explorer: fetched by the page while the mouse is down (its session, its certificate),
+  // written to a temporary file by the app, which then starts a real file drag (MainForm.DragStart) — dropped in a
+  // folder it is saved there; dropped back on a message being written it is attached.
+  const prepared = new Map();
+  const toBase64 = (blob) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = no; r.readAsDataURL(blob); });
+  const prepareDrag = (url, name) => {
+    url = String(url);
+    if (!prepared.has(url)) {
+      prepared.set(url, fetch(url, { credentials: 'include' }).then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status))))).then(toBase64)
+        .then((data) => post({ type: 'dragPrepare', url, name: String(name || 'attachment'), data }))
+        .catch(() => prepared.delete(url)));
+    }
+    return prepared.get(url);
+  };
+
   window.halcyonDesktop = Object.freeze({
     isDesktop: true,
     platform: 'win32',
@@ -71,5 +86,7 @@
     changeServer: () => post({ type: 'changeServer' }),
     // Not in the Electron preload: removes a toast by its tag (Notification.close() does the same for its own).
     closeNotification: (tag) => post({ type: 'close', tag: String(tag || '') }),
+    prepareDrag: (url, name) => { prepareDrag(url, name); },
+    dragFile: (url, name) => { prepareDrag(url, name); post({ type: 'dragStart', url: String(url) }); },
   });
 })();

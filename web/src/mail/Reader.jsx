@@ -15,6 +15,7 @@ import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { useDismiss } from '../dismiss.js';
 import { openComposer, replyPayload, Composer } from './Composer.jsx';
 import { openFile } from '../opening.js';
+import { ATT_TYPE, attachmentDrop } from './attachDrop.js';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
 import { EventPicker } from '../calendar/EventPicker.jsx';
@@ -936,6 +937,9 @@ function RelatedBar({ related, onTask, onDraft, onDeleteDraft }) {
 /** Anyone on an email: click for what can be done with them. A drag over the text still selects it. */
 function Person({ a, messageId, accountId, className, children }) {
   const [openMenu, menuNode] = useMenu();
+  // An attachment dropped on a person: a new email to them with it.
+  const [over, setOver] = useState(false);
+  const drop = attachmentDrop((attachments) => openComposer({ to: [a], accountId, attachments, dirty: true }), setOver);
   const copy = (text) => navigator.clipboard.writeText(text).then(() => toast('Copied')).catch(toastError);
   const save = async () => {
     try {
@@ -952,7 +956,7 @@ function Person({ a, messageId, accountId, className, children }) {
       { label: 'Save as contact', icon: UserPlus, onClick: save },
       { label: 'Find their mail', icon: Search, onClick: () => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${a.address}` } })) }]);
   };
-  return <><button type="button" className={`person ${className || ''}`} title={addrFull(a)} data-addr={addrFull(a)} onClick={open} onContextMenu={open}>{children}</button>{menuNode}</>;
+  return <><button type="button" className={`person ${className || ''} ${over ? 'drop-over' : ''}`} title={addrFull(a)} data-addr={addrFull(a)} onClick={open} {...(a?.address ? drop : {})} onContextMenu={open}>{children}</button>{menuNode}</>;
 }
 
 function AddrLine({ label, list, empty, m }) {
@@ -1021,7 +1025,9 @@ function DraftEditor({ edId, d, m, onDone }) {
 
 /**
  * Attachments dragged out of the window into Explorer / Finder / the desktop are saved there. The browser downloads
- * them itself (DownloadURL); the desktop app gets the file ready while the mouse is down and starts a real file drag.
+ * them itself (DownloadURL); the desktop apps get the file ready while the mouse is down and start a real file drag.
+ * Dropped inside the app — on a message being written, a draft or a person — they are attached (attachDrop.js):
+ * in the browser by reference (ATT_TYPE), from the desktop apps as the file.
  */
 function dragOut(m, a) {
   const url = new URL(api.url(`/api/messages/${m.id}/attachments/${a.index}`), location.href).href;
@@ -1036,6 +1042,7 @@ function dragOut(m, a) {
       e.dataTransfer.effectAllowed = 'copy';
       e.dataTransfer.setData('DownloadURL', `${a.contentType || 'application/octet-stream'}:${name}:${url}`);
       e.dataTransfer.setData('text/uri-list', url);
+      e.dataTransfer.setData(ATT_TYPE, JSON.stringify({ messageId: m.id, index: a.index, filename: a.filename, size: a.size }));
     },
   };
 }

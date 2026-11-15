@@ -15,6 +15,7 @@ import { Avatar, useMenu, Spinner, Modal } from '../components/common.jsx';
 import { useDismiss } from '../dismiss.js';
 import { loadFolders, loadLabels, saveSettings } from '../data.js';
 import { openComposer } from './Composer.jsx';
+import { attachmentDrop } from './attachDrop.js';
 import Reader from './Reader.jsx';
 import SendersList from './Senders.jsx';
 import SubscriptionsList from './Subscriptions.jsx';
@@ -1060,7 +1061,8 @@ function OutboxList({ onMenu }) {
         {!items.length && <div className="empty" style={{ padding: 20 }}>Nothing waiting to be sent.</div>}
         <div className="nav-section" style={{ cursor: 'default' }}>Drafts · {drafts.length}</div>
         {drafts.map((d) => (
-          <div key={d.id} className="msg-row" onClick={() => openComposer({ ...d, draftId: d.id })}>
+          <div key={d.id} className="msg-row" title="Open — or drop a file or an attachment here to add it" onClick={() => openComposer({ ...d, draftId: d.id })}
+            {...attachmentDrop((list) => openComposer({ ...d, draftId: d.id, attachments: [...(d.attachments || []), ...list], dirty: true }))}>
             <div className="body">
               <div className="from"><span className="truncate">{d.to?.length ? `To: ${who(d.to)}` : '(no recipients)'}</span><span className="date">{fmtListDate(d.updatedAt)}</span></div>
               <div className="subject truncate">{d.subject || '(no subject)'}</div>
