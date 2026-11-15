@@ -12,11 +12,27 @@
   .keep { display: flex; gap: 8px; font-size: 12px; color: #5b6474; margin-top: 8px; cursor: pointer; }
   .note { font-size: 12px; color: #5b6474; clear: both; padding-top: 14px; }
   .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
+  .cert { background: #fff; border: 1px solid #d0d5dd; border-radius: 10px; padding: 12px; margin-bottom: 14px; font-size: 13px; }
+  .cert dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0; font-size: 12px; } .cert dt { color: #5b6474; } .cert dd { margin: 0; word-break: break-all; }
+  .cert .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .cert button { float: none; height: 30px; padding: 0 12px; font-size: 12px; } .cert button.ghost { background: #eef2ff; color: #1e40af; }
+  .ok { color: #166534; font-size: 12px; margin-top: 6px; }
 </style></head>
 <body>
   <h2>Connection</h2>
   <p>Choose where mail is synced and analysed by AI. Only one place does the work, so nothing is analysed twice.</p>
   <div id="err" class="err" hidden></div>
+  <div id="cert" class="cert" hidden>
+    <b>Server certificate</b> <span class="small" id="certNote"></span>
+    <dl id="certInfo"></dl>
+    <div class="row">
+      <button id="pin" hidden>Trust this certificate</button>
+      <button id="addCa" class="ghost">Add CA certificate…</button>
+      <button id="clearTrust" class="ghost" hidden>Forget trusted certificates</button>
+    </div>
+    <div id="certMsg" class="ok" hidden></div>
+    <div class="note" style="padding-top:8px">Trusted only for this server's address. A CA certificate (the authority that issued your server's certificate) keeps working when the certificate is renewed; a trusted certificate must be trusted again after a renewal.</div>
+  </div>
   <label class="opt"><input type="radio" name="mode" value="local"><span><b>This PC — local AI</b><small>Mail accounts are set up here; mail, calendar and AI run on this computer (e.g. on the NPU of a Surface / Copilot+ PC via Foundry Local, or with Ollama). Everything is stored in your user profile and works offline.</small></span></label>
   <label class="opt"><input type="radio" name="mode" value="remote"><span><b>Halcyon server</b><small>Use your self-hosted Halcyon server. AI runs once on the server, even while this PC is off; this PC runs no background AI.</small>
     <input type="url" id="url" placeholder="https://mail.example.com"><div id="insecure" class="warn" hidden>Plain http: passwords and mail would cross the network unencrypted. Use https, or http only via VPN/LAN.</div>
@@ -33,6 +49,43 @@
   const checkUrl = () => { document.getElementById('insecure').hidden = !(/^http:/i.test(urlInput.value) && !lan.test(urlInput.value)); };
   urlInput.oninput = checkUrl; checkUrl();
   if (q.get('error')) { const e = document.getElementById('err'); e.hidden = false; e.textContent = q.get('error'); }
+  // Certificates: what the server presents, and trusting it (desktop/trust.js).
+  const T = window.halcyonDesktop.trust;
+  const certBox = document.getElementById('cert'), msg = (t, bad) => { const m = document.getElementById('certMsg'); m.hidden = false; m.textContent = t; m.style.color = bad ? '#991b1b' : ''; };
+  let seen = null;
+  const showTrusted = () => T.list().then((l) => { document.getElementById('clearTrust').hidden = !(l.cas.length || l.pinned.length); if (l.cas.length || l.pinned.length) msg(`Trusted here: ${[...l.cas.map((c) => `CA ${c}`), ...l.pinned.map((h) => `certificate of ${h}`)].join('; ')}`); }).catch(() => {});
+  async function inspect() {
+    const url = urlInput.value.trim();
+    if (!/^https:\/\//i.test(url)) return;
+    certBox.hidden = false;
+    try {
+      seen = await T.inspect(url);
+      const row = (k, v) => `<dt>${k}</dt><dd>${String(v).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</dd>`;
+      document.getElementById('certInfo').innerHTML = row('Issued to', seen.subject) + row('Issued by', seen.selfSigned ? 'itself (self-signed)' : seen.issuer)
+        + row('Valid until', seen.validTo) + row('SHA-256', seen.fingerprint) + (seen.nameOk ? '' : row('Problem', `not issued for ${seen.host}`));
+      document.getElementById('certNote').textContent = seen.authorized ? '— trusted by Node; Windows may still refuse it' : '— not trusted by this PC';
+      document.getElementById('pin').hidden = !seen.nameOk;
+    } catch (e) { msg(`Could not read the certificate: ${e.message}`, true); }
+    showTrusted();
+  }
+  document.getElementById('pin').onclick = async () => {
+    if (!seen || !confirm(`Trust this certificate for ${seen.host}?
+
+SHA-256 ${seen.fingerprint}
+
+Compare the fingerprint with the one on your server (e.g. openssl x509 -noout -fingerprint -sha256 -in cert.pem) before you accept.`)) return;
+    try { await T.pin(urlInput.value.trim(), seen.fingerprint); msg('Trusted. Save & restart to connect.'); showTrusted(); } catch (e) { msg(e.message, true); }
+  };
+  document.getElementById('addCa').onclick = async () => {
+    try { const subjects = await T.addCa(); if (subjects) { msg(`Added: ${subjects.join('; ')}. Save & restart to connect.`); showTrusted(); } } catch (e) { msg(String(e.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true); }
+  };
+  document.getElementById('clearTrust').onclick = async () => { if (confirm('Forget the CA certificates and trusted certificates added here?')) { await T.clear(); msg('Forgotten.'); showTrusted(); } };
+  if (q.get('cert')) inspect(); else showTrusted();
+  urlInput.addEventListener('change', () => { if (!certBox.hidden) inspect(); });
+  const certLink = document.createElement('a');
+  certLink.href = '#'; certLink.textContent = 'Certificate…'; certLink.style.cssText = 'font-size:12px;margin-left:8px';
+  certLink.onclick = (e) => { e.preventDefault(); inspect(); };
+  document.getElementById('insecure').after(certLink);
   document.getElementById('save').onclick = () => {
     const mode = document.querySelector('input[name=mode]:checked').value;
     const url = document.getElementById('url').value.trim();

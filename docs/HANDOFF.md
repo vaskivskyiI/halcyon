@@ -1310,3 +1310,10 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - `offline.js` was missing from electron-builder `files` (packaged app could not load it); added with `notify.js`.
 - Battery: background checks skip while the page is hidden (Activity 20 s, Problems 30 s); the poll used without a
   WebSocket runs every 2 minutes while hidden; the visibility refresh catches up when shown.
+- Certificates (`desktop/trust.js`, like windows/Halcyon/Trust.cs): the server check uses `net.fetch` (Chromium's network,
+  the Windows certificate store) instead of Node's fetch (which ignored it: UNABLE_TO_VERIFY_LEAF_SIGNATURE). A
+  certificate error opens the Connection window with the server's certificate (subject, issuer, validity, SHA-256) and
+  two choices: **Trust this certificate** (pinned per host, only if the fingerprint is still the one shown) or **Add CA
+  certificate…** (PEM/DER, CA certificates only). `session.setCertificateVerifyProc` then accepts, for the configured
+  host only, a certificate that is pinned or chains to an added CA, with matching name and dates. The trust IPC answers
+  only the Connection window (file://), never a server page. A certificate error is shown even when an offline copy exists.

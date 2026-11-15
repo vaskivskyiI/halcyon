@@ -1,10 +1,11 @@
 // Halcyon desktop shell. Runs the Halcyon server locally (single-user, loopback only, secret token)
 // or connects to a remote Halcyon server (keeping a copy on this PC for offline reading, offline.js). Provides tray,
 // native notifications, unread badge, mailto: handling, start-at-login, downloads and dragging attachments out.
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage, session, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage, session, dialog, net } = require('electron');
 const { fork, execFile } = require('node:child_process');
 const { setupOffline } = require('./offline.js');
 const notify = require('./notify.js');
+const trust = require('./trust.js');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -37,13 +38,20 @@ function foundryUrl() {
   }));
 }
 
-// Server mode: fail fast with a useful message instead of a blank window.
+// Server mode: fail fast with a useful message instead of a blank window. Asked through Chromium's network (as the
+// pages are): the certificates Windows trusts and those added in the Connection window (trust.js) count.
+const CERT_ERROR = /CERT|SSL|certificate|UNABLE_TO_VERIFY|SELF_SIGNED/i;
 async function checkServer(url) {
   try {
-    const r = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(8000) });
+    const r = await net.fetch(`${url}/api/health`, { signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   } catch (e) {
-    throw new Error(`Cannot reach the Halcyon server at ${url} (${e.cause?.code || e.message}). Check the network/VPN, or switch to "This PC" mode.`);
+    const why = e.cause?.code || e.message;
+    const err = new Error(CERT_ERROR.test(why)
+      ? `The certificate of ${new URL(url).host} is not trusted by this PC (${why}). If it is your own (self-signed, or from your own CA), trust it below.`
+      : `Cannot reach the Halcyon server at ${url} (${why}). Check the network/VPN, or switch to "This PC" mode.`);
+    err.cert = CERT_ERROR.test(why);
+    throw err;
   }
 }
 
@@ -100,10 +108,10 @@ function createWindow() {
   return win;
 }
 
-function connectWindow(error) {
-  const w = new BrowserWindow({ width: 540, height: 560, resizable: false, title: 'Halcyon — Connection', icon: iconPath, autoHideMenuBar: true,
+function connectWindow(error, cert = false) {
+  const w = new BrowserWindow({ width: 560, height: 760, resizable: true, title: 'Halcyon — Connection', icon: iconPath, autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true } });
-  w.loadFile(path.join(__dirname, 'connect.html'), { query: { mode: config.mode, url: config.serverUrl, offline: config.offline ? '1' : '0', error: error || '' } });
+  w.loadFile(path.join(__dirname, 'connect.html'), { query: { mode: config.mode, url: config.serverUrl, offline: config.offline ? '1' : '0', error: error || '', cert: cert ? '1' : '' } });
   return w;
 }
 
@@ -206,6 +214,17 @@ const notifyHandlers = {
 ipcMain.on('notify', (e, m) => { if (e.sender === win?.webContents) notify.show(m || {}, notifyHandlers); });
 ipcMain.on('notify:close', (e, tag) => notify.close(tag));
 ipcMain.on('connect:open', () => connectWindow());
+// Certificates (trust.js) — only from the Connection window, never from a server's page.
+const fromConnect = (e) => String(e.senderFrame?.url || '').startsWith('file:') && /connect\.html/.test(e.senderFrame.url);
+const guarded = (fn) => async (e, ...a) => { if (!fromConnect(e)) throw new Error('Not allowed'); return fn(...a); };
+ipcMain.handle('trust:inspect', guarded((url) => trust.inspect(url)));
+ipcMain.handle('trust:pin', guarded((url, fingerprint) => trust.pin(url, fingerprint).then((c) => c.subject)));
+ipcMain.handle('trust:addCa', guarded(async () => {
+  const r = await dialog.showOpenDialog({ title: 'CA certificate of your server', properties: ['openFile'], filters: [{ name: 'Certificates', extensions: ['crt', 'cer', 'pem', 'der'] }, { name: 'All files', extensions: ['*'] }] });
+  return r.canceled ? null : trust.addCa(r.filePaths[0]);
+}));
+ipcMain.handle('trust:list', guarded(() => trust.list()));
+ipcMain.handle('trust:clear', guarded(() => trust.clear()));
 ipcMain.on('show', () => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), mode: config.mode, serverUrl: config.serverUrl }));
 
@@ -227,12 +246,14 @@ app.whenReady().then(async () => {
     // so mail is never analysed twice for the same account.
     if (config.mode === 'remote') {
       if (!config.serverUrl) throw new Error('No server URL configured');
+      trust.install(session.defaultSession, config.serverUrl);
       if (config.offline) {
         offline = setupOffline({ serverUrl: config.serverUrl, dir: path.join(app.getPath('userData'), 'offline'), maxBytes: (Number(config.offlineMB) || 2048) * 1048576,
           onState: (on) => tray?.setToolTip(on === false ? 'Halcyon — offline (showing the copy on this PC)' : 'Halcyon') });
       }
       // Server not reachable: with a copy on this PC the app opens from it (read-only) instead of stopping.
-      await checkServer(config.serverUrl).catch((e) => { if (!offline?.hasApp()) throw e; });
+      // (Not a certificate the PC does not trust: that is for the user to decide, in the Connection window.)
+      await checkServer(config.serverUrl).catch((e) => { if (e.cert || !offline?.hasApp()) throw e; });
       baseUrl = config.serverUrl;
     } else {
       const foundry = await foundryUrl();
@@ -241,7 +262,7 @@ app.whenReady().then(async () => {
       await session.defaultSession.cookies.set({ url, name: 'halcyon_desktop', value: token, httpOnly: true, sameSite: 'strict' });
     }
   } catch (err) {
-    connectWindow(err.message);
+    connectWindow(err.message, !!err.cert);
     return;
   }
   createWindow();

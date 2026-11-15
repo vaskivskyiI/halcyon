@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('halcyonDesktop', {
   platform: process.platform,
   setBadge: (count, dataUrl) => ipcRenderer.send('badge', { count, dataUrl }),
   saveConnection: (mode, serverUrl, offline) => ipcRenderer.invoke('connect:save', { mode, serverUrl, offline }),
+  // The Connection window's certificate choices (main.js answers only that window).
+  trust: { inspect: (url) => ipcRenderer.invoke('trust:inspect', url), pin: (url, fp) => ipcRenderer.invoke('trust:pin', url, fp),
+    addCa: () => ipcRenderer.invoke('trust:addCa'), list: () => ipcRenderer.invoke('trust:list'), clear: () => ipcRenderer.invoke('trust:clear') },
   info: () => ipcRenderer.invoke('app:info'),
   // The Connection window (this PC / a server), also from the page's profile menu.
   openConnection: () => ipcRenderer.send('connect:open'),
