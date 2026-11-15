@@ -20,7 +20,9 @@ import { sharedOf, mergedOf } from '../shared.js';
 import { recordFeedback, correctInsight, similarRecent } from '../ai/learning.js';
 import { enqueue } from '../ai/queue.js';
 import { checkLinks } from '../mail/links.js';
-import { FOCUSED } from '../mail/focused.js';
+import { FOCUSED, setFocusOverride } from '../mail/focused.js';
+import { countSenderAction } from '../ai/sender-history.js';
+import { unsubscribePlan, unsubscribeTargets, subscriptionKey } from '../mail/lists.js';
 import { saveUpload, readUpload } from '../mail/uploads.js';
 import * as X from '../mail/extras.js';
 import { listCategories, saveCategory, categoryById, setTag, viewSql } from '../ai/custom.js';
@@ -399,7 +401,7 @@ export default async function mailRoutes(app) {
     const folder = get('SELECT id, name, special_use FROM folders WHERE id = ?', m.folder_id);
     return serializeMessage(m, {
       html, text: m.body_text || (!m.body_html && m.calendar_ics ? inviteText(m.calendar_ics) : m.body_text), blockedRemote, attachments: json(m.attachments_json, []).filter((a) => !a.inline),
-      listUnsubscribe: m.list_unsubscribe, insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
+      listUnsubscribe: m.list_unsubscribe, unsubscribe: unsubscribePlan(m), insight: serializeInsight(ins), folder: folder && { id: folder.id, name: folder.name, specialUse: folder.special_use },
       senderContactId: sender?.id || null, ...(lite ? { text: null, partial: true } : {}),
       myCategories: all("SELECT category_id AS id FROM message_tags WHERE message_id = ? AND source IN ('ai', 'user')", m.id).map((x) => x.id),
     });
@@ -601,6 +603,12 @@ export default async function mailRoutes(app) {
     const archiveMove = action === 'move' && get("SELECT 1 AS x FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.kind = 'archive'", Number(req.body?.folderId));
     const undo = ['archive', 'trash', 'spam', 'notspam', 'move'].includes(action) && !archiveMove ? actions.folderSnapshot(u, target) : null;
     let undoDelete = null;
+    // What the user does with a sender's mail is remembered for the AI (ai/sender-history.js), also after it is gone.
+    if (['trash', 'delete', 'archive', 'spam'].includes(action) && target.length) {
+      countSenderAction(u, all(`SELECT m.from_addr, m.is_read, f.special_use FROM messages m JOIN folders f ON f.id = m.folder_id
+        WHERE m.user_id = ? AND m.id IN (${target.map(() => '?').join(',')}) AND COALESCE(f.special_use, '') NOT IN ('\\Sent', '\\Drafts')
+          AND (? != 'trash' OR COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk'))`, u, ...target, action), action);
+    }
     switch (action) {
       case 'read': actions.setFlags(u, target, { read: true }); break;
       case 'unread': actions.setFlags(u, target, { read: false }); break;
@@ -738,32 +746,40 @@ export default async function mailRoutes(app) {
     return { insight, sender: m.from_addr, rechecked };
   });
 
+  // Focused / Other by hand, without calling the mail important: the conversation moves (focus_overrides); always = also
+  // every future email from the sender. Two moves of the same sender's mail the same way are learned (mail/focused.js).
+  app.post('/api/messages/focus', async (req, reply) => {
+    const list = ids(req.body?.ids);
+    if (!list.length) return httpError(reply, 400, 'ids needed');
+    const r = setFocusOverride(req.user.id, list, req.body?.focused !== false, { always: !!req.body?.always });
+    notify(req.user.id, 'mail:changed', { ids: list });
+    return r;
+  });
+
+  // Unsubscribes as unsubscribePlan (mail/lists.js) says — the same text the button showed: a one-click request, an
+  // email to the list's leave address, or (returned to the client) the sender's page to open.
   app.post('/api/messages/:id/unsubscribe', async (req, reply) => {
     const m = get('SELECT * FROM messages WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
-    if (!m?.list_unsubscribe) return httpError(reply, 400, 'No unsubscribe information');
-    let header = m.list_unsubscribe;
-    try { const o = JSON.parse(header); header = [o.url, o.mail && `mailto:${o.mail}`].filter(Boolean).map((x) => `<${x}>`).join(', '); } catch { /* raw header */ }
-    const urls = [...header.matchAll(/<([^>]+)>/g)].map((x) => x[1]);
-    const raw = readRaw(m);
-    const oneClick = raw && /List-Unsubscribe-Post:\s*List-Unsubscribe=One-Click/i.test(raw.subarray(0, 20000).toString());
-    const http = urls.find((u) => /^https:/i.test(u));
-    // Remembered per sender (Mail → Subscriptions), so a list that keeps sending afterwards stands out.
-    const done = (method) => run('INSERT OR REPLACE INTO unsubscribed (user_id, address, method, at) VALUES (?, ?, ?, ?)', req.user.id, (m.from_addr || '').toLowerCase(), method, now());
-    if (http && oneClick) {
+    const li = m && get('SELECT * FROM list_info WHERE message_id = ?', m.id);
+    const plan = m && unsubscribePlan(m, li);
+    if (!plan) return httpError(reply, 400, m?.list_unsubscribe ? 'This email gives no address Halcyon can unsubscribe with' : 'This email has no unsubscribe information');
+    // Remembered per list or sender (Mail → Subscriptions), so a list that keeps sending afterwards stands out.
+    const done = (method) => run('INSERT OR REPLACE INTO unsubscribed (user_id, address, method, at) VALUES (?, ?, ?, ?)', req.user.id, subscriptionKey(m, li), method, now());
+    if (plan.method === 'one-click') {
+      const { web } = unsubscribeTargets(m.list_unsubscribe);
       try {
-        const r = await fetch(http, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click' });
-        if (r.ok) { done('one-click'); return { ok: true, method: 'one-click' }; }
-      } catch { /* fall through */ }
+        const r = await fetch(web, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click', signal: AbortSignal.timeout(15000) });
+        if (r.ok) { done('one-click'); return { ok: true, method: 'one-click', text: plan.text }; }
+        return httpError(reply, 502, `${plan.target} refused the unsubscribe request (${r.status})`);
+      } catch (e) { return httpError(reply, 502, `${plan.target} could not be reached: ${e.message}`); }
     }
-    const mailto = urls.find((u) => /^mailto:/i.test(u));
-    if (mailto) {
-      const u = new URL(mailto);
-      queueSend(req.user.id, { accountId: m.account_id, to: [u.pathname], subject: u.searchParams.get('subject') || 'unsubscribe', text: u.searchParams.get('body') || 'unsubscribe' });
+    if (plan.method === 'mailto') {
+      queueSend(req.user.id, { accountId: m.account_id, to: [plan.target], subject: plan.subject, text: plan.body });
       done('mailto');
-      return { ok: true, method: 'mailto' };
+      return { ok: true, method: 'mailto', text: plan.text };
     }
-    if (http) { done('browser'); return { ok: false, method: 'browser', url: http }; }
-    return httpError(reply, 400, 'Unsubscribe not possible automatically');
+    done('browser');
+    return { ok: false, method: 'browser', url: plan.url, text: plan.text };
   });
 
   app.get('/api/messages/:id/invitation', async (req) => invitationFor(req.user.id, Number(req.params.id)));

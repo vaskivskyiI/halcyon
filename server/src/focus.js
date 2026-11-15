@@ -38,15 +38,15 @@ export function focusSenders(userId) {
   return all(`SELECT s.address, s.auto, s.focused, s.created_at AS createdAt,
       (SELECT MAX(m.from_name) FROM messages m WHERE m.user_id = s.user_id AND lower(m.from_addr) = s.address) AS name
     FROM focus_senders s WHERE s.user_id = ? ORDER BY s.focused DESC, s.address`, userId)
-    .map((r) => ({ ...r, auto: !!r.auto, focused: !!r.focused }));
+    .map((r) => ({ ...r, auto: !!r.auto, focused: r.focused === 1, other: r.focused === -1 }));
 }
 
-/** on = true: always Focused (added by the user); false: taken out (an entry learned again is not brought back). */
+/** on = true: always Focused (added by the user); 'other': always Other; false: taken out (not learned again). */
 export function setFocusSender(userId, address, on) {
   const a = normalizeSender(address);
   if (!a) throw new Error('An email address or a domain (@example.org) is needed');
   run(`INSERT INTO focus_senders (user_id, address, auto, focused, created_at) VALUES (?, ?, 0, ?, ?)
-    ON CONFLICT(user_id, address) DO UPDATE SET focused = excluded.focused`, userId, a, on ? 1 : 0, now());
+    ON CONFLICT(user_id, address) DO UPDATE SET focused = excluded.focused, auto = 0`, userId, a, on === 'other' ? -1 : on ? 1 : 0, now());
   return a;
 }
 

@@ -3,7 +3,9 @@ import {
   Reply, ReplyAll, Forward, CloudOff, Archive, Trash2, AlertOctagon, Star, Clock, MoreHorizontal, Sparkles, Paperclip, Download, Image as ImageIcon,
   CalendarPlus, CalendarClock, CheckSquare, ListChecks, Languages, Printer, FileCode, BellOff, ArrowLeft, Tag, Folder, MailOpen, Mail as MailIcon, AlertTriangle, Check, HelpCircle, X as XIcon, MapPin, Video, RefreshCw,
   ThumbsUp, ThumbsDown, Hourglass, CornerUpLeft, PenLine, ClipboardCheck, Send, Pencil, ChevronDown, Zap, Maximize2, ShieldCheck, UserPlus, Pin, StickyNote, ChevronRight, Copy, Search,
+  ArrowUpToLine, ArrowDownToLine,
 } from 'lucide-react';
+import { focusMenuItems } from './focus.js';
 import { api, stream, onEvent } from '../api.js';
 import { store } from '../store.js';
 import { BackButton, jump } from '../back.js';
@@ -437,11 +439,12 @@ export default function Reader({ id, view, replyNow = false }) {
   };
 
   const unsubscribe = async () => {
-    if (!confirm(`Unsubscribe from ${target.from.name || target.from.address}? Halcyon contacts the sender's unsubscribe address for you.`)) return;
+    const plan = target.unsubscribe;
+    if (!plan || !confirm(`${plan.list ? `Leave the mailing list “${plan.list}”` : `Unsubscribe from ${target.from.name || target.from.address}`}?\n\n${plan.text}`)) return;
     try {
       const r = await api.post(`/api/messages/${target.id}/unsubscribe`);
       if (r.method === 'browser') window.open(r.url, '_blank', 'noopener');
-      else toast('Unsubscribed');
+      else toast(r.method === 'mailto' ? `Unsubscribe email sent to ${plan.target}` : `Unsubscribed (request accepted by ${plan.target})`);
     } catch (e) { toastError(e); }
   };
 
@@ -452,12 +455,13 @@ export default function Reader({ id, view, replyNow = false }) {
     { label: 'Add to a task…', icon: ListChecks, onClick: () => setPickTask({ id: latest.id, subject: latest.subject }) },
     { label: 'Save sender to contacts', icon: UserPlus, onClick: saveSender },
     { label: 'Translate', icon: Languages, onClick: () => translate(latest) },
-    target.listUnsubscribe && { label: 'Unsubscribe', icon: BellOff, onClick: unsubscribe },
+    target.unsubscribe && { label: target.unsubscribe.list ? 'Leave mailing list' : 'Unsubscribe', icon: BellOff, onClick: unsubscribe },
     'sep',
     { label: target.isRead ? 'Mark as unread' : 'Mark as read', icon: target.isRead ? MailIcon : MailOpen, onClick: () => act(target.isRead ? 'unread' : 'read') },
     { label: latest.insight?.needsReply ? 'Remove “needs reply”' : 'Mark as needs reply', icon: CornerUpLeft, onClick: () => setNeedsReply(!latest.insight?.needsReply) },
     settings.ai.enabled && { label: 'Mark as important', icon: ThumbsUp, hint: 'AI learns', onClick: () => feedback('important') },
     settings.ai.enabled && { label: 'Mark as not important', icon: ThumbsDown, hint: 'AI learns', onClick: () => feedback('unimportant') },
+    ...(settings.mail.focusedInbox && target.folder?.specialUse === '\\Inbox' ? focusMenuItems([target.id], { sender: target.from?.name || target.from?.address, icons: { to: ArrowUpToLine, away: ArrowDownToLine } }) : []),
     { label: 'Print', icon: Printer, hint: 'Ctrl+P', onClick: () => printRef.current() },
     { label: 'Download .eml', icon: FileCode, onClick: () => window.open(api.url(`/api/messages/${target.id}/raw`)) },
     target.folder?.specialUse === '\\Junk' ? { label: 'Not spam', icon: AlertOctagon, onClick: () => act('notspam') } : { label: 'Report spam', icon: AlertOctagon, onClick: () => act('spam') },
@@ -506,7 +510,7 @@ export default function Reader({ id, view, replyNow = false }) {
           <button className={`chip clickable ${noteOpen ? 'on' : ''}`} title="A private note on this conversation — only you see it" onClick={() => setNoteOpen(true)}><StickyNote size={11} /> Note</button>
           {files.length > 0 && (msgs.length > 1 || files.length > 1) && <button className={`chip clickable ${filesOpen ? 'on' : ''}`} title="All files in this conversation" onClick={() => setFilesOpen(!filesOpen)}><Paperclip size={11} /> Files · {files.length}</button>}
           {!isDraftMsg(latest) && <InkwellNotes {...inkwell} part="add" />}
-          {target.listUnsubscribe && <button className="chip clickable" title="Stop receiving these emails — Halcyon contacts the sender's unsubscribe address" onClick={unsubscribe}><BellOff size={11} /> Unsubscribe</button>}
+          {target.unsubscribe && <button className="chip clickable" title={target.unsubscribe.text} onClick={unsubscribe}><BellOff size={11} /> {target.unsubscribe.list ? 'Leave list' : 'Unsubscribe'}{target.unsubscribe.method === 'web' ? ' ↗' : ''}</button>}
           {ins?.category && <span className="chip" style={{ color: CATEGORY_COLORS[ins.category] }}>{ins.category}</span>}
           {target.labels?.map((lid) => { const l = labels.find((x) => x.id === lid); return l && <span key={lid} className="chip" style={{ background: l.color, color: '#fff' }}>{l.name}</span>; })}
           {(target.myCategories || []).map((cid) => { const c = (folders.custom || []).find((x) => x.id === cid); return c && <a key={`c${cid}`} className="chip" style={{ color: c.color || 'var(--accent)' }} href={`#/mail/my~${c.id}`}><Tag size={11} /> {c.name}</a>; })}
@@ -538,7 +542,8 @@ export default function Reader({ id, view, replyNow = false }) {
         {/* Tasks and events of this mail: inside the AI card next to the suggestions; here only without it (or before it has analysed the mail). */}
         {!(settings.ai.enabled && !isDraftMsg(latest) && ins) && <RelatedBar related={{ ...thread.related, drafts: [] }} onTask={toggleTask} onDraft={openDraft} onDeleteDraft={deleteDraft} />}
 
-        {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px' }}><AlertTriangle size={16} /> This message looks suspicious. Don't click links or share credentials unless you're sure it's genuine.</div>}
+        {ins?.isPhishing && <div className="notice danger" style={{ margin: '0 0 12px', display: 'block' }}><div className="row" style={{ gap: 6 }}><AlertTriangle size={16} /><b className="grow">This message looks like phishing.</b>{target.folder?.specialUse !== '\\Junk' && <button className="btn sm" onClick={() => act('spam')}><AlertOctagon size={13} /> Report spam</button>}</div><div className="small" style={{ marginTop: 4 }}>Don't click its links, pay or sign in from it unless you're sure it's genuine — open the company's site yourself instead.</div>{ins.trust?.reasons?.length > 0 && <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 18 }}>{ins.trust.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}</div>}
+        {!ins?.isPhishing && ins?.trust?.level === 'medium' && <div className="notice" style={{ margin: '0 0 12px', display: 'block' }}><div className="row" style={{ gap: 6 }}><AlertTriangle size={15} /><b>Check the sender before acting on this email</b></div><ul className="small" style={{ margin: '4px 0 0', paddingLeft: 18 }}>{ins.trust.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul></div>}
 
         {settings.ai.enabled && !isDraftMsg(latest) && <AiFloat scroller={scroller} cardRef={aiRef} away={aiAway} setAway={setAiAway} render={(floating) => <AiCard floating={floating} ins={ins} summary={thread.summary} count={msgs.length} latest={latest} aiWorking={aiWorking}
           onReply={aiReply} onEvent={addEvent} onTasks={createTasks} onFeedback={feedback} onNeedsReply={setNeedsReply} related={thread.related} onTask={toggleTask}

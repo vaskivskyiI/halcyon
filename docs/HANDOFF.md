@@ -1221,3 +1221,36 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
   `ShareActivity` copies the share into cache (content: URIs of other apps only) → `#/share/<kind>/<id>`; web
   `share.jsx` reads it via the bridge (`shareData`, `shareFile`): composer with attachments, a new task, or an event
   (existing: appended to its description; or a new one).
+### Sorting with evidence: phishing checks, sender history, Focused by hand, subscriptions by list, topics (migration 63, round91)
+- `mail/trust.js` `trustSignals(userId, m)`: plain checks before the AI reads an email — the receiving server's
+  Authentication-Results (SPF/DKIM/DMARC; DMARC fail +45), a well-known brand in the sender's name/address/domain sent
+  from a domain that is not the brand's (`BRANDS`, +40, +50 from a public provider), look-alike domains (punycode, one
+  letter from a brand's or a contact's domain), Reply-To elsewhere, link flags of `links.js`, first email ever from the
+  domain about money/accounts. Score 0-100; people the user writes to −30 (unless DMARC fails). Given to the analysis as
+  "SECURITY CHECKS"; ≥ 60 (`PHISHING_SCORE`) forces `is_phishing`; the AI's own phishing verdict is dropped for a known
+  sender with score < 20. Phishing: priority ≤ 10, no reply/action/requests; saved in `ai_insights.trust_json`
+  (insight `trust`), shown with its reasons in the reader (≥ 30 without phishing: "Check the sender").
+- `ai/sender-history.js`: `senderStats` (received/opened/answered/deleted (unread)/archived/spam, how often the user wrote to
+  them) — deletions, archiving and spam are also counted in `sender_stats` by the actions route (`countSenderAction`), so they
+  survive an emptied Trash. In the analysis prompt as "SENDER HISTORY"; `applyHistory`: ≥ 4 emails, ≥ 70 % deleted/spam,
+  never answered or written to → priority ≤ 15; a person the user wrote to (not bulk/phishing) → priority ≥ 40.
+- Focused (`mail/focused.js` FOCUSED): order = the user's move of the conversation (`focus_overrides`, key thread_id or
+  `id:<id>`) → phishing is Other → the user's own conversations → senders always in Other (`focus_senders.focused = -1`) →
+  always Focused senders / the AI's priority / a focused message of the conversation. `POST /api/messages/focus {ids,
+  focused, always}`: moves without touching priority; records feedback `focus`/`other` (learning.js; prompt examples);
+  two moves of a sender the same way in a row (or `always`) put the sender on the list (auto=1 when learned; a hand-made
+  entry is not overridden by learning). UI: list row / reader menus "Move to Focused/Other", "Always move to …"
+  (`web/src/mail/focus.js`); Settings → Mail lists "Always in Other". The prompt says priority ≥ 40 = Focused.
+- One-time `reanalyzeRecent('trust:v1')`: unread Inbox mail of the last 14 days analysed again.
+- Subscriptions (`mail/lists.js`, table `list_info` filled at ingest from List-Id / List-Post / List-Unsubscribe-Post, older
+  mail backfilled from the originals): a discussion list (List-Post) is one row `list:<list-id>` named by the list, never its
+  writers; a sender the user writes to who also sends ordinary mail is not a subscription; recent subjects are the list
+  mail only. `unsubscribePlan(m)` says exactly what happens — one-click POST (https + RFC 8058 header) to <host>, an email
+  from <account> to <leave address>, or the page on <host> in the browser — shown on the buttons/confirm (Subscriptions,
+  Senders, reader); no usable address → no button. Unsubscribe is remembered under the list key; Senders offers no
+  unsubscribe for mail a person wrote to a list. `senders/action` accepts `list:<id>` addresses (that list's mail only).
+- Topics (`ai/topics.js`): proposals are matched to existing topics first (`sameTopic`: same letters, or the same
+  distinctive words ignoring generic ones — "NQW 2026 conference" = "NQW 2026"; numbers must agree); generic-only
+  proposals, newsletters/promotions/social and phishing get none; the prompt asks to reuse an existing topic exactly and
+  says most emails have none. `mergeAllTopics` (scheduler, at start and daily) renames near-duplicates of 180 days to the
+  most used spelling.

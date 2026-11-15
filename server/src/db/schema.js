@@ -660,4 +660,22 @@ export const migrations = [
   );
   CREATE INDEX idx_task_links_ref ON task_links(user_id, kind, ref_id);
   `,
+  // 63: why an email is (not) trusted (mail/trust.js: authentication, impersonation, look-alikes) with its analysis;
+  //     conversations the user moved to Focused or Other by hand; what the user did with each sender's mail (kept when
+  //     the mail itself is gone); the List-* headers that tell a newsletter from a person writing to a mailing list.
+  `
+  ALTER TABLE ai_insights ADD COLUMN trust_json TEXT;
+  CREATE TABLE focus_overrides (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, thread_key TEXT NOT NULL, focused INTEGER NOT NULL, created_at INTEGER,
+    PRIMARY KEY (user_id, thread_key)
+  );
+  CREATE TABLE sender_stats (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, address TEXT NOT NULL, deleted INTEGER DEFAULT 0, deleted_unread INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0, spam INTEGER DEFAULT 0, updated_at INTEGER, PRIMARY KEY (user_id, address)
+  );
+  CREATE TABLE list_info (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, list_id TEXT, list_name TEXT, list_post INTEGER DEFAULT 0, one_click INTEGER DEFAULT 0
+  );
+  CREATE INDEX idx_list_info_list ON list_info(list_id);
+  `,
 ];

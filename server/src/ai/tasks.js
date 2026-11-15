@@ -16,6 +16,9 @@ import { scope, inIds } from '../spaces.js';
 import { localToEpoch, normalizeEvent } from '../util/time.js';
 import { senderPreference, applyPreference, preferenceExamples } from './learning.js';
 import { applyHabit, rarelyRead } from './habits.js';
+import { senderStats, senderHistoryText, applyHistory } from './sender-history.js';
+import { recentTopics, normalizeTopic } from './topics.js';
+import { trustSignals, trustText, PHISHING_SCORE } from '../mail/trust.js';
 import { focusedOf, focusedByRule } from '../mail/focused.js';
 import { keywordSearch, embedQuery, messageHits } from '../search.js';
 import { profileText } from './profiles.js';
@@ -90,7 +93,7 @@ export function serializeInsight(r) {
   return {
     summary: r.summary, category: r.category, priority: r.priority, priorityReason: r.priority_reason, needsReply: !!r.needs_reply,
     actionItems: json(r.action_items_json, []), suggestedReplies: json(r.suggested_replies_json, []), events: json(r.events_json, []).filter((e) => !isDeadline(e)), // also in mail analysed before they became tasks
-    sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
+    sentiment: r.sentiment, language: r.language, isPhishing: !!r.is_phishing, trust: json(r.trust_json, null), draftReply: r.draft_reply, model: r.model, createdAt: r.created_at,
     expiresAt: r.expires_at || null, expired: !!(r.expires_at && r.expires_at < now()), requests: json(r.requests_json, []),
     needsAction: action === 'open', actionSuggested: action === 'suggested' && !r.dismissed_at, actionSummary: r.action_summary || null, expectsReply: !!r.expects_reply,
     actionState: json(r.action_state_json, {}),
@@ -237,19 +240,7 @@ export function addressingOf(m, accounts) {
   return { role: 'none', text: `Recipients: the user is NOT listed in To or CC (mailing list, distribution list or BCC; ${to.length + cc.length} visible recipients).${bulk}` };
 }
 
-/** Topics used in the last 90 days, most frequent first (the model is asked to reuse them for consistency). */
-export function recentTopics(userId, limit = 30) {
-  return all(`SELECT i.topic, COUNT(*) AS n FROM ai_insights i JOIN messages m ON m.id = i.message_id
-    WHERE m.user_id = ? AND i.topic IS NOT NULL AND m.date > ? GROUP BY lower(i.topic) ORDER BY n DESC LIMIT ?`, userId, now() - 90 * 864e5, limit).map((r) => r.topic);
-}
-
-/** Cleans a model-proposed topic and maps it onto an existing one when only the spelling differs. */
-export function normalizeTopic(topic, existing = []) {
-  const t = String(topic || '').replace(/["'`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
-  if (!t || /^(null|none|n\/a|other|general|misc)$/i.test(t)) return null;
-  const key = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-  return existing.find((e) => key(e) === key(t)) || t;
-}
+export { recentTopics, normalizeTopic } from './topics.js';
 
 /** Expired insights (login codes, past deadlines…) drop out of priority views and "needs reply". */
 export function expireInsights() {
@@ -317,9 +308,9 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
   let model;
   if (dup) {
     run(`INSERT OR REPLACE INTO ai_insights (message_id, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply, action_user)
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply, action_user, trust_json)
       SELECT ?, summary, category, priority, priority_reason, needs_reply, action_items_json, suggested_replies_json, events_json,
-      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply, action_user FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
+      sentiment, language, is_phishing, draft_reply, model, created_at, expires_at, requests_json, topic, dismissed_at, needs_action, action_summary, resolution, resolved_by, action_state_json, needs_reply_user, expects_reply, action_user, trust_json FROM ai_insights WHERE message_id = ?`, m.id, dup.message_id);
     run("UPDATE messages SET ai_status = 'done' WHERE id = ?", m.id);
   } else {
     const { ctx, settings, accounts, uiLanguage } = ctxFor(userId, m.account_id);
@@ -334,6 +325,10 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const about = (fromMe ? json(m.to_json, []).slice(0, 2).map((a) => a.address) : [m.from_addr]).map((a) => profileText(userId, a)).filter(Boolean);
     const peopleInfo = about.length ? `\n${fromMe ? 'About the recipients' : 'About the sender'} (from earlier mail): ${about.join('\n')}` : '';
     const tz = settings.calendar.timezone;
+    // Evidence the model cannot see in the text: is the sender who they claim to be, and what the user did with their mail.
+    const trust = fromMe ? null : trustSignals(userId, m, { own });
+    const history = fromMe ? null : senderStats(userId, m);
+    const evidence = fromMe ? '' : `\n${senderHistoryText(history, tz)}${trustText(trust) ? `\n${trustText(trust)}` : ''}`;
     const pref = fromMe ? { importance: null, category: null } : senderPreference(userId, m.from_addr);
     const topics = recentTopics(userId);
     // Broader than the conversation: requests the user's email may close (fromMe), and recent mail with the same
@@ -344,7 +339,7 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
     const message = P.messageForPrompt(m, 6000, tz, own);
     const conversation = conversationContext(userId, m, own, tz);
     const myCats = describedFor(userId, m.account_id);
-    const prompt = P.analyzePrompt({ ctx, message, conversation, custom: promptBlock(myCats), senderInfo: senderInfo + recipientInfo + peopleInfo, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m),
+    const prompt = P.analyzePrompt({ ctx, message, conversation, custom: promptBlock(myCats), senderInfo: senderInfo + recipientInfo + peopleInfo + evidence, timezone: tz, fromMe, topics, openRequests, related, preferences: fromMe ? '' : preferenceExamples(userId, m),
       language: summaryLanguage(settings, uiLanguage) });
     const res = await chatJSON(userId, 'background', { ...prompt, temperature: 0.1, maxTokens: 1000, interactive });
     model = res.model;
@@ -365,15 +360,27 @@ export async function analyzeMessage(userId, messageId, { interactive = false, q
       try { await verifyOpen(userId, m, res.data, { ctx, conversation, message, interactive, language: summaryLanguage(settings, uiLanguage) }); } catch (e) { log.warn(`verify ${m.id}: ${e.message}`); }
     }
     applyPreference(res.data, pref);
-    if (!fromMe) applyHabit(userId, res.data, m, pref, contact);
+    if (!fromMe) {
+      applyHabit(userId, res.data, m, pref, contact);
+      // Phishing: the checks decide when they are sure; the AI's own suspicion counts unless the sender is someone the
+      // user writes to and nothing technical speaks against them.
+      if (trust.score >= PHISHING_SCORE) res.data.is_phishing = true;
+      else if (res.data.is_phishing && trust.known && trust.score < 20) res.data.is_phishing = false;
+      applyHistory(res.data, history, m, { pref, favorite: contact?.favorite });
+      if (res.data.is_phishing) {
+        Object.assign(res.data, { priority: Math.min(Number(res.data.priority) || 0, 10), needs_reply: false, needs_action: false, action_summary: '', suggested_replies: [], requested_items: [] });
+        res.data.priority_reason = trust.reasons[0] || res.data.priority_reason || 'Looks like phishing';
+      }
+    }
     if (!fromMe && !res.data.needs_action) res.data.action_items = []; // shown only with an action that counts
-    res.data.topic = normalizeTopic(res.data.topic, topics);
+    res.data.topic = normalizeTopic(res.data.topic, topics, { category: res.data.category, phishing: res.data.is_phishing });
     if (fromMe) { res.data.needs_reply = false; res.data.needs_action = false; res.data.suggested_replies = []; res.data.requested_items = []; res.data.priority = Math.min(Number(res.data.priority) || 0, 40); }
     res.data.requested_items = checkRequests(m, res.data.requested_items);
     if (!quiet && res.data.requested_items.length) {
       res.data.requests = await findRequestedEmails(userId, m, res.data.requested_items).catch(() => null);
     }
     saveInsight(m, res.data, model, tz, { quiet });
+    if (trust) run('UPDATE ai_insights SET trust_json = ? WHERE message_id = ?', JSON.stringify({ score: trust.score, level: trust.level, reasons: trust.reasons, auth: trust.auth }), m.id);
     if (myCats.length) applyAiTags(userId, m.id, res.data.my_categories, myCats);
     if (candidates.length) {
       // Which open requests this email by the user answers: asked one by one (small models rarely fill "resolves").
@@ -478,6 +485,22 @@ export function reanalyzeItems(version = 'items:v1') {
   for (const u of all('SELECT id FROM users')) {
     const rows = all(`SELECT m.id FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND f.special_use = '\\Inbox'
       AND i.needs_action = 0 AND i.dismissed_at IS NULL AND i.action_items_json NOT IN ('[]', '') AND i.model != 'user' AND m.date >= ? ORDER BY m.date DESC LIMIT 200`, u.id, now() - openSettings(u.id).days * 864e5);
+    for (const r of rows) { enqueue(u.id, 'analyze', r.id, 15, { force: true }); n++; }
+  }
+  run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', `reanalyze:${version}`, String(now()));
+  return n;
+}
+
+/**
+ * Once after the sender checks arrived (mail/trust.js, ai/sender-history.js): the unread Inbox mail of the last 14 days
+ * is analysed again, so a fake invoice already sitting in Focused leaves it.
+ */
+export function reanalyzeRecent(version = 'trust:v1') {
+  if (get('SELECT value FROM app_state WHERE key = ?', `reanalyze:${version}`)) return 0;
+  let n = 0;
+  for (const u of all('SELECT id FROM users')) {
+    const rows = all(`SELECT m.id FROM messages m JOIN ai_insights i ON i.message_id = m.id JOIN folders f ON f.id = m.folder_id WHERE m.user_id = ? AND f.special_use = '\\Inbox'
+      AND m.is_read = 0 AND i.model != 'user' AND m.date >= ? ORDER BY m.date DESC LIMIT 300`, u.id, now() - 14 * 864e5);
     for (const r of rows) { enqueue(u.id, 'analyze', r.id, 15, { force: true }); n++; }
   }
   run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', `reanalyze:${version}`, String(now()));

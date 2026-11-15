@@ -10,8 +10,8 @@ import { get, all, run, now } from '../db/index.js';
 import { keywords } from '../util/text.js';
 
 const PUBLIC_DOMAINS = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com', 'gmx.net', 'gmx.de', 'web.de', 'proton.me', 'protonmail.com', 'siol.net', 't-2.net', 'amis.net', 'aol.com', 'mail.com']);
-const KINDS = new Set(['important', 'unimportant', 'spam', 'notspam', 'category', 'reply', 'noreply', 'action', 'noaction']);
-const DIMS = { category: ['category'], spam: ['spam', 'notspam'], notspam: ['spam', 'notspam'], reply: ['reply', 'noreply'], noreply: ['reply', 'noreply'], action: ['action', 'noaction'], noaction: ['action', 'noaction'] };
+const KINDS = new Set(['important', 'unimportant', 'spam', 'notspam', 'category', 'reply', 'noreply', 'action', 'noaction', 'focus', 'other']);
+const DIMS = { category: ['category'], spam: ['spam', 'notspam'], notspam: ['spam', 'notspam'], reply: ['reply', 'noreply'], noreply: ['reply', 'noreply'], action: ['action', 'noaction'], noaction: ['action', 'noaction'], focus: ['focus', 'other'], other: ['focus', 'other'] };
 const domainOf = (addr) => String(addr || '').toLowerCase().split('@')[1] || '';
 
 export function recordFeedback(userId, m, kind, value = null, reason = null) {
@@ -48,6 +48,9 @@ export function senderPreference(userId, fromAddr) {
   return { importance: imp?.kind || null, category: cat?.value || null, spam: spam?.kind === 'spam', reply: agreed(userId, from, ['reply', 'noreply']), action: agreed(userId, from, ['action', 'noaction']) };
 }
 
+/** 'focus' | 'other' once the user moved this sender's mail the same way twice in a row (mail/focused.js). */
+export const agreedFocus = (userId, from) => agreed(userId, String(from || '').toLowerCase(), ['focus', 'other']);
+
 // "Needs no reply" / "not an action" from a sender: only once the user said so twice in a row (one correction may be
 // about that one email; a colleague's next question still deserves a reply).
 function agreed(userId, from, kinds) {
@@ -66,6 +69,7 @@ export function applyPreference(d, pref) {
 }
 
 const label = (r) => ({ important: 'marked IMPORTANT', unimportant: 'marked NOT important', spam: 'marked SPAM', category: `category set to "${r.value}"`,
+  focus: 'moved to FOCUSED by the user (wants to see it; not necessarily important — priority about 45)', other: 'moved to OTHER by the user (not worth their attention now — priority below 40)',
   reply: 'the user said it NEEDS a reply', noreply: 'the user said it needs NO reply', action: 'the user said it needs an action', noaction: 'the user said it is NOT an action for them' }[r.kind]);
 
 const words = keywords;
@@ -136,7 +140,7 @@ export function correctInsight(messageId, kind, value) {
 
 export function listPreferences(userId) {
   return all(`SELECT f.from_addr AS fromAddr, f.kind, f.value, f.subject, f.created_at AS createdAt FROM ai_feedback f
-    WHERE f.user_id = ? AND f.id IN (SELECT MAX(id) FROM ai_feedback WHERE user_id = ? AND ${PLAIN} GROUP BY from_addr, CASE WHEN kind IN ('spam','notspam') THEN 's' WHEN kind = 'category' THEN 'c' ELSE 'i' END)
+    WHERE f.user_id = ? AND f.id IN (SELECT MAX(id) FROM ai_feedback WHERE user_id = ? AND ${PLAIN} GROUP BY from_addr, CASE WHEN kind IN ('spam','notspam') THEN 's' WHEN kind = 'category' THEN 'c' WHEN kind IN ('focus','other') THEN 'f' WHEN kind IN ('reply','noreply') THEN 'r' WHEN kind IN ('action','noaction') THEN 'a' ELSE 'i' END)
     ORDER BY f.created_at DESC LIMIT 300`, userId, userId);
 }
 

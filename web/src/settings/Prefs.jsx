@@ -56,7 +56,7 @@ function FocusSenders() {
   const set = (address, focused) => api.post('/api/focus-senders', { address, focused }).then(load).catch(toastError);
   const submit = (e) => { e.preventDefault(); if (!add.trim()) return; set(add.trim(), true).then(() => setAdd('')); };
   if (!rows) return <Spinner />;
-  const on = rows.filter((r) => r.focused), off = rows.filter((r) => !r.focused);
+  const on = rows.filter((r) => r.focused), other = rows.filter((r) => r.other), off = rows.filter((r) => !r.focused && !r.other);
   const shown = all ? on : on.slice(0, 12);
   return <>
     <h3>Always in Focused</h3>
@@ -72,6 +72,9 @@ function FocusSenders() {
         <button className="icon-btn inline" aria-label={`Take out ${r.address}`} title="Take out" onClick={() => set(r.address, false)}><X size={12} /></button></span>)}
       {on.length > shown.length && <button className="link-btn small" onClick={() => setAll(true)}>Show all {on.length}</button>}
     </div>}
+    {other.length > 0 && <><h3>Always in Other</h3><p className="muted small">Mail from these senders goes to Other unless it belongs to a conversation of yours (“Always move to Other” on an email, or two moves of their mail).</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{other.map((r) => <span key={r.address} className="chip" title={r.auto ? 'Learned: you moved their mail to Other twice' : 'Added by you'}>{r.name ? `${r.name} · ` : ''}{r.address}{r.auto ? <span className="faint"> · learned</span> : null}
+        <button className="icon-btn inline" aria-label={`Take out ${r.address}`} title="Take out" onClick={() => api.del(`/api/focus-senders?address=${encodeURIComponent(r.address)}`).then(load).catch(toastError)}><X size={12} /></button></span>)}</div></>}
     {off.length > 0 && <details style={{ marginTop: 8 }}><summary className="small muted">Taken out ({off.length}) — not added again</summary>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>{off.map((r) => <span key={r.address} className="chip faint">{r.address}
         <button className="icon-btn inline" aria-label={`Put back ${r.address}`} title="Put back" onClick={() => set(r.address, true)}><Undo2 size={12} /></button></span>)}</div></details>}

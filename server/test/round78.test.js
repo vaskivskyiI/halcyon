@@ -42,7 +42,8 @@ test('new mail keeps its List-Unsubscribe header and the unsubscribe button uses
   assert.equal((await api('GET', `/api/messages/${id}`)).data.listUnsubscribe, m.list_unsubscribe);
   // No one-click header: the mailto address is used (https without one-click needs the browser).
   const r = await api('POST', `/api/messages/${id}/unsubscribe`);
-  assert.deepEqual(r.data, { ok: true, method: 'mailto' });
+  assert.deepEqual({ ok: r.data.ok, method: r.data.method }, { ok: true, method: 'mailto' });
+  assert.match(r.data.text, /to unsub@shop.example/);
   const out = db.prepare('SELECT payload_json FROM outbox ORDER BY id DESC').get();
   assert.deepEqual([JSON.parse(out.payload_json).to, JSON.parse(out.payload_json).subject], [['unsub@shop.example'], 'stop']);
   // Plain mail has none, and no button.

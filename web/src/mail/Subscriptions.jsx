@@ -1,6 +1,7 @@
-// Mail → Subscriptions: every newsletter and mailing list that sends here (mail with a List-Unsubscribe header), one row
-// per sender with its latest subjects, and one click to unsubscribe — alone, with its inbox mail archived, or for several
-// selected at once. Unsubscribed lists stay listed, so a list that keeps sending shows up.
+// Mail → Subscriptions: every newsletter (one row per sender) and mailing list (one row per list, whoever wrote) that
+// sends here, with its latest subjects and what unsubscribing will do (the server's plan from the email's own
+// List-Unsubscribe header: a one-click request, an email to the leave address, or the sender's page) — alone, with its
+// inbox mail archived, or for several selected at once. Unsubscribed lists stay listed, so a list that keeps sending shows up.
 import { useEffect, useState } from 'react';
 import { Menu as MenuIcon, Archive, BellOff, Search, ChevronRight, ChevronDown, MailOpen } from 'lucide-react';
 import { api } from '../api.js';
@@ -31,7 +32,7 @@ export default function SubscriptionsList({ onMenu }) {
       const x = await unsubscribeOne(r);
       let archived = 0;
       if (archive && r.inbox) archived = (await api.post('/api/senders/action', { address: r.address, action: 'archive' })).count;
-      toast([x.method === 'browser' ? 'Unsubscribe page opened' : x.method === 'mailto' ? 'Unsubscribe email sent' : 'Unsubscribed',
+      toast([x.method === 'browser' ? `Unsubscribe page opened — finish there` : x.method === 'mailto' ? `Unsubscribe email sent to ${r.plan.target}` : `Unsubscribed (request accepted by ${r.plan.target})`,
         archived && `${archived} archived`].filter(Boolean).join(' · '));
       load();
     } catch (e) { toastError(e); } finally { mark(r.address, 'unsub', false); }
@@ -41,7 +42,8 @@ export default function SubscriptionsList({ onMenu }) {
     try { toast(`${(await api.post('/api/senders/action', { address: r.address, action: 'archive' })).count} archived`); load(); } catch (e) { toastError(e); } finally { mark(r.address, 'archive', false); }
   };
   const unsubscribePicked = async () => {
-    const list = rows.filter((r) => picked.has(r.address));
+    const list = rows.filter((r) => picked.has(r.address) && r.plan);
+    if (!confirm(`Unsubscribe from ${list.length}?\n\n${list.map((r) => `• ${r.name || r.address}: ${r.plan.text}`).join('\n')}`)) return;
     let done = 0, pages = 0;
     for (const r of list) {
       mark(r.address, 'unsub', true);
@@ -62,7 +64,7 @@ export default function SubscriptionsList({ onMenu }) {
   };
   const toggle = (address) => setPicked((s) => { const n = new Set(s); n.has(address) ? n.delete(address) : n.add(address); return n; });
   const shown = (rows || []).filter((r) => filter === 'all' || (filter === 'unsubscribed' ? r.unsubscribedAt : !r.unsubscribedAt));
-  const pickable = shown.filter((r) => !r.unsubscribedAt);
+  const pickable = shown.filter((r) => !r.unsubscribedAt && r.plan);
   const allPicked = pickable.length > 0 && pickable.every((r) => picked.has(r.address));
   const unread = (r) => r.total - (r.seen || 0);
   const readTargets = (picked.size ? shown.filter((r) => picked.has(r.address)) : shown).filter((r) => unread(r) > 0);
@@ -88,21 +90,22 @@ export default function SubscriptionsList({ onMenu }) {
             {!r.unsubscribedAt ? <input type="checkbox" checked={picked.has(r.address)} onChange={() => toggle(r.address)} title="Select" /> : <span style={{ width: 13 }} />}
             <div className="grow" style={{ minWidth: 0 }}>
               <button className="link-btn row truncate" style={{ gap: 4, fontWeight: 600, color: 'inherit', textDecoration: 'none', maxWidth: '100%' }} onClick={() => setOpen((o) => ({ ...o, [r.address]: !o[r.address] }))}>
-                {open[r.address] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{r.name || r.address} {r.name && <span className="faint small" style={{ fontWeight: 400 }}>{r.address}</span>}
+                {open[r.address] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{r.isList && <span className="chip" title="People write to this list; leaving it stops all its mail">mailing list</span>}{r.name || r.address.replace(/^list:/, '')} {r.name && <span className="faint small" style={{ fontWeight: 400 }}>{r.address.replace(/^list:/, '')}</span>}
               </button>
               <div className="small muted">{r.total} emails · {r.readRate}% read{r.inbox ? ` · ${r.inbox} in the inbox` : ''} · last {fmtListDate(r.last)}
                 {r.unsubscribedAt ? <> · <span className="chip">unsubscribed {fmtListDate(r.unsubscribedAt)}</span>{r.since > 0 && <span style={{ color: 'var(--danger)' }}> · {r.since} sent since</span>}</> : null}</div>
+              {(!r.unsubscribedAt || r.since > 0) && <div className="small faint" style={{ marginTop: 2 }}>{r.plan ? <>{r.isList ? 'Leave list' : 'Unsubscribe'}: {r.plan.text}</> : 'Their mail gives no unsubscribe address Halcyon can use — look for a link at the end of one of their emails.'}</div>}
               {open[r.address] && <div className="small" style={{ marginTop: 6 }}>{r.recent.map((m) => (
                 <div key={m.id} className="row" style={{ gap: 8, padding: '2px 0' }}>
-                  <a className="truncate grow" style={{ fontWeight: m.isRead ? 400 : 600 }} href={`#/mail/unified/${m.id}`}>{m.subject || '(no subject)'}</a>
+                  <a className="truncate grow" style={{ fontWeight: m.isRead ? 400 : 600 }} href={`#/mail/unified/${m.id}`}>{m.subject || '(no subject)'}{r.isList && m.fromName ? <span className="faint"> · {m.fromName}</span> : null}</a>
                   <span className="faint">{fmtListDate(m.date)}</span>
                 </div>))}</div>}
             </div>
             <div className="row" style={{ gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <button className="icon-btn" title="Show all their mail" onClick={() => { navigate('#/mail/unified'); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${r.address}` } })), 150); }}><Search size={15} /></button>
+              {!r.isList && <button className="icon-btn" title="Show all their mail" onClick={() => { navigate('#/mail/unified'); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${r.address}` } })), 150); }}><Search size={15} /></button>}
               {unread(r) > 0 && <button className="icon-btn" disabled={busy[`${r.address}read`]} title={`Mark ${unread(r)} unread read`} onClick={() => markRead([r])}><MailOpen size={15} /></button>}
-              {(!r.unsubscribedAt || r.since > 0) && <button className="btn sm" disabled={busy[`${r.address}unsub`]} title="Unsubscribe from this list" onClick={() => unsubscribe(r, false)}><BellOff size={13} /> {r.unsubscribedAt ? 'Again' : 'Unsubscribe'}</button>}
-              {!r.unsubscribedAt && r.inbox > 0 && <button className="btn sm ghost" disabled={busy[`${r.address}unsub`]} title={`Unsubscribe and archive the ${r.inbox} in the inbox`} onClick={() => unsubscribe(r, true)}>+ <Archive size={13} /></button>}
+              {r.plan && (!r.unsubscribedAt || r.since > 0) && <button className="btn sm" disabled={busy[`${r.address}unsub`]} title={r.plan.text} onClick={() => unsubscribe(r, false)}><BellOff size={13} /> {r.unsubscribedAt ? 'Again' : r.isList ? 'Leave list' : 'Unsubscribe'}</button>}
+              {r.plan && !r.unsubscribedAt && r.inbox > 0 && <button className="btn sm ghost" disabled={busy[`${r.address}unsub`]} title={`${r.plan?.text} Then archives the ${r.inbox} in the inbox.`} onClick={() => unsubscribe(r, true)}>+ <Archive size={13} /></button>}
               {r.unsubscribedAt && r.inbox > 0 && <button className="btn sm" disabled={busy[`${r.address}archive`]} title="Archive everything from them in the inbox" onClick={() => archive(r)}><Archive size={13} /> Archive {r.inbox}</button>}
             </div>
           </div>

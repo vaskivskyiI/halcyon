@@ -66,7 +66,7 @@ export default function SendersList({ onMenu }) {
               <button className={`icon-btn ${r.focused ? 'on' : ''}`} disabled={busy[`${r.address}focus`]} title={r.focused ? 'Always in Focused — click to stop' : 'Always put their mail in Focused'}
                 aria-pressed={r.focused} onClick={() => focus(r)}><Star size={15} fill={r.focused ? 'currentColor' : 'none'} style={r.focused ? { color: 'var(--accent)' } : undefined} /></button>
               <button className="icon-btn" title="Show their mail" onClick={() => { navigate('#/mail/unified'); setTimeout(() => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${r.address}` } })), 150); }}><Search size={15} /></button>
-              {r.unsubscribeId && !r.unsubscribed && <button className="btn sm" disabled={busy[`${r.address}unsub`]} title="Unsubscribe from this sender's list" onClick={() => unsubscribe(r)}><BellOff size={13} /> Unsubscribe</button>}
+              {r.plan && !r.unsubscribed && <button className="btn sm" disabled={busy[`${r.address}unsub`]} title={r.plan.text} onClick={() => unsubscribe(r)}><BellOff size={13} /> Unsubscribe</button>}
               {r.unsubscribed && <span className="chip">unsubscribed</span>}
               {r.total - Math.round((r.readRate * r.total) / 100) > 0 && <button className="btn sm ghost" disabled={busy[`${r.address}read`]} title="Mark all their mail read" onClick={() => act(r, 'read')}><MailOpen size={13} /></button>}
               {r.inbox > 0 && <button className="btn sm" disabled={busy[`${r.address}archive`]} title="Archive everything from them in the inbox" onClick={() => act(r, 'archive')}><Archive size={13} /> Archive {r.inbox}</button>}

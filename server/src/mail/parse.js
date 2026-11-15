@@ -69,6 +69,21 @@ export function fallbackParse(raw, err) {
   };
 }
 
+// List-* headers (mail/lists.js uses them); here because parsing runs on a worker thread without the database.
+const unfold = (v) => String(v || '').replace(/\r?\n[ \t]+/g, ' ').trim();
+
+/** { listId, listName, listPost, oneClick } from a header getter (name → value or null), or null without List-Id/Post. */
+export function listHeaders(header) {
+  const id = unfold(header('list-id'));
+  const post = unfold(header('list-post'));
+  const oneClick = /List-Unsubscribe=One-Click/i.test(header('list-unsubscribe-post') || '');
+  const m = id.match(/^(.*?)<([^>]+)>/);
+  const listId = (m ? m[2] : id).trim().toLowerCase() || null;
+  const listName = (m ? m[1] : '').trim().replace(/^"|"$/g, '').trim() || null;
+  const listPost = !!post && !/^NO\b/i.test(post);
+  return listId || listPost || oneClick ? { listId, listName, listPost, oneClick } : null;
+}
+
 /** A header's value as sent (unfolded), from mailparser's headerLines; null when absent. */
 export function headerValue(lines, key) {
   const l = (lines || []).find((x) => x.key === key);
@@ -103,7 +118,7 @@ export async function digest(raw) {
     messageId: cleanId(parsed.messageId), inReplyTo, refs, subject: parsed.subject || '', from,
     to: addrList(parsed.to), cc: addrList(parsed.cc), bcc: addrList(parsed.bcc), replyTo: addrList(parsed.replyTo),
     date: parsed.date ? parsed.date.getTime() : null, html, text, snippet: text.replace(/\s+/g, ' ').trim().slice(0, 240), attachments, ics,
-    unsubscribe: unsub, sender: actingSender(parsed.headers, from),
+    unsubscribe: unsub, sender: actingSender(parsed.headers, from), list: listHeaders((k) => headerValue(parsed.headerLines, k)),
   };
 }
 

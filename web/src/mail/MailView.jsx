@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Inbox, Star, Clock, History, Send, Users, FileText, Archive, Trash2, AlertOctagon, Folder, Tag, Search, PenSquare, Sparkles, Reply, MailOpen, Mail as MailIcon, Newspaper,
   ChevronDown, ChevronRight, Paperclip, CalendarPlus, Menu as MenuIcon, X, Plus, CornerUpLeft, Flame, CheckSquare, Square, RefreshCw, AlertTriangle, Send as SendIcon, Hash, Hourglass, Reply as ReplyIcon, Forward as ForwardIcon, ArrowUpDown, Check,
-  ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal, Printer,
+  ClipboardCheck, SlidersHorizontal, Pencil, Pin, PenLine, StickyNote, MoreHorizontal, Printer, ArrowUpToLine, ArrowDownToLine,
 } from 'lucide-react';
+import { focusMenuItems } from './focus.js';
 import { printMail } from './print.js';
 import { api, onEvent } from '../api.js';
 import { store } from '../store.js';
@@ -737,6 +738,8 @@ function MessageList({ view, openId, onMenu }) {
       { label: 'Remove “needs reply”', icon: CornerUpLeft, onClick: () => needsReplyMany(ids, false) },
       settings.ai.enabled && { label: 'Mark as important', icon: Flame, hint: 'AI learns', onClick: () => feedbackMany(ids, 'important') },
       settings.ai.enabled && { label: 'Mark as not important', icon: MailOpen, hint: 'AI learns', onClick: () => feedbackMany(ids, 'unimportant') },
+      ...(settings.mail.focusedInbox ? focusMenuItems(ids, { tab: effectiveTab, sender: ids.length === 1 ? (m.from?.name || m.from?.address) : null, icons: { to: ArrowUpToLine, away: ArrowDownToLine },
+        onDone: () => { if (['focused', 'other'].includes(effectiveTab)) { setItems((cur) => cur.filter((x) => !ids.includes(x.id))); setSelected(new Set()); } loadTabCounts(); } }) : []),
       ...((folders.custom || []).length ? ['sep', { section: 'My categories' }, ...folders.custom.map((c) => {
         const inIt = (m.myCategories || []).includes(c.id);
         return { label: `${inIt ? '✓ ' : ''}${c.name}`, icon: Tag, hint: inIt ? 'take out' : 'add', onClick: () => api.post(`/api/custom-categories/${c.id}/tag`, { ids, value: !inIt }).then(() => { toast(inIt ? `Taken out of “${c.name}”` : `Added to “${c.name}”`); load(false); loadFolders(); }).catch(toastError) };

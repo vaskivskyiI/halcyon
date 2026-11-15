@@ -10,8 +10,10 @@ import { dropStarters } from './bootstrap.js';
 import { syncCardDav } from './contacts/carddav.js';
 import { enqueue } from './ai/queue.js';
 import { backfillAnalysis, purgeMemory, backfillUnsubscribe } from './mail/pipeline.js';
+import { backfillListInfo } from './mail/lists.js';
+import { mergeAllTopics } from './ai/topics.js';
 import { listSpaces } from './spaces.js';
-import { expireInsights, reanalyzeOpen, reanalyzeItems } from './ai/tasks.js';
+import { expireInsights, reanalyzeOpen, reanalyzeItems, reanalyzeRecent } from './ai/tasks.js';
 import { seedCorrespondents, scheduleProfiles } from './ai/profiles.js';
 import { getSettings } from './settings.js';
 import { notify } from './util/events.js';
@@ -208,8 +210,11 @@ export function startScheduler() {
   setTimeout(backfillAll, 15e3).unref();
   setTimeout(job('Regroup conversations', regroupConversations), 20e3).unref();
   setTimeout(job('Mark replied history', markRepliedHistory), 40e3).unref();
-  setTimeout(job('Unsubscribe headers of stored mail', backfillUnsubscribe), 45e3).unref();
-  setTimeout(job('Re-analyse open items', () => { reanalyzeOpen(); reanalyzeItems(); }), 50e3).unref();
+  setTimeout(job('Unsubscribe headers of stored mail', async () => { await backfillUnsubscribe(); await backfillListInfo(); }), 45e3).unref();
+  setTimeout(job('Re-analyse open items', () => { reanalyzeOpen(); reanalyzeItems(); reanalyzeRecent(); }), 50e3).unref();
+  // Near-duplicate topics (ai/topics.js) merged soon after start and then daily.
+  setTimeout(job('Merge similar topics', mergeAllTopics), 55e3).unref();
+  setInterval(job('Merge similar topics', mergeAllTopics), 864e5).unref();
   setInterval(job('Database optimise', () => db.pragma('optimize')), 6 * 3600e3).unref();
   setInterval(backfillAll, 15 * 60e3).unref();
   setInterval(job('Purge memory', async () => { await purgeMemory(); run('DELETE FROM insight_archive WHERE created_at < ?', now() - 7 * 864e5); }), 3600e3).unref();

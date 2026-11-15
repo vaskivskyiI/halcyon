@@ -155,7 +155,7 @@ function Memory({ enabled }) {
   const load = () => { api.get('/api/ai/memory').then(setMem).catch(() => {}); api.get('/api/ai/preferences').then(setPrefs).catch(() => {}); api.get('/api/ai/rules').then(setRules).catch(() => {}); };
   useEffect(() => { load(); }, []);
   const forgetSender = async (from) => { await api.del(`/api/ai/preferences?from=${encodeURIComponent(from)}`).catch(toastError); load(); };
-  const PREF = { important: 'important', unimportant: 'not important', spam: 'spam → Junk', notspam: 'not spam', category: 'category' };
+  const PREF = { important: 'important', unimportant: 'not important', spam: 'spam → Junk', notspam: 'not spam', category: 'category', focus: 'moved to Focused', other: 'moved to Other', reply: 'needs a reply', noreply: 'needs no reply', action: 'an action', noaction: 'not an action' };
   const add = async () => { if (!text.trim()) return; try { await api.post('/api/ai/memory/facts', { text }); setText(''); setTimeout(load, 300); } catch (e) { toastError(e); } };
   const del = async (id) => { await api.del(`/api/ai/memory/facts/${id}`).catch(toastError); load(); };
   const clear = async (what) => {

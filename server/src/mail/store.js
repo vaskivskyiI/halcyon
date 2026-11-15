@@ -1,4 +1,5 @@
 // Ingestion of fetched messages into the local store: parsing, threading, full-text index, hooks.
+import { saveListInfo } from './lists.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -143,6 +144,7 @@ export async function ingestMessage({ account, folder, uid, flags, raw, internal
     const mid = r.lastInsertRowid;
     run('INSERT INTO messages_fts (rowid, subject, sender, recipients, body) VALUES (?, ?, ?, ?, ?)', mid, d.subject,
       `${from.name} ${from.address}`, [...to, ...cc].map((a) => `${a.name} ${a.address}`).join(' '), text.slice(0, 30000));
+    if (d.list) saveListInfo(mid, d.list);
     return mid;
   })();
   restoreInsight(account.user_id, id, messageId);
