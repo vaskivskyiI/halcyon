@@ -18,7 +18,7 @@ on:
         default: 'cc.halcyon.mail'
       version:
         description: 'Version (e.g. 2.0.0)'
-        default: '2.0.0'
+        default: '2.1.0'
 jobs:
   build:
     runs-on: ubuntu-24.04

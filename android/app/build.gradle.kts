@@ -17,7 +17,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = prop("halcyon.versionCode")?.toInt() ?: 1
-        versionName = prop("halcyon.version") ?: "2.0.0"
+        versionName = prop("halcyon.version") ?: "2.1.0"
         // Pre-filled on the first start (the build script's HOST), still changeable there.
         buildConfigField("String", "DEFAULT_SERVER", "\"${prop("halcyon.server") ?: ""}\"")
         resValue("string", "app_name", prop("halcyon.name") ?: "Halcyon")

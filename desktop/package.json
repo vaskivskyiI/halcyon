@@ -1,7 +1,7 @@
 {
   "name": "@halcyon/desktop",
   "productName": "Halcyon",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "description": "Halcyon — AI-native email, calendar and contacts",
   "author": "Halcyon",
   "desktopName": "halcyon.desktop",
