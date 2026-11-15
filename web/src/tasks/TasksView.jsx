@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, Trash2, Mail, Calendar, Flag, MoreHorizontal, Pencil, CalendarX, CalendarClock, ChevronDown, ChevronRight, Share2, Repeat, ListTodo, Star, AlertTriangle, Lock, FolderInput, Cloud, EyeOff, Settings2 } from 'lucide-react';
 import { api, onEvent } from '../api.js';
 import { toast, toastError, navigate } from '../util.js';
@@ -86,6 +86,14 @@ export default function TasksView({ route = [] }) {
 
   // A task stays with its owner: one's own lists, or those of its shared space.
   const movable = (t) => lists.filter((l) => !l.readonly && l.id !== t.listId && (l.owner ?? null) === (t.owner ?? null));
+  // A task dragged onto a list chip moves to that list.
+  const [dropList, setDropList] = useState(null);
+  const dragged = useRef(null);
+  const listDrop = (l) => ({
+    onDragOver: (e) => { const t = dragged.current; if (t && movable(t).some((x) => x.id === l.id)) { e.preventDefault(); setDropList(l.id); } },
+    onDragLeave: () => setDropList(null),
+    onDrop: (e) => { e.preventDefault(); setDropList(null); const t = dragged.current; dragged.current = null; if (t) { patch(t, { listId: l.id }); toast(`Moved to ${l.name}`); } },
+  });
   const taskMenu = (e, t) => openMenu(e, [
     { section: 'Due' },
     ...dueOptions().map(([label, at]) => ({ label, icon: CalendarClock, hint: new Date(at).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }), onClick: () => patch(t, { due: at }) })),
@@ -145,7 +153,7 @@ export default function TasksView({ route = [] }) {
         <div className="task-lists">
           <button className={`chip clickable ${!shown ? 'on' : ''}`} onClick={() => setListId(null)}>All lists</button>
           {lists.map((l) => (
-            <button key={l.id} className={`chip clickable ${shown === l.id ? 'on' : ''}`} onClick={() => setListId(l.id)} onContextMenu={(e) => listMenu(e, l)}
+            <button key={l.id} className={`chip clickable ${shown === l.id ? 'on' : ''} ${dropList === l.id ? 'drop' : ''}`} onClick={() => setListId(l.id)} {...listDrop(l)} onContextMenu={(e) => listMenu(e, l)}
               title={`${l.name} — ${l.origin || (l.source === 'caldav' ? 'synced' : 'kept in Halcyon only')}${l.space ? ` · space ${l.space}` : ''}${l.gone ? '\nIts server no longer offers this list: it is not synced any more and can be deleted' : ''}${l.syncError ? `\n${l.syncError}` : ''}`}>
               <span className="dot" style={{ background: l.color || 'var(--accent)' }} />{l.name}{l.ownerName && <span className="faint"> · {l.ownerName}</span>}{l.source === 'caldav' && <Cloud size={11} className="faint" />}{l.readonly && <Lock size={11} />}{l.syncError && <AlertTriangle size={11} color="var(--warning)" />}{l.gone && <span className="faint"> · not on the server</span>}
               {l.open > 0 && <span className="faint"> {l.open}</span>}
@@ -175,7 +183,8 @@ export default function TasksView({ route = [] }) {
             <div className="small" style={{ fontWeight: 700, color: label === 'Overdue' ? 'var(--danger)' : 'var(--text-2)', marginBottom: 4 }}>{label} · {list.length}</div>
             <div className="card">
               {list.map((t) => (
-                <div key={t.id} className={`task-row ${t.done ? 'done' : ''}`} onContextMenu={(e) => taskMenu(e, t)}>
+                <div key={t.id} className={`task-row ${t.done ? 'done' : ''}`} onContextMenu={(e) => taskMenu(e, t)} draggable={!t.readonly && movable(t).length > 0}
+                  onDragStart={(e) => { dragged.current = t; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.title); }} onDragEnd={() => { dragged.current = null; setDropList(null); }}>
                   <input type="checkbox" checked={t.done} disabled={t.readonly} title={t.readonly ? 'This list is read-only' : undefined} onChange={(e) => patch(t, { done: e.target.checked })} />
                   <div className="grow" style={{ minWidth: 0 }}>
                     {/* A click on the text shows the details (or, without any, opens the task); a double click edits. */}

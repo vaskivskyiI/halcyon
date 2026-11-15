@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Minus, Maximize2, Minimize2, Send, Paperclip, Bold, Italic, Underline, Strikethrough, List, ListOrdered, Link2, Quote, RemoveFormatting,
@@ -11,6 +11,7 @@ import { toast, toastError, textToHtml, escapeHtml, addrFull, fileToBase64, fmtS
 import { useMenu, Spinner, Modal } from '../components/common.jsx';
 import { useDismiss } from '../dismiss.js';
 import { afterSend } from './mailActions.js';
+import { openFile, claimOpen } from '../opening.js';
 
 // Formatting choices of the editor (inline styles, which mail programs show the same way).
 const COLORS = ['#000000', '#444444', '#666666', '#999999', '#cccccc', '#ffffff', '#b91c1c', '#ea580c', '#d97706', '#ca8a04',
@@ -101,9 +102,9 @@ export function replyPayload(mode, msg, accounts, extra = {}) {
 
 /** An attachment of a message being written: added here (kept in the draft) or taken from an earlier email. */
 function openAttachment(a) {
-  if (a.fromMessageId != null) { window.open(api.url(`/api/messages/${a.fromMessageId}/attachments/${a.index}?inline=1`), '_blank'); return; }
-  if (a.uploadId) { window.open(api.url(`/api/uploads/${a.uploadId}?inline=1`), '_blank'); return; }
-  if (!a.contentBase64) return;
+  if (a.fromMessageId != null) { openFile(api.url(`/api/messages/${a.fromMessageId}/attachments/${a.index}?inline=1`), a.filename); return; }
+  if (a.uploadId) { openFile(api.url(`/api/uploads/${a.uploadId}?inline=1`), a.filename); return; }
+  if (!a.contentBase64 || !claimOpen(`local:${a.filename}:${a.contentBase64.length}`, a.filename)) return;
   const bytes = Uint8Array.from(atob(a.contentBase64), (c) => c.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], { type: a.contentType || 'application/octet-stream' }));
   const link = Object.assign(document.createElement('a'), { href: url, download: a.filename || 'attachment' });
@@ -124,6 +125,23 @@ const parseAddr = (s) => {
   return m ? { name: m[1].trim(), address: m[2].toLowerCase() } : null;
 };
 const validEmail = (a) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a);
+const EMAIL_IN = /[^\s<>"',;:()[\]]+@[^\s<>"',;:()[\]]+\.[^\s<>"',;:()[\]]+/g;
+/** Addresses in pasted or typed text: "Name <a@b>, c@d; …" as written, and any other address found in it (lists
+ *  copied from other programs, "Name (a@b)", one per line). Parts with no address in them are returned as rest. */
+export function parseAddrList(text) {
+  const list = [], rest = [];
+  for (const part of String(text).split(/[,;\n\t](?=(?:[^"]*"[^"]*")*[^"]*$)/).map((x) => x.trim()).filter(Boolean)) {
+    const one = parseAddr(part);
+    if (one) { list.push(one); continue; }
+    const found = part.match(EMAIL_IN);
+    if (found?.length === 1) {
+      const name = part.replace(found[0], ' ').replace(/[<>()[\]"]/g, ' ').replace(/\s+/g, ' ').trim();
+      list.push({ name, address: found[0].toLowerCase() });
+    } else if (found) list.push(...found.map((a) => ({ name: '', address: a.toLowerCase() })));
+    else rest.push(part);
+  }
+  return { list, rest: rest.join(', ') };
+}
 
 function RecipientInput({ value, onChange, autoFocus }) {
   const [text, setText] = useState('');
@@ -132,11 +150,17 @@ function RecipientInput({ value, onChange, autoFocus }) {
   const timer = useRef();
   const latest = useRef('');
   latest.current = text;
+  // Text that holds no address (a name only) stays in the field to be completed, not dropped.
   const commit = (raw = text) => {
-    const parts = raw.split(/[,;\n](?=(?:[^"]*"[^"]*")*[^"]*$)/).map(parseAddr).filter(Boolean);
-    if (parts.length) onChange([...value, ...parts.filter((p) => !value.some((v) => v.address === p.address))]);
-    setText(''); setSugs([]);
+    const { list, rest } = parseAddrList(raw);
+    const seen = new Set(value.map((v) => v.address));
+    const add = list.filter((p) => !seen.has(p.address) && seen.add(p.address));
+    if (add.length) onChange([...value, ...add]);
+    setText(list.length ? rest : raw.trim()); setSugs([]);
   };
+  // Ctrl+C in the empty field copies all its addresses (to paste into another email).
+  const copyAll = () => navigator.clipboard.writeText(value.map(addrFull).join(', '))
+    .then(() => toast(value.length > 1 ? `${value.length} addresses copied` : 'Address copied')).catch(toastError);
   const choose = (s) => { onChange([...value, { name: s.name, address: s.address }]); setText(''); setSugs([]); };
   const box = useRef();
   // Suggestions go away on a tap elsewhere; that tap still does what it was for (no swallowing beside a text field).
@@ -152,20 +176,21 @@ function RecipientInput({ value, onChange, autoFocus }) {
     }).catch(() => {}), 120);
   }, [text]);
   return (
-    <div className="recipients" ref={box}>
+    <div className="recipients" ref={box} data-addr-scope>
       {value.map((a, i) => (
-        <span key={a.address + i} className={`recipient ${validEmail(a.address) ? '' : 'invalid'}`} title={a.address}>
+        <span key={a.address + i} className={`recipient ${validEmail(a.address) ? '' : 'invalid'}`} title={a.address} data-addr={addrFull(a)}>
           {a.name || a.address}<button type="button" onClick={() => onChange(value.filter((_, j) => j !== i))}><X size={12} /></button>
         </span>
       ))}
-      <input className="bare" value={text} autoFocus={autoFocus} onChange={(e) => setText(e.target.value)} onBlur={() => setTimeout(() => text && commit(), 150)}
-        onPaste={(e) => { const t = e.clipboardData.getData('text'); if (/[,;\n]/.test(t)) { e.preventDefault(); commit(t); } }}
+      <input className="bare" value={text} title={value.length ? 'Ctrl+C in the empty field copies all addresses' : undefined} autoFocus={autoFocus} onChange={(e) => setText(e.target.value)} onBlur={() => setTimeout(() => text && commit(), 150)}
+        onPaste={(e) => { const t = e.clipboardData.getData('text'); if (/[,;\n\t]/.test(t) || EMAIL_IN.test(t)) { EMAIL_IN.lastIndex = 0; e.preventDefault(); commit(`${text} ${t}`); } }}
         onKeyDown={(e) => {
           if (sugs.length && e.key === 'ArrowDown') { e.preventDefault(); setActive((active + 1) % sugs.length); }
           else if (sugs.length && e.key === 'ArrowUp') { e.preventDefault(); setActive((active - 1 + sugs.length) % sugs.length); }
           else if ((e.key === 'Enter' || e.key === 'Tab') && sugs.length) { e.preventDefault(); choose(sugs[active]); }
           else if (['Enter', ',', ';'].includes(e.key) && text) { e.preventDefault(); commit(); }
           else if (e.key === 'Backspace' && !text && value.length) onChange(value.slice(0, -1));
+          else if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !text && value.length) { e.preventDefault(); copyAll(); }
         }} />
       {sugs.length > 0 && <div className="suggest">{sugs.map((s, i) => (
         <div key={s.address} className={i === active ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); choose(s); }}>
@@ -228,7 +253,10 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     } catch { setCheck(null); }
   };
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [draftId, setDraftId] = useState(init.draftId || null);
+  const [draftId, setDraftIdState] = useState(init.draftId || null);
+  // Also kept in a ref: a save started from an older render (timer, unmount) must update the same draft, not make a new one.
+  const draftRef = useRef(init.draftId || null);
+  const setDraftId = (v) => { draftRef.current = v; setDraftIdState(v); };
   // A compose window says which draft it holds, so the conversation does not show that draft a second time.
   useEffect(() => { if (!inline && draftId) patchComposer(id, { draftId }); }, [draftId]);
   // The quoted message of a draft in its conversation is folded (it is right above); shown on demand.
@@ -253,7 +281,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
   const [importance, setImportance] = useState(init.priority || 'normal');
   const [openMenu, menuNode] = useMenu();
   const isReply = !!init.inReplyToId;
-  const close = () => (inline ? onDone?.() : closeComposer(id));
+  const close = () => { finished.current = true; clearTimeout(saveTimer.current); return inline ? onDone?.() : closeComposer(id); };
 
   const signature = (acc) => (acc?.signatureHtml ? `<div class="signature"><br>-- <br>${acc.signatureHtml}</div>` : '');
 
@@ -398,27 +426,34 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
 
   const payload = () => ({
     accountId: account?.id, from: { address: fromId?.address || account?.email, name: fromId?.name || account?.displayName || '' }, to, cc, bcc, subject,
-    html: editor.current.innerHTML, inReplyToId: init.inReplyToId || null,
+    html: editor.current ? editor.current.innerHTML : lastHtml.current, inReplyToId: init.inReplyToId || null,
     attachments: attachments.map((a) => (a.fromMessageId != null ? { fromMessageId: a.fromMessageId, index: a.index, filename: a.filename }
       : a.uploadId ? { uploadId: a.uploadId, filename: a.filename, contentType: a.contentType, size: a.size } : { filename: a.filename, contentType: a.contentType, contentBase64: a.contentBase64 })),
-    draftId, sendKey: sendKey.current, priority: importance, format,
+    draftId: draftRef.current, sendKey: sendKey.current, priority: importance, format,
   });
 
-  // Saves the draft in Halcyon now; returns its id.
+  // Saves the draft in Halcyon now; returns its id. Saves run one after another: a second one waits for the first
+  // (which may be creating the draft), so a draft is never created twice.
   const edits = useRef(0);
   const saving = useRef(null); // the save on its way, if any: sending waits for it (it may create the draft)
+  const lastHtml = useRef('');
+  const finished = useRef(false); // sent, deleted or closed: nothing more is saved
   const saveNow = async () => {
     clearTimeout(saveTimer.current); unsavedSince.current = 0;
-    const seen = edits.current;
-    const p = payload();
-    const req = api.post('/api/drafts', { ...p, id: draftId, serverMessageId: draftId ? undefined : init.serverMessageId, quoteHtml: undefined });
+    const prev = saving.current;
+    const req = (async () => {
+      if (prev) await prev.catch(() => {});
+      const seen = edits.current;
+      const p = payload();
+      const r = await api.post('/api/drafts', { ...p, serverMessageId: p.draftId ? undefined : init.serverMessageId, id: p.draftId, quoteHtml: undefined });
+      if (!r.sent && r.id) setDraftId(r.id);
+      if (edits.current === seen) setDirty(false); // typed on while it was saved: that is saved next time
+      return r;
+    })();
     saving.current = req;
     try {
       const r = await req;
-      if (r.sent) return null;
-      setDraftId(r.id);
-      if (edits.current === seen) setDirty(false); // typed on while it was saved: that is saved next time
-      return r.id;
+      return r.sent ? null : r.id;
     } finally { if (saving.current === req) saving.current = null; }
   };
   const saveRef = useRef(saveNow);
@@ -436,8 +471,20 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     saveTimer.current = setTimeout(() => { saveRef.current().catch(() => { /* offline: retried on next change */ }); }, Math.max(0, Math.min(3000, unsavedSince.current + 20000 - t)));
   };
   useEffect(() => { if (dirty) scheduleSave(); }, [dirty, to, cc, bcc, subject, attachments]);
-  useEffect(() => () => clearTimeout(saveTimer.current), []);
+  // Unmounted with changes not saved yet (the conversation reloaded, the draft opened elsewhere, the page left): the
+  // text is saved now, from what the editor held last — never lost.
+  useLayoutEffect(() => () => {
+    clearTimeout(saveTimer.current);
+    if (editor.current) lastHtml.current = editor.current.innerHTML;
+    if (unsavedSince.current && !finished.current) saveRef.current().catch(() => {});
+  }, []);
 
+  // The app or tab going to the background (closed, switched away, phone locked): changes are saved at once.
+  useEffect(() => {
+    const h = () => { if (document.visibilityState === 'hidden' && unsavedSince.current && !finished.current) saveRef.current().catch(() => {}); };
+    document.addEventListener('visibilitychange', h);
+    return () => document.removeEventListener('visibilitychange', h);
+  }, []);
   // Closing the browser tab with unsaved changes asks first.
   useEffect(() => {
     if (!dirty) return undefined;
@@ -470,7 +517,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     const text = htmlToText(editor.current.innerHTML);
     if (/\battach(ed|ment)|\bpriložen|\banbei|\bpièce jointe/i.test(text.split(/On .* wrote:/)[0]) && !attachments.length && !confirm('You mentioned an attachment but none is attached. Send anyway?')) return;
     if (sending.current) return;
-    sending.current = true; setBusySend(true); clearTimeout(saveTimer.current);
+    sending.current = true; setBusySend(true); clearTimeout(saveTimer.current); unsavedSince.current = 0;
     try {
       // An autosave on its way may be creating the draft: its id goes with the message, so sending removes it.
       const pendingId = saving.current ? (await saving.current.catch(() => null))?.id : null;
@@ -493,7 +540,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
 
   // Deleting a draft is explicit: from the close dialog or the trash button (which asks).
   const discard = async () => {
-    abort.current?.abort(); clearTimeout(saveTimer.current);
+    abort.current?.abort(); clearTimeout(saveTimer.current); finished.current = true;
     const did = draftId || (init.serverMessageId ? await saveNow().catch(() => null) : null);
     if (did) await api.del(`/api/drafts/${did}`).catch(() => {});
     close();
@@ -529,12 +576,10 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
     setFromAddress(address);
   };
 
-  if (minimized) {
-    return <div className="composer min"><div className="composer-head" onClick={() => patchComposer(id, { minimized: false })}><span className="grow truncate">{subject || 'New message'}</span><button className="icon-btn" title="Close" onClick={(e) => { e.stopPropagation(); patchComposer(id, { minimized: false }); setTimeout(requestClose, 0); }}><X size={16} /></button></div></div>;
-  }
-
-  return (
-    <div className={`composer ${max ? 'max' : ''} ${inline ? 'inline' : ''}`} data-draft={draftId || undefined} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } }}
+  // Minimized, the window shrinks to its title bar; the editor stays mounted (hidden), so what is written stays too.
+  return (<>
+    {minimized && <div className="composer min"><div className="composer-head" onClick={() => patchComposer(id, { minimized: false })}><span className="grow truncate">{subject || 'New message'}</span>{dirty && <span className="small faint">Unsaved…</span>}<button className="icon-btn" title="Close" onClick={(e) => { e.stopPropagation(); patchComposer(id, { minimized: false }); setTimeout(requestClose, 0); }}><X size={16} /></button></div></div>}
+    <div className={`composer ${max ? 'max' : ''} ${inline ? 'inline' : ''}`} hidden={minimized} data-draft={draftId || undefined} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } }}
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } if (e.key === 'Escape' && !inline) patchComposer(id, { minimized: true }); }}>
       {inline ? (
         <div className="composer-head">
@@ -662,7 +707,7 @@ export function Composer({ id, init, minimized, inline = false, onDone }) {
       </Modal>}
       {scheduleOpen && <ScheduleModal onClose={() => setScheduleOpen(false)} onPick={(t) => { setScheduleOpen(false); send(t); }} />}
     </div>
-  );
+  </>);
 }
 
 function scheduleOptions() {

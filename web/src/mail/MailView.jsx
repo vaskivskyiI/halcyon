@@ -156,15 +156,31 @@ function FolderNav({ view, open, onNavigate }) {
   const archiveOlder = (acc, f) => setArchiveDlg({ acc, f });
   const go = (v) => { navigate(`#/mail/${v}`); onNavigate(); };
 
-  const onDrop = (e, folderId) => {
-    e.preventDefault(); setDropTarget(null);
-    const data = JSON.parse(e.dataTransfer.getData('application/x-halcyon') || '{}');
-    if (data.ids?.length) mailAction('move', data.ids, { folderId }, { threads: data.threads });
-  };
-  const dropProps = (key, folderId) => ({
+  // Mail dragged from the list onto the sidebar: a folder moves it, a topic / category / label / Flagged files it there.
+  const dropOn = (key, run) => ({
     onDragOver: (e) => { if (e.dataTransfer.types.includes('application/x-halcyon')) { e.preventDefault(); setDropTarget(key); } },
-    onDragLeave: () => setDropTarget(null), onDrop: (e) => onDrop(e, folderId),
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget(null); },
+    onDrop: (e) => {
+      e.preventDefault(); setDropTarget(null);
+      let data = {};
+      try { data = JSON.parse(e.dataTransfer.getData('application/x-halcyon') || '{}'); } catch { /* not ours */ }
+      if (data.ids?.length) run(data);
+    },
   });
+  const dropProps = (key, folderId) => dropOn(key, (d) => mailAction('move', d.ids, { folderId }, { threads: d.threads }));
+  const n = (d) => (d.ids.length > 1 ? `${d.ids.length} conversations` : 'Conversation');
+  const changed = () => { loadFolders(); window.dispatchEvent(new Event('halcyon:mutated')); };
+  const DROPS = {
+    flagged: (d) => mailAction('flag', d.ids, {}, { threads: d.threads, onDone: () => toast(`${n(d)} flagged`) }),
+    topic: (name) => (d) => api.post('/api/messages/topic', { ids: d.ids, threads: d.threads, topic: name })
+      .then((r) => { toast(r.changed ? `${n(d)} added to “${name}”` : 'Not analysed by the AI yet — it can get a topic once it has been'); changed(); }).catch(toastError),
+    custom: (c) => (d) => api.post(`/api/custom-categories/${c.id}/tag`, { ids: d.ids, value: true })
+      .then(() => { toast(`${n(d)} put in “${c.name}”`); changed(); }).catch(toastError),
+    // The AI category is corrected (and learned for the sender), as with "Wrong category" in the reader.
+    category: (name) => (d) => Promise.all(d.ids.map((id) => api.post(`/api/messages/${id}/feedback`, { kind: 'category', value: name })))
+      .then(() => { toast(`${n(d)} moved to ${name}`); changed(); }).catch(toastError),
+    label: (l) => (d) => mailAction('label', d.ids, { labelId: l.id }, { threads: d.threads, onDone: () => { toast(`Label “${l.name}” added`); changed(); } }),
+  };
 
   const [analyze, setAnalyze] = useState(null);
   const accountMenu = (e, acc) => openMenu(e, [
@@ -199,7 +215,7 @@ function FolderNav({ view, open, onNavigate }) {
           <div key={`ar${x.id}`} className="notice small" style={{ margin: '0 4px 8px', cursor: 'pointer' }} title="Change or turn off in Settings → Accounts" onClick={() => navigate('#/settings/accounts')}>
             Automatic replies are on · {x.email}</div>))}
         {[...SMART, ...MORE_VIEWS.filter(([key]) => view === key || !collapsed.more)].map(([key, Icon, label, countKey]) => (
-          <div key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => go(key)}>
+          <div key={key} className={`nav-item ${view === key ? 'active' : ''} ${dropTarget === key ? 'drop' : ''}`} onClick={() => go(key)} {...(DROPS[key] ? dropOn(key, DROPS[key]) : {})}>
             <Icon size={16} /><span className="truncate">{label}</span>{countKey === 'unified' ? <UnreadCount n={folders.counts?.unified} important={folders.counts?.unifiedImportant} /> : countKey && folders.counts?.[countKey] > 0 && (countKey === 'scheduled' && folders.counts.outboxFailed > 0
               ? <span className="count failed" title={`${folders.counts.outboxFailed} could not be sent — open to retry, edit or keep as draft`}>{folders.counts[countKey]}</span>
               : <span className="count" title={COUNT_TITLES[countKey]}>{folders.counts[countKey]}</span>)}
@@ -213,7 +229,7 @@ function FolderNav({ view, open, onNavigate }) {
         {folders.topics?.length > 0 && <>
           <div className="nav-section" onClick={() => toggle('topics')} title="Ongoing projects, events and cases recognised by the AI — most recent and most urgent first"><Chevron k="topics" /> Topics</div>
           {!collapsed.topics && folders.topics.map((t) => (
-            <div key={t.name} className={`nav-item ${view === topicView(t.name) ? 'active' : ''}`} onClick={() => go(topicView(t.name))} title={`${t.count} messages in the last 60 days${t.next ? ` · next: ${new Date(t.next).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}${t.actions ? ` · ${t.actions} open action${t.actions > 1 ? 's' : ''}` : ''}`}>
+            <div key={t.name} className={`nav-item ${view === topicView(t.name) ? 'active' : ''} ${dropTarget === topicView(t.name) ? 'drop' : ''}`} onClick={() => go(topicView(t.name))} {...dropOn(topicView(t.name), DROPS.topic(t.name))} title={`${t.count} messages in the last 60 days${t.next ? ` · next: ${new Date(t.next).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}${t.actions ? ` · ${t.actions} open action${t.actions > 1 ? 's' : ''}` : ''}`}>
               <Hash size={15} /><span className="truncate">{t.name}</span>
               {t.next && t.next < Date.now() + 14 * 864e5 && <span className="small faint" style={{ marginLeft: 'auto', flex: 'none' }}>{new Date(t.next).toLocaleDateString([], { day: 'numeric', month: 'short' })}</span>}
               {t.unread > 0 && <span className="count" style={t.next && t.next < Date.now() + 14 * 864e5 ? { marginLeft: 6 } : undefined}>{t.unread}</span>}
@@ -223,7 +239,7 @@ function FolderNav({ view, open, onNavigate }) {
           <Chevron k="custom" /><span className="grow">My categories</span>
           <button className="icon-btn" style={{ width: 22, height: 22 }} title="New category" onClick={(e) => { e.stopPropagation(); setEditCat({}); }}><Plus size={13} /></button></div>}
         {!collapsed.custom && (folders.custom || []).map((c) => (
-          <div key={c.id} className={`nav-item ${view === `my~${c.id}` ? 'active' : ''}`} onClick={() => go(`my~${c.id}`)} title={c.description || c.query}
+          <div key={c.id} className={`nav-item ${view === `my~${c.id}` ? 'active' : ''} ${dropTarget === `my~${c.id}` ? 'drop' : ''}`} onClick={() => go(`my~${c.id}`)} title={c.description || c.query} {...dropOn(`my~${c.id}`, DROPS.custom(c))}
             onContextMenu={(e) => openMenu(e, [
               { label: 'Edit…', icon: Pencil, onClick: () => setEditCat(c) },
               c.description && { label: 'Look through past mail again', icon: RefreshCw, onClick: () => api.post(`/api/custom-categories/${c.id}/rescan`).then(() => toast('Looking through past mail in the background…')).catch(toastError) },
@@ -234,7 +250,7 @@ function FolderNav({ view, open, onNavigate }) {
         {folders.categories?.length > 0 && <>
           <div className="nav-section" onClick={() => toggle('categories')}><Chevron k="categories" /> AI categories</div>
           {!collapsed.categories && folders.categories.map((c) => (
-            <div key={c.name} className={`nav-item ${view === categoryView(c.name) ? 'active' : ''}`} onClick={() => go(categoryView(c.name))}>
+            <div key={c.name} className={`nav-item ${view === categoryView(c.name) ? 'active' : ''} ${dropTarget === categoryView(c.name) ? 'drop' : ''}`} onClick={() => go(categoryView(c.name))} {...dropOn(categoryView(c.name), DROPS.category(c.name))}>
               <Tag size={15} /><span className="truncate" style={{ textTransform: 'capitalize' }}>{c.name}</span>{c.unread > 0 && <span className="count">{c.unread}</span>}
             </div>))}
         </>}
@@ -272,7 +288,7 @@ function FolderNav({ view, open, onNavigate }) {
         })}
         {labels.length > 0 && <div className="nav-section" onClick={() => toggle('labels')}><Chevron k="labels" /><span className="grow">Labels</span><button className="icon-btn" style={{ width: 22, height: 22 }} title="New label" onClick={async (e) => { e.stopPropagation(); const n = prompt('Label name'); if (n) { await api.post('/api/labels', { name: n, color: `hsl(${Math.random() * 360 | 0} 60% 50%)` }); loadLabels(); } }}><Plus size={13} /></button></div>}
         {!collapsed.labels && labels.map((l) => (
-          <div key={l.id} className={`nav-item ${view === `l${l.id}` ? 'active' : ''}`} onClick={() => go(`l${l.id}`)}
+          <div key={l.id} className={`nav-item ${view === `l${l.id}` ? 'active' : ''} ${dropTarget === `l${l.id}` ? 'drop' : ''}`} onClick={() => go(`l${l.id}`)} {...dropOn(`l${l.id}`, DROPS.label(l))}
             onContextMenu={(e) => openMenu(e, [{ label: 'Delete label', icon: Trash2, danger: true, onClick: () => api.del(`/api/labels/${l.id}`).then(loadLabels) }])}>
             <Tag size={15} color={l.color} /><span className="truncate">{l.name}</span>
           </div>
@@ -429,16 +445,25 @@ function MessageList({ view, openId, onMenu }) {
     if (!threaded) p.set('threads', '0');
     api.get(`/api/messages?${p}`).then((r) => setPinned(r.items)).catch(() => {});
   };
+  // Where a search looks: everywhere ('all'), one mailbox (a<accountId>) or one folder (f<folderId>). In a folder
+  // it starts in that folder; "Everywhere" is one click away (also offered when nothing is found there).
+  const viewFolder = /^f\d+$/.test(view) ? folders.accounts.flatMap((a) => a.folders.map((f) => ({ ...f, acc: a }))).find((f) => `f${f.id}` === view) : null;
+  const [within, setWithin] = useState(() => (/^f\d+$/.test(view) ? view : 'all'));
+  const withinParams = (p) => {
+    if (within.startsWith('f')) p.set('inFolder', within.slice(1));
+    else if (within.startsWith('a')) p.set('inAccount', within.slice(1));
+    return p;
+  };
   const params = useCallback((before, offset) => {
     const p = new URLSearchParams({ ...viewQuery(view), limit: 50 });
     if (pinsOn) p.set('pinned', '0');
     if (!byDate) { p.set('sort', sort.key); p.set('dir', sort.dir); if (offset) p.set('offset', offset); }
-    if (activeQuery) { p.set('q', activeQuery); p.set('semantic', '0'); }
+    if (activeQuery) { p.set('q', activeQuery); p.set('semantic', '0'); withinParams(p); }
     if (effectiveTab !== 'all') p.set('filter', effectiveTab);
     if (before) p.set('before', before);
     if (!threaded) p.set('threads', '0');
     return p;
-  }, [view, effectiveTab, activeQuery, threaded, sort, pinsOn]);
+  }, [view, effectiveTab, activeQuery, threaded, sort, pinsOn, within]);
 
   // The open message stays in the list (e.g. in "Unread" after it was read) until the user moves to another one —
   // not in the AI views: an action done or a reply sent takes it off Action needed / Needs reply at once. A
@@ -493,7 +518,7 @@ function MessageList({ view, openId, onMenu }) {
       } else if (activeQuery && !append && settings.ai.enabled && settings.ai.embeddings) {
         aiQuery.current = q;
         setAiResults({ status: 'loading', items: [] });
-        api.get(`/api/search/semantic?q=${encodeURIComponent(q)}&exclude=${r.items.map((m) => m.id).join(',')}${threaded ? '' : '&threads=0'}`)
+        api.get(`/api/search/semantic?${withinParams(new URLSearchParams({ q, exclude: r.items.map((m) => m.id).join(',') }))}${threaded ? '' : '&threads=0'}`)
           .then((s) => { if (aiQuery.current === q) setAiResults({ status: s.unavailable ? 'unavailable' : 'done', items: s.items }); })
           .catch(() => { if (aiQuery.current === q) setAiResults({ status: 'unavailable', items: [] }); });
       } else if (!activeQuery) { aiQuery.current = ''; setAiResults(null); }
@@ -780,6 +805,26 @@ function MessageList({ view, openId, onMenu }) {
   const aiItems = aiResults ? sortResults(aiResults.items, searchSort.ai) : [];
   const resultsTab = showAi ? 'ai' : 'mail';
   const rs = searchSort[resultsTab];
+  // Mail dragged onto the Focused / Other tab goes there (as "Move to Focused / Other" in its menu).
+  const [dropTab, setDropTab] = useState(null);
+  const tabDrop = (focused) => ({
+    onDragOver: (e) => { if (e.dataTransfer.types.includes('application/x-halcyon')) { e.preventDefault(); setDropTab(focused ? 'focused' : 'other'); } },
+    onDragLeave: () => setDropTab(null),
+    onDrop: (e) => {
+      e.preventDefault(); setDropTab(null);
+      let d = {};
+      try { d = JSON.parse(e.dataTransfer.getData('application/x-halcyon') || '{}'); } catch { /* not ours */ }
+      if (!d.ids?.length) return;
+      api.post('/api/messages/focus', { ids: d.ids, focused }).then(() => { toast(`${d.ids.length > 1 ? `${d.ids.length} conversations` : 'Conversation'} moved to ${focused ? 'Focused' : 'Other'}`); load(false); loadTabCounts(); }).catch(toastError);
+    },
+  });
+  const mailboxes = folders.accounts.filter((a) => !a.owner);
+  const withinSel = (activeQuery || filtersOpen) && <select className="tb-select search-within" title="Where to search" aria-label="Where to search" value={within}
+    onChange={(e) => { setWithin(e.target.value); aiQuery.current = ''; }}>
+    <option value="all">Everywhere</option>
+    {viewFolder && <option value={view}>This folder: {viewFolder.name}</option>}
+    {mailboxes.length > 1 || viewFolder ? mailboxes.map((a) => <option key={a.accountId} value={`a${a.accountId}`}>{viewFolder?.acc.accountId === a.accountId ? 'This mailbox' : 'Mailbox'}: {a.kind === 'archive' ? a.name : a.email}</option>) : null}
+  </select>;
   const searchSortBtn = activeQuery && <button className="tab sort-btn" title={`Sort: ${SEARCH_SORTS.find((x) => x[0] === rs.key)?.[1]}${rs.key === 'relevance' ? '' : `, ${sortDirLabel(rs.key, rs.dir).toLowerCase()}`}`} onClick={(e) => openMenu(e, [
     { section: `Sort ${showAi ? 'AI results' : 'results'} by` },
     ...SEARCH_SORTS.map(([key, label, dir]) => ({ label, icon: rs.key === key ? Check : undefined, onClick: () => setSearchSort(resultsTab, { key, dir }) })),
@@ -797,7 +842,7 @@ function MessageList({ view, openId, onMenu }) {
         </div>
         <form ref={searchForm} className="search" onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); setRecentOpen(false); }}>
           <Search size={15} />
-          <input ref={searchRef} className="input" placeholder='Search mail — words, or from:anna received:"last week" hasattachments:yes' value={query}
+          <input ref={searchRef} className="input" placeholder={within.startsWith('f') && viewFolder ? `Search ${viewFolder.name} — words, or from:anna received:"last week"` : 'Search mail — words, or from:anna received:"last week" hasattachments:yes'} value={query}
             onChange={(e) => { setQuery(e.target.value); setRecentOpen(true); setRecentAt(-1); if (!e.target.value) setActiveQuery(''); }}
             onFocus={() => { setRecentOpen(true); setRecentAt(-1); fetchRecent(); }} onBlur={() => setRecentOpen(false)} onKeyDown={recentKeys} />
           {recentShown.length > 0 && <div className="suggest recent-searches">
@@ -814,11 +859,12 @@ function MessageList({ view, openId, onMenu }) {
         {activeQuery && aiResults && !searching && <div className="tabs">
           <button className={`tab ${showAi ? '' : 'active'}`} onClick={() => setSearchTab('mail')}>Results<TabCount n={hasMore ? 0 : items.length} /></button>
           <button className={`tab ${showAi ? 'active' : ''}`} title="Mail related by meaning, found by the AI" onClick={() => setSearchTab('ai')}><Sparkles size={13} /> AI{aiResults.status === 'loading' ? <> <Spinner size={11} /></> : <TabCount n={aiResults.items.length} />}</button>
-          {searchSortBtn}
+          {withinSel}{searchSortBtn}
         </div>}
-        {activeQuery && !aiResults && !searching && <div className="tabs"><span className="grow" />{searchSortBtn}</div>}
+        {activeQuery && !aiResults && !searching && <div className="tabs"><span className="grow" />{withinSel}{searchSortBtn}</div>}
+        {!activeQuery && filtersOpen && <div className="tabs"><span className="grow" />{withinSel}</div>}
         {!activeQuery && <div className="tabs">
-          {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${effectiveTab === 'focused' ? 'active' : ''}`} onClick={() => setTab('focused')}>Focused<TabCount n={tabCounts?.focused} /></button><button className={`tab ${effectiveTab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other<TabCount n={tabCounts?.other} /></button></>}
+          {isInboxView && settings.mail.focusedInbox && <><button className={`tab ${effectiveTab === 'focused' ? 'active' : ''} ${dropTab === 'focused' ? 'drop' : ''}`} onClick={() => setTab('focused')} {...tabDrop(true)}>Focused<TabCount n={tabCounts?.focused} /></button><button className={`tab ${effectiveTab === 'other' ? 'active' : ''} ${dropTab === 'other' ? 'drop' : ''}`} onClick={() => setTab('other')} {...tabDrop(false)}>Other<TabCount n={tabCounts?.other} /></button></>}
           <button className={`tab ${effectiveTab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>All<TabCount n={tabCounts?.all} /></button>
           <button className={`tab ${effectiveTab === 'unread' ? 'active' : ''}`} onClick={() => setTab('unread')}>Unread</button>
           <button className={`tab ${effectiveTab === 'attachments' ? 'active' : ''}`} onClick={() => setTab('attachments')} title="With attachments"><Paperclip size={14} /></button>
@@ -865,7 +911,7 @@ function MessageList({ view, openId, onMenu }) {
           {aiResults.status === 'done' && !aiResults.items.length && <div className="small faint" style={{ padding: '4px 16px 10px' }}>Nothing else related.</div>}
           {aiResults.status === 'unavailable' && <div className="small faint" style={{ padding: '4px 16px 10px' }}>AI search is not available right now (the AI server is busy or not configured).</div>}
         </div>}
-        {!showAi && !searching && !items.length && !loading && <div className="empty"><Inbox size={36} />{activeQuery ? 'No messages match your search.' : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
+        {!showAi && !searching && !items.length && !loading && <div className="empty"><Inbox size={36} />{activeQuery ? <>No messages match your search{within !== 'all' ? ' here' : ''}.{within !== 'all' && <button className="btn sm" style={{ marginTop: 8 }} onClick={() => setWithin('all')}>Search everywhere</button>}</> : effectiveTab === 'focused' ? 'Nothing important right now. Check "Other".' : 'No messages here.'}</div>}
         {searching && activeQuery ? <div className="empty"><Spinner size={22} />Searching…</div> : (searching || (loading && items.length === 0)) && <div className="empty"><Spinner size={22} /></div>}
         {!showAi && !searching && hasMore && <div className="empty" style={{ padding: 16 }}><button className="btn" onClick={() => load(true)}>Load more</button></div>}
       </div>
@@ -881,6 +927,14 @@ function swipeAct(kind, m, unread, onAct) {
   else if (kind === 'read') onAct(unread ? 'read' : 'unread');
   else if (kind === 'flag') onAct(m.isFlagged ? 'unflag' : 'flag');
   else if (kind === 'snooze') onAct('snooze', { until: snoozeOptions().find(([l]) => /Tomorrow morning/.test(l))?.[1] || Date.now() + 864e5 });
+}
+
+/** What is being dragged, as a small badge under the pointer (instead of a picture of the whole row). */
+function dragBadge(e, text) {
+  const el = Object.assign(document.createElement('div'), { className: 'drag-badge', textContent: text });
+  document.body.appendChild(el);
+  e.dataTransfer.setDragImage(el, 12, 12);
+  setTimeout(() => el.remove(), 0);
 }
 
 function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, onAct, dragIds, showAi }) {
@@ -909,7 +963,7 @@ function Row({ m, selected, checked, threaded, onClick, onContextMenu, onCheck, 
     <div className={`swipe-wrap ${dx > 0 ? `go-right ${dx > 90 ? 'armed' : ''}` : dx < 0 ? `go-left ${dx < -90 ? 'armed' : ''}` : ''}`} data-right={SWIPES[right]} data-left={SWIPES[left]}>
     <div data-id={m.id} className={`msg-row ${unread ? 'unread' : 'read'} ${important ? 'important' : ''} ${expired ? 'expired' : ''} ${selected ? 'selected' : ''}`} onClick={(e) => { if (Math.abs(dx) > 5) return; onClick(e); }} onContextMenu={onContextMenu} draggable
       {...swipe} style={dx ? { transform: `translateX(${dx}px)`, transition: 'none' } : undefined}
-      onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'copyMove'; }}>
+      onDragStart={(e) => { e.dataTransfer.setData('application/x-halcyon', JSON.stringify({ ids: dragIds, threads: threaded })); e.dataTransfer.effectAllowed = 'copyMove'; dragBadge(e, dragIds.length > 1 ? `${dragIds.length} conversations` : m.subject || '(no subject)'); }}>
       <div onClick={(e) => { e.stopPropagation(); onCheck(); }} style={{ cursor: 'pointer' }}>
         {checked ? <div className="avatar" style={{ background: 'var(--accent)' }}><CheckSquare size={18} /></div> : <Avatar name={m.from.name} email={m.from.address} />}
       </div>

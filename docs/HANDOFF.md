@@ -1264,3 +1264,26 @@ Igor Vaskivskyi (igor.vaskivskyi@ijs.si), Jožef Stefan Institute. Repository: g
 - Unusual requests (trust.js): a contact's display name on another address (+45, impersonation); a known sender asking
   for money in a new way (`MONEY_ASK`: changed bank details, IBAN, transfer, gift cards, secrecy; EN/SL) with no earlier
   mail of theirs saying the same → `trust.unusual`, level at least medium; the reader says to confirm another way.
+
+### Interface: drag and drop, drafts kept, attachments opened once, addresses copied as addresses, scoped search (no migration, round93)
+- Drag and drop (mail list rows carry `application/x-halcyon` `{ ids, threads }`, with a small badge as drag image):
+  sidebar folders move; Flagged flags; a topic sets it (`POST /api/messages/topic {ids, threads, topic}` — the whole
+  conversation, only messages with an insight); My categories tag (`/api/custom-categories/:id/tag`); AI categories
+  correct the category (feedback `category`, learned per sender); labels add the label; the Focused / Other tabs move the
+  conversation (`/api/messages/focus`); rail Calendar / Tasks as before. Tasks: a task row dragged onto a list chip moves
+  to that list (same owner, writable lists only).
+- Drafts: a minimized compose window keeps its editor mounted (hidden) — it used to unmount, and the restored window
+  was empty (opening a second compose window minimizes the others). Saves are chained (a draft is never created twice,
+  `draftRef`); unsaved changes are saved on unmount and when the page is hidden. The quick reply saves its pending text
+  when the user moves to another message (the 1.5 s debounce used to be dropped) and a late restore never overwrites
+  text typed meanwhile.
+- Attachments (`web/src/opening.js`): a capture click handler lets each attachment URL open once per 6 s and shows
+  "Opening <file>…"; the desktop shells ignore a second download of the same file while one runs (Electron
+  `fetching`, Windows app `fetching` in MainForm).
+- Addresses (`web/src/addrcopy.js`): a selection over `[data-addr-scope]` (message header, recipient fields) copies the
+  `[data-addr]` values ("Name <address>, …"), not the shown names; each To/Cc/Bcc line has a copy-all button; Ctrl+C in an
+  empty recipient field copies its addresses. Pasting uses `parseAddrList` (Composer.jsx): "Name <a>", bare addresses,
+  "Name (a)", any separators; text without an address stays in the field.
+- Search scope: `GET /api/messages?q=…&inFolder=<id>|inAccount=<id>` (and `/api/search/semantic`), via
+  `searchWithin` in routes/mail.js (`sc.folderId` honoured by `buildWhere`). The list offers Everywhere / This folder /
+  each mailbox; in a folder view the search starts in that folder, with "Search everywhere" when nothing is found.

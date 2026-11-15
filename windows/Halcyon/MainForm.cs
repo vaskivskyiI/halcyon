@@ -23,6 +23,9 @@ public sealed class MainForm : Form
     string badgeUrl = "";
     Icon? overlay;
     readonly HashSet<string> openAfter = new();
+    // Files being fetched: a second click (double click, or again because nothing seemed to happen) does not start
+    // another download and open another copy. Forgotten when done, or after two minutes if the download never began.
+    readonly Dictionary<string, DateTime> fetching = new();
 
     string Server => config.Server;
     string Origin => Config.Origin(config.Server);
@@ -129,6 +132,10 @@ public sealed class MainForm : Form
         {
             var url = e.DownloadOperation.Uri;
             var name = Path.GetFileName(e.ResultFilePath);
+            e.DownloadOperation.StateChanged += (_, _) =>
+            {
+                if (e.DownloadOperation.State != CoreWebView2DownloadState.InProgress) fetching.Remove(url);
+            };
             if (openAfter.Remove(url))
             {
                 // A preview (?inline=1): opened in the default app for that file type, like the Android app does.
@@ -204,6 +211,8 @@ public sealed class MainForm : Form
     {
         var preview = url.Contains("inline=1");
         url = url.Replace("inline=1", "inline=0");
+        if (fetching.TryGetValue(url, out var since) && DateTime.UtcNow - since < TimeSpan.FromMinutes(2)) return;
+        fetching[url] = DateTime.UtcNow;
         if (preview) openAfter.Add(url);
         core.ExecuteScriptAsync($"(() => {{ const a = document.createElement('a'); a.href = {JsonSerializer.Serialize(url)}; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); }})()");
     }

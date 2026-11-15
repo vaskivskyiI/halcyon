@@ -99,6 +99,7 @@ const ftsEscape = (t) => `"${t.replace(/"/g, '""')}"*`;
 /** sc: scope from spaces.scope() (null = all spaces). */
 export function buildWhere(userId, f, sc = null) {
   const where = ['m.user_id = ?', inIds('m.account_id', sc?.accountIds)], params = [userId];
+  if (sc?.folderId) where.push(`m.folder_id = ${Number(sc.folderId)}`); // search limited to one folder
   const add = (sql, ...p) => { where.push(sql); params.push(...p); };
   for (const { val, neg } of f.from || []) add(`${neg ? 'NOT ' : ''}(fold(m.from_addr) LIKE ? OR fold(m.from_name) LIKE ?)`, `%${fold(val)}%`, `%${fold(val)}%`);
   for (const { val, neg } of f.to || []) add(`${neg ? 'NOT ' : ''}(fold(m.to_json) LIKE ? OR fold(m.cc_json) LIKE ?)`, `%${fold(val)}%`, `%${fold(val)}%`);

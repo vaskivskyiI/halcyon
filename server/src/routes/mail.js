@@ -297,9 +297,19 @@ export default async function mailRoutes(app) {
     return r;
   });
 
+  /** Search in one folder (inFolder) or one mailbox (inAccount) instead of everywhere: the scope narrowed to it;
+   *  undefined when not asked, null-scope semantics kept otherwise. An id not of this user finds nothing. */
+  function searchWithin(uid, q, sc) {
+    const folder = q.inFolder ? get('SELECT f.id, f.account_id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.user_id = ?', Number(q.inFolder), uid) : null;
+    const accountId = folder?.account_id ?? (q.inAccount ? get('SELECT id FROM accounts WHERE id = ? AND user_id = ?', Number(q.inAccount), uid)?.id : undefined);
+    if (!q.inFolder && !q.inAccount) return undefined;
+    const ok = accountId != null && (!sc?.accountIds || sc.accountIds.includes(accountId));
+    return { ...(sc || {}), accountIds: ok ? [accountId] : [], owners: new Set([`a:${accountId}`]), folderId: folder?.id || null };
+  }
   async function listMessages(uid, q, sc) {
     const limit = Math.min(Number(q.limit) || 50, 200);
     if (q.q) {
+      sc = searchWithin(uid, q, sc) ?? sc;
       const found = await hybridSearch(uid, q.q, { limit: 100, semantic: q.semantic !== '0', sc });
       if (!found.length) return { items: [], hasMore: false };
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
@@ -359,7 +369,8 @@ export default async function mailRoutes(app) {
     const own = await listMessages(req.user.id, q, scope(req.user.id, reqSpace(req)));
     const spaces = mergedSpaces(req);
     const byDate = (!q.sort || q.sort === 'date') && q.dir !== 'asc';
-    if (!spaces.length || (!q.q && (!byDate || !MERGE_VIEWS.has(q.view || 'unified')))) return own;
+    // A search in one folder or mailbox stays in it (the shared spaces' mail is elsewhere).
+    if (!spaces.length || (q.q && (q.inFolder || q.inAccount)) || (!q.q && (!byDate || !MERGE_VIEWS.has(q.view || 'unified')))) return own;
     const limit = Math.min(Number(q.limit) || 50, 200);
     const lists = [own, ...await Promise.all(spaces.map(async (sp) => {
       const r = await listMessages(sp.id, q, null);
@@ -746,6 +757,22 @@ export default async function mailRoutes(app) {
     return { insight, sender: m.from_addr, rechecked };
   });
 
+  // Topic by hand (an email dragged onto a topic): the conversation joins it; '' takes it out of its topic. Only mail the
+  // AI has looked at has a topic to set (an insight row).
+  app.post('/api/messages/topic', async (req, reply) => {
+    const list = ids(req.body?.ids);
+    const topic = String(req.body?.topic ?? '').trim().slice(0, 80) || null;
+    if (!list.length) return httpError(reply, 400, 'ids needed');
+    const u = req.user.id;
+    const ph = (a) => a.map(() => '?').join(',');
+    const target = req.body?.threads
+      ? all(`SELECT id FROM messages WHERE user_id = ? AND thread_id IN (SELECT thread_id FROM messages WHERE user_id = ? AND id IN (${ph(list)}))`, u, u, ...list).map((r) => r.id)
+      : all(`SELECT id FROM messages WHERE user_id = ? AND id IN (${ph(list)})`, u, ...list).map((r) => r.id);
+    const changed = target.length ? run(`UPDATE ai_insights SET topic = ? WHERE message_id IN (${ph(target)})`, topic, ...target).changes : 0;
+    notify(u, 'mail:changed', { ids: target });
+    return { ok: true, changed };
+  });
+
   // Focused / Other by hand, without calling the mail important: the conversation moves (focus_overrides); always = also
   // every future email from the sender. Two moves of the same sender's mail the same way are learned (mail/focused.js).
   app.post('/api/messages/focus', async (req, reply) => {
@@ -960,7 +987,9 @@ export default async function mailRoutes(app) {
   // Second phase of search: messages found by meaning (embeddings) that keyword search did not return. The client
   // shows keyword results instantly and adds these when the AI answers; a busy AI server only delays this part.
   app.get('/api/search/semantic', async (req) => {
-    const sc = scope(req.user.id, reqSpace(req));
+    const base = scope(req.user.id, reqSpace(req));
+    const within = searchWithin(req.user.id, req.query, base);
+    const sc = within ?? base;
     const f = parseQuery(req.query.q);
     const words = [...f.terms.filter((t) => t !== 'OR'), ...f.bodyTerms];
     if (!words.length) return { items: [] };

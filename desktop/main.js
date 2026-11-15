@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 
 const APP_ID = 'com.halcyon.mail';
+const fetching = new Map(); // attachment URL → when its download was asked for
 const configPath = () => path.join(app.getPath('userData'), 'config.json');
 const defaults = { mode: 'local', serverUrl: '', closeToTray: true, bounds: null, offline: true, offlineMB: 2048 };
 const loadConfig = () => { try { return { ...defaults, ...JSON.parse(fs.readFileSync(configPath(), 'utf8')) }; } catch { return { ...defaults }; } };
@@ -78,7 +79,11 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (baseUrl && url.startsWith(baseUrl)) {
       if (/\/api\/oauth\//.test(url)) return { action: 'allow' }; // OAuth popup must keep its opener
-      win.webContents.downloadURL(url.replace('inline=1', 'inline=0'));
+      // Once per file while it downloads: a double click does not save two copies.
+      const file = url.replace('inline=1', 'inline=0');
+      if (Date.now() - (fetching.get(file) || 0) < 120e3) return { action: 'deny' };
+      fetching.set(file, Date.now());
+      win.webContents.downloadURL(file);
       return { action: 'deny' };
     }
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
@@ -225,7 +230,10 @@ app.whenReady().then(async () => {
   await win.loadURL(baseUrl + (pendingMailto ? `/#/compose?url=${encodeURIComponent(pendingMailto)}` : ''));
   if (process.argv.includes('--hidden')) win.hide();
   // Desktop session downloads: ask where to save.
-  session.defaultSession.on('will-download', (e, item) => item.setSaveDialogOptions({ defaultPath: path.join(app.getPath('downloads'), item.getFilename()) }));
+  session.defaultSession.on('will-download', (e, item) => {
+    item.setSaveDialogOptions({ defaultPath: path.join(app.getPath('downloads'), item.getFilename()) });
+    item.once('done', () => fetching.delete(item.getURL()));
+  });
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (quitting || !tray)) app.quit(); });

@@ -14,6 +14,7 @@ import { fmtFull, fmtSize, addrLabel, addrFull, toast, toastError, navigate, tex
 import { Avatar, useMenu, Spinner, Markdown } from '../components/common.jsx';
 import { useDismiss } from '../dismiss.js';
 import { openComposer, replyPayload, Composer } from './Composer.jsx';
+import { openFile } from '../opening.js';
 import { mailAction, snoozeOptions, confirmDelete, afterSend } from './mailActions.js';
 import { EventEditor, showCalendarDate } from '../calendar/CalendarView.jsx';
 import { EventPicker } from '../calendar/EventPicker.jsx';
@@ -621,7 +622,7 @@ function ThreadFiles({ files, onShow }) {
           <a className="grow truncate" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title={`Open ${a.filename}`} {...dragOut(m, a)}>{a.filename}</a>
           <button className="link-btn small truncate meta" title="Show the email with this file" onClick={() => onShow(m.id)}>{m.from.name || m.from.address} · {new Date(m.date).toLocaleDateString()}{times > 1 ? ` · sent ${times} times` : ''}</button>
           <span className="faint small size">{fmtSize(a.size || 0)}</span>
-          <button className="icon-btn" style={{ width: 24, height: 24 }} title="Download" onClick={() => window.open(api.url(`/api/messages/${m.id}/attachments/${a.index}`))}><Download size={14} /></button>
+          <button className="icon-btn" style={{ width: 24, height: 24 }} title="Download" onClick={() => openFile(api.url(`/api/messages/${m.id}/attachments/${a.index}`), a.filename)}><Download size={14} /></button>
         </div>))}
       {!list.length && <div className="small faint">No file matches.</div>}
     </div>
@@ -951,7 +952,7 @@ function Person({ a, messageId, accountId, className, children }) {
       { label: 'Save as contact', icon: UserPlus, onClick: save },
       { label: 'Find their mail', icon: Search, onClick: () => window.dispatchEvent(new CustomEvent('halcyon:search', { detail: { q: `from:${a.address}` } })) }]);
   };
-  return <><button type="button" className={`person ${className || ''}`} title={addrFull(a)} onClick={open} onContextMenu={open}>{children}</button>{menuNode}</>;
+  return <><button type="button" className={`person ${className || ''}`} title={addrFull(a)} data-addr={addrFull(a)} onClick={open} onContextMenu={open}>{children}</button>{menuNode}</>;
 }
 
 function AddrLine({ label, list, empty, m }) {
@@ -964,6 +965,8 @@ function AddrLine({ label, list, empty, m }) {
       {!list?.length ? <span>{empty}</span> : <span>
         {shown.map((a, i) => <span key={i}><Person a={a} messageId={m.id} accountId={m.accountId}>{addrLabel(a)}</Person>{i < shown.length - 1 ? ', ' : ''}</span>)}
         {list.length > shown.length && <> <button className="link-btn" onClick={() => setAll(true)}>and {list.length - shown.length} more</button></>}
+        <button className="icon-btn addr-copy" title={`Copy all ${label} addresses (to paste into another email)`} aria-label={`Copy ${label} addresses`}
+          onClick={() => navigator.clipboard.writeText(list.map(addrFull).join(', ')).then(() => toast(list.length > 1 ? `${list.length} addresses copied` : 'Address copied')).catch(toastError)}><Copy size={12} /></button>
       </span>}
     </div>
   );
@@ -1026,6 +1029,7 @@ function dragOut(m, a) {
   const desk = window.halcyonDesktop;
   return {
     draggable: true,
+    'data-name': a.filename,
     onPointerDown: () => desk?.prepareDrag?.(url, name),
     onDragStart: (e) => {
       if (desk?.dragFile) { e.preventDefault(); desk.dragFile(url, name); return; }
@@ -1042,7 +1046,7 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
   const links = useLinkChecks(m, expanded);
   return (
     <div className={`card msg-card ${expanded ? '' : 'collapsed'}`} data-msg={m.id}>
-      <div className="msg-card-head" onClick={toggle}>
+      <div className="msg-card-head" data-addr-scope onClick={toggle}>
         <Avatar name={m.from.name} email={m.from.address} />
         <div className="grow" style={{ minWidth: 0 }}>
           <div className="row msg-who">{m.onBehalfOf
@@ -1077,7 +1081,7 @@ function MessageCard({ m, view, expanded, toggle, onReply, onShowImages, transla
         {m.attachments?.length > 0 && <div className="attachments">{m.attachments.map((a) => (
           <a key={a.index} className="attachment" href={api.url(`/api/messages/${m.id}/attachments/${a.index}?inline=1`)} target="_blank" rel="noreferrer" title="Open — or drag to a folder (Explorer, desktop) to save it there" {...dragOut(m, a)}>
             <Paperclip size={15} /><span className="truncate grow">{a.filename}</span><span className="faint small">{fmtSize(a.size || 0)}</span>
-            <span className="icon-btn" style={{ width: 24, height: 24 }} onClick={(e) => { e.preventDefault(); window.open(api.url(`/api/messages/${m.id}/attachments/${a.index}`)); }}><Download size={14} /></span>
+            <span className="icon-btn" style={{ width: 24, height: 24 }} title="Download" onClick={(e) => { e.preventDefault(); openFile(api.url(`/api/messages/${m.id}/attachments/${a.index}`), a.filename); }}><Download size={14} /></span>
           </a>))}</div>}
       </>}
     </div>
@@ -1302,26 +1306,33 @@ function QuickReply({ latest, onSent, hasDraft }) {
   const all = payloadFor('replyAll');
   const canReplyAll = all.to.length + all.cc.length > payloadFor('reply').to.length;
 
-  // Restore an unfinished quick reply (saved as a draft) for this message.
+  // Restore an unfinished quick reply (saved as a draft) for this message — not over text typed meanwhile.
+  const msgId = useRef(latest.id);
+  msgId.current = latest.id;
   useEffect(() => {
     setText(''); setDraftId(null); setMode('reply'); setHint(''); setCheck(null); typed.current = false;
+    const asked = latest.id;
     api.get(`/api/drafts?inReplyTo=${latest.id}`).then((l) => {
       const d = l.find((x) => x.quick);
-      if (d) { setDraftId(d.id); setText(d.text || ''); setMode(d.mode || 'reply'); }
+      if (d && msgId.current === asked && !typed.current) { setDraftId(d.id); setText(d.text || ''); setMode(d.mode || 'reply'); }
     }).catch(() => {});
+    // Leaving this message (or the reader) with text not saved yet: it is saved now, not dropped.
+    return () => { const snap = pending.current; pending.current = null; if (snap) saveQuick(snap); };
   }, [latest.id]);
 
   // Autosave the typed text as a draft (deleted again when sent or emptied).
+  const pending = useRef(null);
+  const saveQuick = async (snap) => {
+    try {
+      if (!snap.text.trim()) { if (snap.draftId) { await api.del(`/api/drafts/${snap.draftId}`); if (msgId.current === snap.msgId) setDraftId(null); } return; }
+      const r = await api.post('/api/drafts', { ...snap.p, id: snap.draftId, html: textToHtml(snap.text) + (snap.p.quoteHtml || ''), quick: true, text: snap.text, mode: snap.mode });
+      if (msgId.current === snap.msgId) setDraftId(r.id);
+    } catch { /* retried on next change */ }
+  };
   useEffect(() => {
     if (!typed.current) return undefined;
-    const t = setTimeout(async () => {
-      try {
-        if (!text.trim()) { if (draftId) { await api.del(`/api/drafts/${draftId}`); setDraftId(null); } return; }
-        const p = payloadFor(mode);
-        const r = await api.post('/api/drafts', { ...p, id: draftId, html: textToHtml(text) + (p.quoteHtml || ''), quick: true, text, mode });
-        setDraftId(r.id);
-      } catch { /* retried on next change */ }
-    }, 1500);
+    pending.current = { text, mode, draftId, p: payloadFor(mode), msgId: latest.id };
+    const t = setTimeout(() => { const snap = pending.current; pending.current = null; if (snap) saveQuick(snap); }, 1500);
     return () => clearTimeout(t);
   }, [text, mode]);
 
@@ -1333,7 +1344,7 @@ function QuickReply({ latest, onSent, hasDraft }) {
     try {
       const p = payloadFor(mode);
       const r = await api.post('/api/send', { ...p, html: textToHtml(text) + (p.quoteHtml || ''), draftId: draftId || undefined, sendKey: sendKey.current });
-      sendKey.current = null;
+      sendKey.current = null; pending.current = null;
       setText(''); setDraftId(null); typed.current = false;
       afterSend(r);
       if (settings.mail.undoSendSeconds > 0) {
@@ -1359,7 +1370,7 @@ function QuickReply({ latest, onSent, hasDraft }) {
     } catch (e) { toastError(e); } finally { setGenBusy(false); }
     if (out.trim()) runCheck(out);
   };
-  const openFull = () => { openComposer({ ...payloadFor(mode), ...(text ? { prefixHtml: textToHtml(text) } : {}), draftId: draftId || undefined }); setText(''); setDraftId(null); setCheck(null); typed.current = false; };
+  const openFull = () => { pending.current = null; openComposer({ ...payloadFor(mode), ...(text ? { prefixHtml: textToHtml(text) } : {}), draftId: draftId || undefined }); setText(''); setDraftId(null); setCheck(null); typed.current = false; };
   const p = payloadFor(mode);
   const recipients = [...p.to, ...p.cc].map((a) => a.name || a.address);
   return (
