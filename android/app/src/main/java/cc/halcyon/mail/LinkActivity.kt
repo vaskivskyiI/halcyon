@@ -16,10 +16,9 @@ class LinkActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val u = intent.getStringExtra(Links.EXTRA_URL)?.let(Uri::parse)
-        val server = Prefs.server(this)?.let(Uri::parse)
-        if (u != null && server != null && Links.origin(u) == Links.origin(server)) {
-            // The place in the web app: everything after the server address (its pages are #/… routes).
-            val route = u.toString().removePrefix(Prefs.server(this)!!).trimStart('/').let { if (it.startsWith("#/")) it else "#/mail/unified" }
+        val server = Prefs.server(this)
+        if (u != null && server != null && Links.ours(server, u)) {
+            val route = Links.route(u) ?: MainActivity.HOME
             startActivity(Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_OPEN).putExtra(MainActivity.EXTRA_ROUTE, route)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         } else if (u != null) Links.browser(this, u)
@@ -32,6 +31,9 @@ object Links {
     private const val INKWELL = "cc.inkwell.notes"
 
     fun origin(u: Uri) = "${u.scheme}://${u.authority}".lowercase()
+    fun ours(server: String, u: Uri) = origin(u) == origin(Uri.parse(server))
+    /** The place in the web app a link to the server points at: its pages are #/… routes. */
+    fun route(u: Uri) = u.encodedFragment?.takeIf { it.startsWith("/") }?.let { "#$it" }
 
     fun browser(ctx: Context, u: Uri) {
         try { ctx.startActivity(Intent(Intent.ACTION_VIEW, u).addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }

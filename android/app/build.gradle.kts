@@ -20,6 +20,8 @@ android {
         versionName = prop("halcyon.version") ?: "0.1.0"
         // Pre-filled on the first start (the build script's HOST), still changeable there.
         buildConfigField("String", "DEFAULT_SERVER", "\"${prop("halcyon.server") ?: ""}\"")
+        // Browser links to this host open the app (manifest); without a server none do (.invalid never resolves).
+        manifestPlaceholders["serverHost"] = prop("halcyon.server")?.let { java.net.URI(if ("://" in it) it else "https://$it").host } ?: "halcyon.invalid"
         resValue("string", "app_name", prop("halcyon.name") ?: "Halcyon")
     }
     signingConfigs {

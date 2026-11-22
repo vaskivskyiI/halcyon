@@ -146,6 +146,9 @@ class MainActivity : ComponentActivity() {
     private fun targetOf(i: Intent?): Target? {
         i ?: return null
         if (i.data?.scheme == "mailto") return Target("#/compose?url=" + Uri.encode(i.dataString))
+        // A link to the server followed in a browser (a start page's tile): its place; the bare address, another
+        // server's or no place just opens the app.
+        if (i.action == Intent.ACTION_VIEW) return i.data?.takeIf { Links.ours(server, it) }?.let(Links::route)?.let { Target(it) }
         // Only places inside the web app: another app may start this activity too.
         // EXTRA_ROUTE: shortcuts, the app's own notifications, and the system's (its data comes as extras).
         val route = i.getStringExtra(EXTRA_ROUTE)?.takeIf { it.startsWith("#/") } ?: return null
