@@ -147,17 +147,32 @@ export function buildWhere(userId, f, sc = null) {
   return { where, params };
 }
 
-export function keywordSearch(userId, q, { limit = 50, offset = 0, sc = null } = {}) {
+export function keywordSearch(userId, q, { limit = 50, offset = 0, sc = null, relax = false } = {}) {
   const f = parseQuery(q);
   const { where, params } = buildWhere(userId, f, sc);
-  let sql;
   if (f.terms.length || f.bodyTerms?.length) {
-    const match = [...f.terms.map((t) => (t === 'OR' ? 'OR' : ftsEscape(t))), ...(f.bodyTerms || []).map((t) => `body : ${ftsEscape(t)}`)].join(' ');
-    sql = `SELECT m.id FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND ${where.join(' AND ')} ORDER BY bm25(messages_fts, 8.0, 4.0, 2.0, 1.0) + (julianday('now') - julianday(m.date / 1000, 'unixepoch')) / 365.0 LIMIT ? OFFSET ?`;
-    return all(sql, match, ...params, limit, offset).map((r) => r.id);
+    const run = (terms) => {
+      const words = terms.map((t) => (t === 'OR' ? 'OR' : ftsEscape(t))).join(' ');
+      const match = [words, ...(f.bodyTerms || []).map((t) => `body : ${ftsEscape(t)}`)].filter(Boolean).join(' ');
+      // bm25 weighs a word by how rare it is: a word in many messages (a project or company name) scores ~0 and the
+      // column weights are lost, leaving only the date. The words in the subject or sender lift a message explicitly.
+      const boost = words ? `- 3.0 * (m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)) - 1.5 * (m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))` : '';
+      const boostParams = words ? [`subject : (${words})`, `sender : (${words})`] : [];
+      return all(`SELECT m.id FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND ${where.join(' AND ')}
+        ORDER BY bm25(messages_fts, 8.0, 4.0, 2.0, 1.0) ${boost} + (julianday('now') - julianday(m.date / 1000, 'unixepoch')) / 365.0 LIMIT ? OFFSET ?`,
+      match, ...params, ...boostParams, limit, offset).map((r) => r.id);
+    };
+    const ids = run(f.terms);
+    // Nothing has all the words (a typo, a word the mail does not use): the mail with most of them, best first —
+    // bm25 ranks a message that has more of the words higher. Said so (relaxed), so the list is not taken as exact.
+    if (relax && !ids.length && !offset && !f.terms.includes('OR') && f.terms.length > 1) {
+      const some = run(f.terms.flatMap((t, i) => (i ? ['OR', t] : [t])));
+      some.relaxed = some.length > 0;
+      return some;
+    }
+    return ids;
   }
-  sql = `SELECT m.id FROM messages m WHERE ${where.join(' AND ')} ORDER BY m.date DESC LIMIT ? OFFSET ?`;
-  return all(sql, ...params, limit, offset).map((r) => r.id);
+  return all(`SELECT m.id FROM messages m WHERE ${where.join(' AND ')} ORDER BY m.date DESC LIMIT ? OFFSET ?`, ...params, limit, offset).map((r) => r.id);
 }
 
 /** Embeds a query once; null when no embedding provider is available or it does not answer in time. */
@@ -168,34 +183,53 @@ export async function embedQuery(userId, text, { interactive = true, timeoutMs =
   } catch { return null; }
 }
 
-/** Messages ranked by their best-matching chunk: [{ id, score, chunkId }]. */
+/** Messages ranked by their best-matching chunk: [{ id, score, chunkId }]. A conversation's summary matches too (it
+ *  says what a long thread is about better than any one of its messages): it stands for the newest message in it. */
 export async function messageHits(userId, query, k = 20, sc = null) {
   if (!query) return [];
+  const hits = await searchMemory(userId, query.vector, query.model, { k: k * 4, owners: sc?.owners || null, kinds: new Set(['message', 'thread']) });
+  const threads = [...new Set(hits.filter((h) => h.kind === 'thread').map((h) => String(h.ref)))];
+  const newest = new Map(threads.length ? all(`SELECT thread_id AS t, id FROM (SELECT thread_id, id, ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY date DESC) AS rn
+    FROM messages m WHERE user_id = ? AND ${inIds('m.account_id', sc?.accountIds)} AND thread_id IN (${threads.map(() => '?').join(',')})) WHERE rn = 1`, userId, ...threads).map((r) => [r.t, r.id]) : []);
   const best = new Map();
-  for (const h of await searchMemory(userId, query.vector, query.model, { k: k * 4, owners: sc?.owners || null, kinds: new Set(['message']) })) {
-    const id = Number(h.ref);
-    if (!best.has(id)) best.set(id, { id, score: h.score, chunkId: h.id });
+  for (const h of hits) {
+    const id = h.kind === 'thread' ? newest.get(String(h.ref)) : Number(h.ref);
+    if (id && !best.has(id)) best.set(id, { id, score: h.score, chunkId: h.id });
   }
   return [...best.values()].slice(0, k);
+}
+
+/** Matches by meaning worth showing: above an absolute floor and not far below the best one (scores of different
+ *  embedding models sit in different ranges, so a fixed floor alone lets a long tail of weak matches through). */
+export function goodHits(hits, floor = 0.3, spread = 0.2) {
+  const top = hits.reduce((m, h) => Math.max(m, h.score), 0);
+  return hits.filter((h) => h.score > floor && h.score >= top - spread);
+}
+
+/** True when a query narrows by operators (from:, received:, is:unread…), not only by words. */
+export function hasOperators(f) {
+  return Object.entries(f).some(([k, v]) => !['terms', 'notTerms', 'bodyTerms'].includes(k) && v?.length) || f.notTerms.length > 0;
 }
 
 export async function semanticSearch(userId, text, k = 20, sc = null) {
   return messageHits(userId, await embedQuery(userId, text), k, sc);
 }
 
-/** Reciprocal-rank fusion of keyword and semantic results. */
+/** Reciprocal-rank fusion of keyword and semantic results. relaxed (on the array): no message had all the words. */
 export async function hybridSearch(userId, q, { limit = 50, semantic = true, sc = null } = {}) {
-  const kw = keywordSearch(userId, q, { limit, sc });
+  const kw = keywordSearch(userId, q, { limit, sc, relax: true });
   const f = parseQuery(q);
   if (!semantic || !f.terms.length) return kw;
-  const sem = await semanticSearch(userId, [...f.terms.filter((t) => t !== 'OR'), ...f.bodyTerms].join(' '), limit, sc);
+  // With operators most matches by meaning are filtered out below: ask for more of them.
+  const sem = await semanticSearch(userId, [...f.terms.filter((t) => t !== 'OR'), ...f.bodyTerms].join(' '), hasOperators(f) ? limit * 4 : limit, sc);
   if (!sem.length) return kw;
   // Apply operator filters (and the space) to semantic hits too; this also drops hits of deleted mail.
   const { where, params } = buildWhere(userId, { ...f, terms: [], bodyTerms: [] }, sc);
   const ok = new Set(all(`SELECT m.id FROM messages m WHERE ${where.join(' AND ')} AND m.id IN (${sem.map(() => '?').join(',')})`, ...params, ...sem.map((s) => s.id)).map((r) => r.id));
   const score = new Map();
-  kw.forEach((id, i) => score.set(id, (score.get(id) || 0) + 1 / (60 + i)));
-  sem.filter((s) => ok.has(s.id) && s.score > 0.25).forEach((s, i) => score.set(s.id, (score.get(s.id) || 0) + 1 / (60 + i)));
+  // Words found only loosely (relaxed) weigh less than a match by meaning.
+  kw.forEach((id, i) => score.set(id, (score.get(id) || 0) + (kw.relaxed ? 0.5 : 1) / (60 + i)));
+  goodHits(sem.filter((s) => ok.has(s.id)), 0.25).forEach((s, i) => score.set(s.id, (score.get(s.id) || 0) + 1 / (60 + i)));
   return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => id);
 }
 

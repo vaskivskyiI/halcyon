@@ -381,6 +381,8 @@ function MessageList({ view, openId, onMenu }) {
   // hidden: it is not what was asked for.
   const [itemsFor, setItemsFor] = useState('');
   const [hasMore, setHasMore] = useState(false);
+  // The search found no message with all the words: the list holds those with most of them.
+  const [relaxed, setRelaxed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [tab, setTabState] = useState(() => tabByView.get(view) || null);
   const setTab = (t) => { tabByView.set(view, t); setTabState(t); };
@@ -451,8 +453,9 @@ function MessageList({ view, openId, onMenu }) {
   const viewFolder = /^f\d+$/.test(view) ? folders.accounts.flatMap((a) => a.folders.map((f) => ({ ...f, acc: a }))).find((f) => `f${f.id}` === view) : null;
   const [within, setWithin] = useState(() => (/^f\d+$/.test(view) ? view : 'all'));
   const withinParams = (p) => {
-    if (within.startsWith('f')) p.set('inFolder', within.slice(1));
-    else if (within.startsWith('a')) p.set('inAccount', within.slice(1));
+    // 'all' also starts with an a: only a<number> is a mailbox (it was sent as inAccount=ll and found nothing).
+    if (/^f\d+$/.test(within)) p.set('inFolder', within.slice(1));
+    else if (/^a\d+$/.test(within)) p.set('inAccount', within.slice(1));
     return p;
   };
   const params = useCallback((before, offset) => {
@@ -509,6 +512,7 @@ function MessageList({ view, openId, onMenu }) {
         return next;
       });
       setHasMore(r.hasMore);
+      if (!append) setRelaxed(!!(activeQuery && r.relaxed));
       if (!append) loadTabCounts();
       // Keyword results are shown at once; matches by meaning follow when the AI answers.
       // Asked once per search: the list also reloads on every sync or change, and must not throw away (and ask again
@@ -902,6 +906,7 @@ function MessageList({ view, openId, onMenu }) {
         {!showAi && pinned.map((m) => <Row key={`p${m.id}`} m={m} selected={m.id === openId} checked={false} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => {}} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))} dragIds={[m.id]} showAi={settings.ai.enabled} />)}
         {!showAi && pinned.length > 0 && shownItems.length > 0 && <div className="list-group">Everything else</div>}
+        {!showAi && relaxed && shownItems.length > 0 && <div className="list-group">No message has all the words — closest matches</div>}
         {!showAi && shownItems.map((m) => <Row key={m.id} m={m} selected={selected.has(m.id) || m.id === openId} checked={selected.has(m.id)} threaded={threaded}
           onClick={(e) => clickRow(e, m)} onContextMenu={(e) => rowMenu(e, m)} onCheck={() => toggleSel(m.id)} onAct={(a, extra) => (a === 'pin' ? togglePin(m) : act(a, extra, [m.id]))}
           dragIds={selected.has(m.id) ? [...selected] : [m.id]} showAi={settings.ai.enabled} />)}

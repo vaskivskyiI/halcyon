@@ -8,7 +8,7 @@ import * as actions from '../mail/actions.js';
 import { queueSend, cancelSend, buildMime, saveDraft, saveDraftToServer, deleteDraft, draftFromMessage } from '../mail/send.js';
 import { queueOp, syncManager } from '../mail/sync.js';
 import { serializeInsight, scheduleBriefRefresh, refreshSettled } from '../ai/tasks.js';
-import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits } from '../search.js';
+import { hybridSearch, parseQuery, buildWhere, embedQuery, messageHits, goodHits, hasOperators } from '../search.js';
 import { invitationFor } from '../calendar/invites.js';
 import { getSettings } from '../settings.js';
 import { userAccounts } from '../accounts.js';
@@ -300,6 +300,8 @@ export default async function mailRoutes(app) {
   /** Search in one folder (inFolder) or one mailbox (inAccount) instead of everywhere: the scope narrowed to it;
    *  undefined when not asked, null-scope semantics kept otherwise. An id not of this user finds nothing. */
   function searchWithin(uid, q, sc) {
+    // Only ids count: anything else (an older page sent inAccount=ll for "Everywhere") is a search everywhere.
+    q = { inFolder: /^\d+$/.test(q.inFolder || '') ? q.inFolder : undefined, inAccount: /^\d+$/.test(q.inAccount || '') ? q.inAccount : undefined };
     const folder = q.inFolder ? get('SELECT f.id, f.account_id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ? AND a.user_id = ?', Number(q.inFolder), uid) : null;
     const accountId = folder?.account_id ?? (q.inAccount ? get('SELECT id FROM accounts WHERE id = ? AND user_id = ?', Number(q.inAccount), uid)?.id : undefined);
     if (!q.inFolder && !q.inAccount) return undefined;
@@ -312,12 +314,13 @@ export default async function mailRoutes(app) {
       sc = searchWithin(uid, q, sc) ?? sc;
       const found = await hybridSearch(uid, q.q, { limit: 100, semantic: q.semantic !== '0', sc });
       if (!found.length) return { items: [], hasMore: false };
+      const relaxed = !!found.relaxed;
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE m.id IN (${found.map(() => '?').join(',')})`, ...found);
       const byId = new Map(rows.map((r) => [r.id, r]));
       const open = openChecker(uid);
       let hits = found.map((id) => byId.get(id)).filter(Boolean);
       if (q.threads !== '0' && getSettings(uid).ui.conversationView) hits = oneByThread(uid, hits, sc);
-      return { items: hits.map((r) => listItem(r, open)), hasMore: false };
+      return { items: hits.map((r) => listItem(r, open)), hasMore: false, ...(relaxed && { relaxed }) };
     }
     const { where, params } = scopeFor(uid, q, sc);
     const threaded = q.threads !== '0' && getSettings(uid).ui.conversationView;
@@ -370,16 +373,19 @@ export default async function mailRoutes(app) {
     const spaces = mergedSpaces(req);
     const byDate = (!q.sort || q.sort === 'date') && q.dir !== 'asc';
     // A search in one folder or mailbox stays in it (the shared spaces' mail is elsewhere).
-    if (!spaces.length || (q.q && (q.inFolder || q.inAccount)) || (!q.q && (!byDate || !MERGE_VIEWS.has(q.view || 'unified')))) return own;
+    if (!spaces.length || (q.q && searchWithin(req.user.id, q, null)) || (!q.q && (!byDate || !MERGE_VIEWS.has(q.view || 'unified')))) return own;
     const limit = Math.min(Number(q.limit) || 50, 200);
-    const lists = [own, ...await Promise.all(spaces.map(async (sp) => {
+    let lists = [own, ...await Promise.all(spaces.map(async (sp) => {
       const r = await listMessages(sp.id, q, null);
       for (const it of r.items) Object.assign(it, { owner: sp.id, ownerName: sp.name });
       return r;
     }))];
+    // Loose matches (not all the words) only when no list has exact ones.
+    const relaxed = !!q.q && lists.some((l) => l.relaxed) && lists.every((l) => l.relaxed || !l.items.length);
+    if (q.q && !relaxed) lists = lists.filter((l) => !l.relaxed);
     // Search keeps each list's ranking (own results first); lists are merged newest first.
     const items = q.q ? lists.flatMap((l) => l.items) : lists.flatMap((l) => l.items).sort((a, b) => b.date - a.date);
-    return { items: items.slice(0, limit), hasMore: lists.some((l) => l.hasMore) || items.length > limit };
+    return { items: items.slice(0, limit), hasMore: lists.some((l) => l.hasMore) || items.length > limit, ...(relaxed && { relaxed: true }) };
   });
 
   // Mail of a shared space read from one's own mail (request acting per header): its inline images load without that
@@ -997,7 +1003,8 @@ export default async function mailRoutes(app) {
       const query = await embedQuery(uid, words.join(' '));
       if (!query) return { items: [], unavailable: true };
       const exclude = new Set(ids(req.query.exclude));
-      const hits = (await messageHits(uid, query, 40, sc)).filter((h) => !exclude.has(h.id) && h.score > 0.3);
+      // With operators (from:, received:…) most matches by meaning are filtered out below: ask for more of them.
+      const hits = goodHits(await messageHits(uid, query, hasOperators(f) ? 200 : 40, sc)).filter((h) => !exclude.has(h.id));
       if (!hits.length) return { items: [] };
       const { where, params } = buildWhere(uid, { ...f, terms: [], bodyTerms: [] }, sc);
       const rows = all(`SELECT ${LIST_COLS} FROM messages m LEFT JOIN ai_insights i ON i.message_id = m.id WHERE ${where.join(' AND ')} AND m.id IN (${hits.map(() => '?').join(',')})`, ...params, ...hits.map((h) => h.id));
