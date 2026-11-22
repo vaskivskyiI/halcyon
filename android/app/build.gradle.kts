@@ -19,7 +19,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = prop("halcyon.versionCode")?.toInt() ?: 1
-        versionName = prop("halcyon.version") ?: "0.1.0"
+        versionName = prop("halcyon.version") ?: "0.1.1"
         // Pre-filled on the first start (the build script's HOST), still changeable there.
         buildConfigField("String", "DEFAULT_SERVER", "\"${prop("halcyon.server") ?: ""}\"")
         // Browser links to this host open the app (manifest); without a server none do (.invalid never resolves).

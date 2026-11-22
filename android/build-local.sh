@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
-HOST=${HOST:-}; PKG=${PKG:-cc.halcyon.mail}; APP_NAME=${APP_NAME:-Halcyon}; VERSION=${VERSION:-2.0.0}
+HOST=${HOST:-}; PKG=${PKG:-cc.halcyon.mail}; APP_NAME=${APP_NAME:-Halcyon}; VERSION=${VERSION:-0.1.1}
 KEYDIR=${KEYDIR:-$ROOT/../halcyon-android-signing}
 T=${T:-$HOME/android-build}
 GRADLE_VERSION=8.11.1
